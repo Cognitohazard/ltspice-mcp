@@ -333,6 +333,85 @@ class TestSeveralCases:
             data.pop("path")
         assert selected == alone
 
+    async def test_cases_a_label_would_write_alike_are_labelled_by_case_id(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """1000 and 1000.0 differ as values but a label writes both as 1000;
+        a case that assigns none of the names that differ has nothing to show."""
+        _job(
+            state_no_sim,
+            work_dir,
+            "alike",
+            [
+                _Case("ltspice_tran_rc", {"R1": 1000}),
+                _Case("ltspice_tran_rc", {"R1": 1000.0}),
+                _Case("ltspice_tran_rc", {"R1": 2000}),
+                _Case("ltspice_tran_rc", {}),
+            ],
+        )
+        data = await _plot(state_no_sim, job_id="alike", runs="all", signals=["V(out)"])
+        assert _labels(data) == [
+            "V(out) [case-0000]",
+            "V(out) [case-0001]",
+            "V(out) [R1=2000]",
+            "V(out) [case-0003]",
+        ]
+
+    async def test_a_case_the_window_leaves_empty_is_named_not_drawn(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        _job(
+            state_no_sim,
+            work_dir,
+            "window",
+            [_Case("ltspice_tran_rc", {"C1": 1}), _Case("ltspice_step_tran", {"C1": 2})],
+        )
+        whole = await _plot(state_no_sim, job_id="window", runs=[0], signals=["V(out)"])
+        end = whole["window_used"][1]
+        data = await _plot(
+            state_no_sim,
+            job_id="window",
+            runs="all",
+            signals=["V(out)"],
+            t_start=f"{end * 1.5}",
+        )
+        assert [case["case_id"] for case in data["cases"]] == ["case-0001"]
+        (empty,) = data["cases_not_drawn"]
+        assert (empty["case_id"], empty["code"]) == ("case-0000", "window_empty")
+        assert all(t["case_id"] == "case-0001" for t in data["traces"])
+
+    async def test_a_signal_some_cases_lack_is_drawn_where_it_exists(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        _job(
+            state_no_sim,
+            work_dir,
+            "lack",
+            [_Case("ltspice_tran_rc", {"C1": 1}), _Case("ltspice_step_tran", {"C1": 2})],
+        )
+        data = await _plot(state_no_sim, job_id="lack", runs="all", signals="all")
+        lacking = {item["signal"]: item["case_ids"] for item in data["signals_not_in_cases"]}
+        assert lacking
+        assert all(case_ids == ["case-0000"] for case_ids in lacking.values())
+        drawn = {(t["signal"], t["case_id"]) for t in data["traces"]}
+        for signal in lacking:
+            assert (signal, "case-0000") not in drawn
+
+    async def test_ac_cases_draw_magnitude_and_phase_for_each_case(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        _job(
+            state_no_sim,
+            work_dir,
+            "bode",
+            [_Case("ltspice_ac_rc", {"C1": 1}), _Case("ltspice_ac_rc", {"C1": 2})],
+        )
+        data = await _plot(state_no_sim, job_id="bode", runs="all", signals=["V(out)"])
+        assert data["analysis_type"] == "ac"
+        assert data["panels"] == 2
+        assert _labels(data) == ["V(out) [C1=1]", "V(out) [C1=2]"] * 2
+        assert all(t["unit"] == "dB" and "phase_final_deg" in t for t in data["traces"])
+
 
 async def _analyzed_cases(state: SessionState, job_id: str, runs: Any) -> tuple[set, set]:
     result = await handle_analyze_results(
@@ -424,3 +503,31 @@ def test_one_function_writes_a_points_label():
         if any(isinstance(node, ast.JoinedStr) and _formats_a_point(node) for node in nodes)
     ]
     assert offenders == []
+
+
+@pytest.mark.asyncio
+async def test_a_case_with_a_log_and_no_raw_is_read_by_analysis_and_not_drawn(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """services.read_selected_case answers both tools; they differ only in
+    require_raw. analyze_results reads a produced case's log without a raw
+    (a log recipe needs none), and a chart, which draws a raw, names it."""
+    job = _three_rc(state_no_sim, work_dir, "noraw")
+    job.cases[1].raw_file = None
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": "noraw", "runs": [0, 1]}],
+                "recipes": [{"key": "r", "metric": "measurements"}],
+            }
+        ),
+        state_no_sim,
+    )
+    data = result.structured_content
+    assert data is not None
+    missing = data.get("coverage", {}).get("missing_cases", {}).get("items", [])
+    assert all(item.get("case_id") != "case-0001" for item in missing)
+
+    plotted = await _plot(state_no_sim, job_id="noraw", runs=[0, 1], signals=["V(out)"])
+    (left_out,) = plotted["cases_not_drawn"]
+    assert (left_out["case_id"], left_out["code"]) == ("case-0001", "raw_not_produced")

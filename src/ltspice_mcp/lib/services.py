@@ -866,6 +866,44 @@ def case_run_context(
     )
 
 
+@dataclass(frozen=True)
+class CaseUnread:
+    """Why a selected case of a job is not read: ``raw_not_produced`` (the
+    case has no results to read) or ``other_raw_not_written``."""
+
+    code: str
+    detail: str
+
+
+def read_selected_case(
+    job: ExperimentJob,
+    case: ExperimentCase,
+    state: SessionState,
+    *,
+    require_raw: bool,
+    other_raw: OtherRawKind | None = None,
+) -> RunContext | CaseUnread:
+    """What a read of ``case``, selected from ``job`` by ``select_cases``,
+    takes, or why it is not read. The one answer ``analyze_results`` and
+    ``plot_waveform`` give each case a ``runs`` selection names, of a job
+    whose runs are done (``runs_unready``).
+
+    ``require_raw`` is where the two differ: analyze_results reads a case
+    without a raw (False), because a log recipe reads its log alone, and a
+    chart draws only a raw (True), so a case without one is not drawn.
+    """
+    why = case_unreadable(case)
+    if why is not None:
+        return CaseUnread("raw_not_produced", why)
+    try:
+        return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+    except OtherRawNotWritten as exc:
+        return CaseUnread(exc.code, str(exc))
+    except ResultError as exc:
+        # case_run_context refuses a case with no raw only where one is required.
+        return CaseUnread("raw_not_produced", str(exc))
+
+
 def resolve_analysis_source(
     state: SessionState,
     *,

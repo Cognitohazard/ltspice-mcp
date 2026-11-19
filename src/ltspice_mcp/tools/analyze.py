@@ -27,7 +27,6 @@ from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     InvalidCursorError,
     LTSpiceMCPError,
-    OtherRawNotWritten,
     PathSecurityError,
     ResultError,
     ResultFileNotFoundError,
@@ -1101,34 +1100,17 @@ async def _resolve_sources(
             for run in unmatched
         )
         for case in selected:
-            unreadable = services.case_unreadable(case)
-            if unreadable is not None:
+            ctx = services.read_selected_case(
+                job, case, state, require_raw=False, other_raw=source_input.other_raw
+            )
+            if isinstance(ctx, services.CaseUnread):
                 missing.append(
                     {
                         "label": source_input.label,
                         "case_id": case.case_id,
                         "run_index": case.run_index,
-                        "code": "raw_not_produced",
-                        "detail": unreadable,
-                    }
-                )
-                continue
-            try:
-                ctx = services.case_run_context(
-                    job,
-                    case,
-                    state,
-                    require_raw=False,
-                    other_raw=source_input.other_raw,
-                )
-            except OtherRawNotWritten as exc:
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": case.case_id,
-                        "run_index": case.run_index,
-                        "code": exc.code,
-                        "detail": str(exc),
+                        "code": ctx.code,
+                        "detail": ctx.detail,
                     }
                 )
                 continue

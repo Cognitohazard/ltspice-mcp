@@ -84,17 +84,24 @@ LABEL_MAX_ASSIGNMENTS = 3
 
 
 def assignments_that_differ(cases: Sequence[Mapping[str, Any]]) -> list[str]:
-    """The names of the assignments whose values are not the same in every one
-    of ``cases`` (each a case's assignments), in the order each first appears.
-    A name that one case assigns and another does not differs."""
+    """The names of the assignments whose values a label would write
+    differently in some of ``cases`` (each a case's assignments), in the
+    order each first appears. A name that one case assigns and another does
+    not differs. Values are compared as :func:`values_text` writes them, so
+    two that a label would print alike (``1000`` and ``1000.0``) do not."""
     names: dict[str, None] = {}
     for assignments in cases:
         names.update(dict.fromkeys(assignments))
-    missing = object()
     return [
         name
         for name in names
-        if len({repr(assignments.get(name, missing)) for assignments in cases}) > 1
+        if len(
+            {
+                values_text({name: assignments[name]}) if name in assignments else None
+                for assignments in cases
+            }
+        )
+        > 1
     ]
 
 
@@ -103,9 +110,10 @@ def label_assignments(
 ) -> list[dict[str, Any] | None]:
     """For each of ``cases`` (the assignments of each case drawn, in order),
     the assignments its label names: those that differ among the cases, or
-    None where they do not tell the case from every other one (nothing
-    differs, two cases share them, or more than ``LABEL_MAX_ASSIGNMENTS``
-    differ), and its label names its case id instead."""
+    None where they do not tell the case from every other one as a label
+    writes them (nothing differs, the case assigns none of them, two cases
+    would read alike, or more than ``LABEL_MAX_ASSIGNMENTS`` differ), and its
+    label names its case id instead."""
     differ = assignments_that_differ(cases)
     if not differ or len(differ) > LABEL_MAX_ASSIGNMENTS:
         return [None for _ in cases]
@@ -113,9 +121,10 @@ def label_assignments(
         {name: assignments[name] for name in differ if name in assignments}
         for assignments in cases
     ]
-    keys = [repr(sorted(subset.items())) for subset in named]
+    shown = [values_text(subset) for subset in named]
     return [
-        subset if keys.count(key) == 1 else None for subset, key in zip(named, keys, strict=True)
+        subset if subset and shown.count(text) == 1 else None
+        for subset, text in zip(named, shown, strict=True)
     ]
 
 

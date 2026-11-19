@@ -47,7 +47,6 @@ from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     NetlistError,
     NoAxisError,
-    OtherRawNotWritten,
     ResultError,
 )
 from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, plot_settings, services
@@ -531,14 +530,18 @@ def plan_plot(
     ts: float | None,
     te: float | None,
     annotate: bool = False,
+    units_read: tuple[dict[str, str | None], list[str]] | None = None,
 ) -> PlotPlan:
     """Resolve what a plot draws. ``groups`` are the requested signals, one list
     per panel; with ``split_by_unit`` they are regrouped into one panel per unit.
+    ``raw`` names the axis; ``units_read`` gives each signal's unit and those not
+    established, read from ``raw`` when not given (a chart of several cases
+    reads them across the cases, ``_units_across``).
 
     Uses resident descriptors without reopening a source deck or log.
     """
     cols = [sig for group in groups for sig in group]
-    units, unverified = _trace_units(raw, cols)
+    units, unverified = _trace_units(raw, cols) if units_read is None else units_read
     x_label, x_unit = _x_axis(raw, analysis_type)
     return PlotPlan(
         groups=_unit_groups(cols, units) if split_by_unit else groups,
@@ -845,8 +848,10 @@ def extract_cases(
 
     windows: list[dict[int, tuple[np.ndarray, int, int]]] = []
     empty_steps: list[int | str] = []
+    empty_cases: list[str] = []
     for case in cases:
         held: dict[int, tuple[np.ndarray, int, int]] = {}
+        outside: list[int] = []
         for step in case.steps:
             axis = guarded_axis(case.raw, step)
             lo, hi = window_indices(axis, plan.ts, plan.te)
@@ -855,7 +860,14 @@ def extract_cases(
             else:
                 # This step's axis does not intersect the window (a step may end
                 # earlier than its siblings). Skip it; surfaced as a fact.
-                empty_steps.append(step if case.case_id is None else f"{case.case_id} step {step}")
+                outside.append(step)
+        if case.case_id is None:
+            empty_steps.extend(outside)
+        elif not held:
+            # A case of several the window leaves nothing of is not drawn.
+            empty_cases.append(case.case_id)
+        else:
+            empty_steps.extend(f"{case.case_id} step {step}" for step in outside)
         windows.append(held)
     drawn_steps = sum(len(held) for held in windows)
     if not drawn_steps:
@@ -957,11 +969,15 @@ def extract_cases(
         "traces_total": total,
     }
     if named:
+        # Each stepped case's labels name its steps (PlotCase.label), by
+        # their values where its .log gave them.
         facts["cases_without_step_values"] = [
             case.case_id
             for case in cases
-            if len(case.steps) > 1 and not any(bool(values) for values in case.step_dicts)
+            if (len(case.steps) > 1 or case.stepped)
+            and not any(bool(values) for values in case.step_dicts)
         ]
+        facts["cases_window_empty"] = empty_cases
         facts["signals_lacking"] = lacking
         facts["cases_unsummarized"] = sum(
             1
@@ -1318,7 +1334,9 @@ async def _in_window_thread(work: Callable[..., _T], *args: Any) -> _T:
     loop = asyncio.get_running_loop()
     # As ``asyncio.to_thread`` does, so the work sees this request's context.
     context = contextvars.copy_context()
-    return await loop.run_in_executor(_WINDOW_THREADS, functools.partial(context.run, work, *args))
+    return await loop.run_in_executor(
+        _WINDOW_THREADS, functools.partial(context.run, work, *args)
+    )
 
 
 @dataclass(frozen=True)
@@ -1550,7 +1568,9 @@ def _show_from_sheet(
         closed = reopened
         if run is not None:
             placement = run.place(sheet)
-            report.update(not_checked=placement.not_checked, left_in_place=placement.left_in_place)
+            report.update(
+                not_checked=placement.not_checked, left_in_place=placement.left_in_place
+            )
         report.update(results=str(beside), sheet=str(sheet))
         left_alone = _write_panes(report, beside, plot_name, panes, of_a_sheet=True)
 
@@ -1827,8 +1847,8 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                 "description": (
                     "With runs: each case selected and not drawn, with why: "
                     "case_not_found, run_not_found, raw_not_produced (with its status), "
-                    "other_raw_not_written, or step_not_found for a case without the "
-                    "step asked for."
+                    "other_raw_not_written, step_not_found for a case without the "
+                    "step asked for, or window_empty."
                 ),
                 "items": {
                     "type": "object",
@@ -2159,9 +2179,10 @@ class _SeveralCases:
 
 #: Why ``in_ltspice`` is refused for a chart of several cases.
 _IN_LTSPICE_ONE_CASE = (
-    "in_ltspice shows one case: an LTspice window shows one case's results, from its "
-    "sheet. Pass run_index or case_id with in_ltspice for the case to open there, or "
-    "leave in_ltspice out to chart the cases here."
+    "in_ltspice takes one case, and runs names more than one run: an LTspice window "
+    "shows one case's results, from its sheet. Pass run_index or case_id with "
+    "in_ltspice for the case to open there, or leave in_ltspice out to chart the "
+    "cases here."
 )
 
 
@@ -2170,9 +2191,9 @@ async def _cases_chosen(
 ) -> tuple[ExperimentJob, ExperimentCase, services.RunContext] | _SeveralCases:
     """The cases of the job that ``args.runs`` names (``services.select_cases``,
     as analyze_results reads them). A selection of one case of the job is read
-    as that case named by ``case_id`` is; of several, each case is asked what
-    a read of one case asks (``case_unreadable``, ``case_run_context``), and
-    each that cannot be read is named with why."""
+    as that case named by ``case_id`` is; of several, each case is read as
+    analyze_results reads it (``services.read_selected_case``), and each that
+    cannot be drawn is named with why."""
     assert args.job_id is not None and args.runs is not None
     job = await services.resolve_job_async(args.job_id, state)
     unready = services.runs_unready(job)
@@ -2189,18 +2210,19 @@ async def _cases_chosen(
     ]
     readable: list[tuple[ExperimentCase, services.RunContext]] = []
     for case in selected:
-        named = {"case_id": case.case_id, "run_index": case.run_index, "status": case.status}
-        why = services.case_unreadable(case)
-        if why is not None:
-            not_drawn.append({**named, "code": "raw_not_produced", "detail": why})
-            continue
-        try:
-            ctx = services.case_run_context(job, case, state, other_raw=args.other_raw)
-        except OtherRawNotWritten as exc:
-            not_drawn.append({**named, "code": exc.code, "detail": str(exc)})
-            continue
-        except ResultError as exc:
-            not_drawn.append({**named, "code": "raw_not_produced", "detail": str(exc)})
+        ctx = services.read_selected_case(
+            job, case, state, require_raw=True, other_raw=args.other_raw
+        )
+        if isinstance(ctx, services.CaseUnread):
+            not_drawn.append(
+                {
+                    "case_id": case.case_id,
+                    "run_index": case.run_index,
+                    "status": case.status,
+                    "code": ctx.code,
+                    "detail": ctx.detail,
+                }
+            )
             continue
         readable.append((case, ctx))
     return _SeveralCases(job, readable, not_drawn)
@@ -2355,23 +2377,23 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
         )
         for (case, _, raw, steps), label in zip(stepped, labels, strict=True)
     ]
-    units, unverified = _units_across(plot_cases, cols)
-    x_label, x_unit = _x_axis(first_raw, analysis_type)
     sampled = first_raw.descriptor.axis
     assert sampled is not None
-    plan = PlotPlan(
-        groups=_unit_groups(cols, units) if args.panels is None else groups,
-        units=units,
+    # Each case carries its own steps (PlotCase); the plan says what the
+    # chart draws and how its axis and panels are named, as for one case.
+    plan = plan_plot(
+        first_raw,
+        groups,
+        split_by_unit=args.panels is None,
+        netlist=None,
         steps=[],
         step_dicts=[],
         analysis_type=analysis_type,
         x_is_log=sampled.quantity == "frequency",
-        x_label=x_label,
-        x_unit=x_unit,
         ts=parse_time(args.t_start, "t_start"),
         te=parse_time(args.t_end, "t_end"),
         annotate=args.annotate,
-        unverified_units=tuple(unverified),
+        units_read=_units_across(plot_cases, cols),
     )
     drawn_ids = [case.case_id for case, _, _, _ in stepped]
     n_cases = len(stepped)
@@ -2684,7 +2706,22 @@ async def _deliver(args: PlotWaveformInput, state: SessionState, chart: _Chart):
         "observations": observations,
     }
     if chart.not_drawn is not None:
-        data["cases_not_drawn"] = chart.not_drawn
+        # A case the window leaves no sample of is not drawn: said, not listed.
+        empty = set(facts["cases_window_empty"])
+        data["cases"] = [case for case in data["cases"] if case["case_id"] not in empty]
+        data["cases_not_drawn"] = [
+            *chart.not_drawn,
+            *(
+                {
+                    "case_id": case["case_id"],
+                    "run_index": case["run_index"],
+                    "code": "window_empty",
+                    "detail": "The [t_start, t_end] window holds no sample of its results.",
+                }
+                for case in chart.head["cases"]
+                if case["case_id"] in empty
+            ),
+        ]
         data["signals_not_in_cases"] = [
             {"signal": signal, "case_ids": case_ids}
             for signal, case_ids in facts["signals_lacking"].items()
