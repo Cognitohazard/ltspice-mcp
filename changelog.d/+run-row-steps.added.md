@@ -1,0 +1,1 @@
+A run row says how a stepped case's results are stepped: `steps` gives the number of steps and the names of the stepped parameters, set once when the run ends from the raw's header and the log's step lines, on every route that shows a run row.
