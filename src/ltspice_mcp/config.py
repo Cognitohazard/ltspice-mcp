@@ -736,10 +736,13 @@ class ServerConfig:
     """Maximum waveform data points to return."""
 
     analysis_budget_s: float = 60.0
-    """Whole-call work budget for ``analyze_results``."""
+    """Work budget of each step of an ``analyze_results`` call: reading its
+    sources, each recipe, and the check of every source after the reads."""
 
     result_set_ttl_hours: float = 24.0
-    """Retention for raw-path-only immutable analysis result sets."""
+    """Hours a cut reply's stored answer can be read on, and a result set
+    read only from files (with its artifacts) is kept. A result set read from
+    jobs is kept as long as its jobs."""
 
     open_plot: bool = True
     """Whether ``plot_waveform`` opens the chart it writes in a local browser
@@ -1079,14 +1082,18 @@ def generate_default_config(path: Path) -> None:
     analysis = table()
     analysis.add(comment("Maximum waveform data points to return per trace"))
     _shown_default(analysis, "max_points_returned")
-    analysis.add(comment("Whole-call work budget for analyze_results, in seconds"))
+    analysis.add(
+        comment("Work budget of each step of an analyze_results call (each recipe), in seconds")
+    )
     _shown_default(analysis, "analysis_budget_s")
     analysis.add(comment("Default response budget, in tokens, for run_experiments, jobs,"))
     analysis.add(comment("analyze_results and inspect replies (0 disables)"))
     _shown_default(analysis, "default_budget")
-    analysis.add(comment("Hours to keep an analyze_results result set whose sources are all"))
     analysis.add(
-        comment("files named by path. A result set read from jobs is kept as long as its jobs.")
+        comment("Hours a cut reply's stored answer can be read on, and an analyze_results")
+    )
+    analysis.add(
+        comment("result set read only from files is kept; one read from jobs lives as its jobs.")
     )
     _shown_default(analysis, "result_set_ttl_hours")
     analysis.add(

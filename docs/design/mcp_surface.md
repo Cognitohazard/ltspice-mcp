@@ -15,7 +15,7 @@ document needs fixing.
 |-|-|-|
 | EXECUTE | `run_experiments` | circuits x declared variations; durable idempotent receipt (plus inline results when the job finishes within `execution.wait_s`); preflight lint; runs read copies of the inputs taken at submission, with their hashes |
 | EXECUTE | `jobs` | status / long-poll wait / cancel / resume / list / runs over receipts; resume continues the latest job of a recoverable job's resume chain, named by `job_id`; place_beside_sheet copies a case's results beside the sheet it ran |
-| UNDERSTAND | `analyze_results` | runs a batch of recipes over runs and returns typed values with case and step identity, attributed reductions and spec verdicts; replies are bounded and can be continued |
+| UNDERSTAND | `analyze_results` | runs a batch of recipes over runs and returns typed values with case and step identity, attributed reductions and spec verdicts; every recipe is evaluated in the call, and a reply too long for its target is cut and read on from the stored answer |
 | UNDERSTAND | `inspect` | reads: capabilities, symbols (list and detail), net trace, components, models, result facts, the guide, and the reference entries for the tools' arguments, recipes, ops and other branches |
 | AUTHOR | `edit_schematic` | applies a batch of typed ops to a sheet (blank or existing) as one transaction; committing to an existing file needs its current `expected_sha256`; returns pin and net tables, per-op results and findings |
 | AUTHOR | `verify_circuit` | gate: lint/syntax, symbols, export, layout, quality, compare (equivalence or structural diff), render |
@@ -268,16 +268,19 @@ The list is `ALWAYS_PRESENT` in `tools/_base.py`, and the suite fails any
 reply that carries a silent field not on it.
 
 **A reply too long to send whole.** A tool on the presenter
-(`lib/presenter.py`; `verify_circuit`, `run_experiments` and `jobs` today,
-`inspect` and `analyze_results` as they move) computes its complete answer and
-hands it, with its output schema, to one function that decides what is sent.
+(`lib/presenter.py`; `verify_circuit`, `run_experiments`, `jobs` and
+`analyze_results` today, `inspect` as it moves) computes its complete answer
+and hands it, with its output schema, to one function that decides what is
+sent.
 The target is one number: the tool's `budget` argument where it has one
 (at least 500 estimated tokens; a smaller one is refused), else
 `[analysis] default_budget` (4000 estimated tokens). A default of 0 and no
-`budget` is no target: every answer is sent whole, except a list read from a
-record (a job's run rows), which an MCP reply still caps at 50 entries, named
-in `cut` and continued by its cursor, so no reply carries an unbounded
-collection. The Python API's automatic mode returns every row.
+`budget` is no target: every answer is sent whole, except the lists an MCP
+reply still caps by count, each named in `cut` and continued by its cursor,
+so no reply carries an unbounded collection: a job's run rows at 50, and an
+`analyze_results` recipe's `per_run` page at its `limit` (50 by default), its
+`values` and `spec.fail_cases` and `coverage.missing_cases` at 100. The
+Python API's automatic mode returns every row.
 
 - An answer within the target is sent exactly as "Fields left out" makes it.
   It carries neither field below, and nothing is stored.
@@ -291,6 +294,21 @@ collection. The Python API's automatic mode returns every row.
   `never` is sent whole, and nothing inside a list's entries is cut apart from
   its entry: a list inside a row goes with the row. A reply that still does
   not fit goes out over the target.
+- Before any list is cut, the samples a schema declares one `series` (an
+  inline waveform's axis `x` and its `series`) are redrawn at the most points
+  that let the reply fit, by a function the tool supplies, every list of the
+  series at the same points and never below 32 points drawn. A thinned series
+  is not paged and has no cursor: its `cut` entry, at the pointer of its axis,
+  gives the points the answer holds (`total`) and those sent (`returned`), and
+  the tool's words name how to get more (`max_points`, the CSV format). The
+  stored answer holds the series as computed, and a page thins its own.
+- Several answers can share one reply and one target
+  (`presenter.present_many`): a receipt and the analysis attached to it. Each
+  keeps its own tool, snapshot and records, and carries its own `cut` and
+  `stored_answer` at its root, so a cut list of the attached analysis is
+  stored as an answer of `analyze_results` and read on by it. One size search
+  runs over the lists of all of them: a reply that fits is whole, and no
+  answer is cut while room remains.
 
 A cut reply carries two fields, declared once in `tools/_base.py`:
 
@@ -310,8 +328,8 @@ caller can tell the rows may have moved since the first page. A reply whose
 cut lists are all records carries no `stored_answer` and writes no file.
 
 **Over the target.** When the parts of a reply that are never cut already
-exceed the target, a `run_experiments` or `jobs` reply goes out over it and
-says so once, in a `budget_not_met` observation naming what it cut. No note
+exceed the target, a reply on the presenter goes out over it and says so
+once, in a `budget_not_met` observation naming what it cut. No note
 says that nothing was dropped while a `cut` field is present.
 
 A cursor names the stored answer, the list's pointer and an offset. Reading
@@ -578,30 +596,17 @@ least 500 estimated tokens; with none, `[analysis] default_budget` (default
 long to send whole"): its run rows are cut as rows to fit, at least one always
 stays, and the rest are read from the job's record.
 
-The attached analysis keeps `analyze_results`' own trimming until that tool
-moves onto the presenter. A receipt over its target is rendered again with the
-attached analysis at each rung of a fixed ladder in turn, until the receipt,
-cut by the presenter, fits. The trim rung empties the attached analysis's
-`source_hashes` rows (the identity echo), the answer rung drops the caller's
-opt-ins that enlarge it (such as `include.per_run`, `include.outliers` and
-`include.provenance`), and the shrink rung lowers the number of its rows. With
-no `budget`, only the trim rung applies; an explicit budget may use all
-three. A `budget_truncated` observation says what fitting took from the
-attached analysis.
-
-From the trim rung on, a receipt still over its target has the attached
-analysis's inline `waveform` samples thinned until it fits. The samples are already a min/max
-decimation, so they are drawn again with fewer buckets, each keeping its
-minimum and maximum, under one point limit for every series and never below
-32 points; `points_total` still counts every sample, and the recipe's
-`warnings` say how far the series was thinned and where to read the rest.
-Below the answer rung only a waveform whose call sets no `max_points` is
-thinned, since a count the caller set is an opt-in, and rows projected by
-`include.fields` are not thinned; from the answer rung on every
-inline waveform is. A receipt thins its attached analysis's waveforms at
-every rung, whatever `max_points` the request set: its rows preview what
-`analyze_results` over the `job_id` returns. Thinning a row's samples moves
-no cursor.
+The attached analysis is an answer of `analyze_results`: the complete answer
+a later `analyze_results` call with the same request over the finished job
+gives, which the job keeps with its rows unprojected, rendered in the row view
+`analyze.include.fields` of each delivery. `analysis.result` is declared with
+that tool's output schema, and the receipt presents it beside its own answer
+under one target (§1, "Several answers"): its lists are cut as that tool cuts
+them, with its caps, words and `rows_not_shown`, and stored, when cut, as an
+answer of `analyze_results`, whose cursors that tool reads with `continue`.
+Its inline `waveform` samples are thinned as a series (§1). Nothing the
+request asked to include is dropped, and no `budget_truncated` observation
+is made: a cut is said by `cut`.
 
 **Simulator choice.** `execution.simulator` names one of the four supported
 families, or a named executable of one (above); the schema's pattern accepts
@@ -1076,7 +1081,8 @@ with a record cursor that starts at its row; a kind every run of the job
 carries, shown or not (a coverage value such as
 `measurements_coverage.simulator_unsupported` on a QSPICE job), is given by
 its count alone. The whole note is held to one bound,
-`receipts.NOT_SHOWN_BOUND_TOKENS` (668 estimated tokens), whatever the number
+`receipts.NOT_SHOWN_BOUND_TOKENS` (692 estimated tokens), built by
+`lib/not_shown.py`, the one builder of a part naming entries left out, whatever the number
 of kinds and runs, and rows are sized against the target less what the note
 reserves (its size at one row, a first estimate). The whole reply at the
 count found decides: the note can be larger there, and while the reply is
@@ -1089,9 +1095,8 @@ rows are stored, its `runs` block names the stored file, and its failed runs
 are left to its `failures`, which name each one. Fact channels, completeness, progress, verdicts and the
 ids, token and cursors a caller needs to continue are never cut. If they and
 one run row exceed the target, the reply goes out over it with one
-`budget_not_met` observation. The attached analysis's row surfaces may be held
-to fewer rows at the shrink rung, down to none; `analyze_results` over the
-`job_id` returns them.
+`budget_not_met` observation. The attached analysis's lists are cut beside the
+run rows, each to at least one entry, and read on with `analyze_results`.
 
 **Standing notes, said once.** Some notes describe the job or the request and
 read the same on every reply about it: the `micro_sign_folded`,
@@ -1301,9 +1306,9 @@ all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
 include    {per_run?: {limit? (capped at 100), cursor?} | bool, outliers?, signals_available?,
             provenance?, fields?: [dotted row path]}
 budget     int | null
-continue   {result_set_id, cursor}   resumes a budget-truncated call; request
-                                     fields sent with it must be the stored
-                                     request's own
+continue   {result_set_id, cursor}   reads on in a cut reply: a page of the
+                                     stored answer; request fields sent with
+                                     it must be the whole request that gave it
 ```
 
 `continue` is the wire spelling; the Python attribute is `continuation`.
@@ -1354,9 +1359,10 @@ their hashes, and needs no readable RAW. The server does not take the
 producing simulator from a log's contents or from the session's default
 simulator, so only a job source has one. `include.provenance` reports
 `explicit_dialect` and `producing_dialect` separately; `measurements` rows
-report only the producing dialect, which a `path` source does not have. A continuation reports `source_drift` for a source whose
-log or console file changed, or appeared after being absent, as it does for a
-changed RAW.
+report only the producing dialect, which a `path` source does not have. The
+check of every source after the recipes read it reports `source_drift` for a
+source whose log or console file changed, or appeared after being absent, as
+it does for a changed RAW.
 
 When a run has one value per `.meas` (each case of a sweep with no `.step`
 does), its `measurements` row contains `measured: {name: value}`, the number a
@@ -1473,20 +1479,38 @@ continuation replays them.
   `diagnostics_coverage`, `attempt`), with no bare
   names. A path that no row on the page reaches is reported in `warnings`
   with the keys that are there.
-- `include.fields` changes only the row view. Every cursor records the
-  `fields` view it was made for, and a continuation applies that view to the
-  stored request. A `per_run` cursor is checked against the request without
-  its `fields`, so sending page 1 again with different `fields` returns
-  cursors for the new view.
-- On a full request containing `include.per_run.cursor`, an omitted `fields`
-  takes the cursor's view. An explicit `fields` that differs from the cursor's
-  view is rejected with a hint to replay page 1. A cursor with no embedded
-  view uses the stored request's view. The `continue` input itself does not
-  change.
-- A continuation replays the request stored in the result set and takes its
-  view from the cursor. Request fields sent with it are compared with the
-  stored request. An echo of the original call is accepted, and a differing
-  field, such as a raised `include.per_run.limit`, is rejected by name.
+- `include.fields` changes only the row view. A fact a row's value states
+  (`failed_measurements`, `not_finite`, `unreadable`, `answer_unknown`,
+  `not_established`, `printed_once`, `diagnostics`, `diagnostics_coverage`)
+  is kept by the lean row and by any `include.fields`.
+- Every recipe of a call is evaluated in it, and its complete answer is
+  presented (§1). A cursor is a cut entry's `next`, a page's `next_cursor`
+  (the same cursor) or a `rows_not_shown` row's `cursor`. `continue` with it
+  reads a page of the stored answer: nothing is evaluated and no source is
+  read, so a page is never refused or emptied because a source moved, and it
+  carries `stored_answer.snapshot` (the result set, the request and a digest
+  of the sources it read). `include.per_run.cursor` reads the same page, sent
+  with the request that gave it, `fields` included; another request is
+  refused. Request fields sent with `continue` must be the whole request that
+  gave the cursor. A cursor from an earlier release, or one whose stored
+  answer expired (`[analysis] result_set_ttl_hours`, default 24), is refused
+  with `invalid_cursor` and the way to start again: the same request without
+  the cursor.
+- A cut reply's `next` and `cursor` name the first cut list's cursor, and
+  each page object (a recipe's `per_run`, `spec.fail_cases`,
+  `coverage.missing_cases`) says what the cut holds of it in `returned`,
+  `truncated` and `next_cursor` (`spec.fail_cases` in a `hint`). These keep
+  their shapes until the next breaking release.
+- When rows of a recipe are left out and some carry a fact, `rows_not_shown`
+  names them, by recipe key: `{counts, rows?}`, built by `lib/not_shown.py`
+  as `runs_not_shown` is. `counts` gives every kind's number of rows
+  (`failed_measurements`, `unreadable`, `diagnostics.<code>`, ...); `rows`
+  names at most 3 rows over all recipes, each by `source`, `case_id`,
+  `run_index` and `step_index` with a cursor that starts at it; a kind every
+  row of its recipe carries is given by its count alone. The whole part is
+  held to `analyze.ROWS_NOT_SHOWN_BOUND_TOKENS` (965 estimated tokens): named
+  rows come off from the last, then the recipes after the first are summed
+  under `*`. It is never cut.
 - A repeated run index, `case_ids` entry, `group_by` dimension or
   `include.fields` path is read once, and the `hint` reports the duplicate. A
   source without a `label` is labelled with its job_id or its raw file's stem,
@@ -1500,19 +1524,24 @@ continuation replays them.
   adds `wheres` (up to 10 distinct places) and `count` (the number of failure
   records merged). A recipe that fails on every run of a sweep, such as on a
   signal no run contains, is one row rather than one per run, so the
-  failures channel, which no budget rung trims, does not grow with the run
-  count. The page then caps rows at 100,
+  failures channel, which is never cut, does not grow with the run
+  count. An MCP reply then caps rows at 100,
   with a `failures_truncated` observation that gives the true total and says
   that `api.analyze_results` returns every record. The Python API's complete
   `analyze_results` result lists every record, one per place; an analysis
-  attached to an experiment is stored as the page renders it, except that a
-  failure whose message ends in an `api` snippet says where the snippet runs
-  for the session that shows it.
-- Under a `budget`, the shrink rung lowers one shared limit on every row
-  surface (each recipe's `values`, `groups`, `per_run` page and
-  `spec.fail_cases`, and `coverage.missing_cases`) to the largest value whose
-  rows fit, down to one row; the `per_run` and missing-cases pages continue
-  through their cursors. `reduced` is never shrunk.
+  attached to an experiment keeps every record, and each door gives them as
+  it does for `analyze_results`, a failure whose message ends in an `api`
+  snippet saying where the snippet runs for the session that shows it.
+- An observation lifted from a recipe's rows names at most 3 of them in
+  `evidence.rows`, each with its `index` in the recipe's rows (and a cursor
+  when those rows are cut), with `row_count` the number it was made of; one
+  every row of its recipe carries says `every_row` and names none. The Python
+  API names every row.
+- `reduced` is never cut: the request bounds it, one row per field and
+  statistic, and a summary is never missing while its rows are shown. The
+  counts of `spec` are fields, never cut. Every other list of rows is cut by
+  the presenter, `groups`, `spec.outliers`, `signals_available` and
+  `source_hashes` included.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
   assignments, no_value_count?}`. `no_value_count` counts the recipe's rows
@@ -1526,15 +1555,17 @@ continuation replays them.
   field, unless `allow_incomplete` is set, which judges the rows that have a
   number and still reports the count. A verdict stored with a job by an
   earlier release has no `no_value_count`; it skipped rows with no number.
-- Each call has a total time limit, `[analysis] analysis_budget_s` (default
-  60 s), on top of the deadline on each parse. Exceeding it returns partial
-  results and a `result_set_id`, stored in the working directory's store. A
-  result set that reads a job is deleted when the job is ("Job model", §3.1);
-  one that reads only `path` sources expires after
-  `[analysis] result_set_ttl_hours` (default 24). After it is gone, send the
-  request again. A request for more than one call can compute, such as every
-  waveform of a 300-run Monte Carlo, returns what was computed and that
-  continuation handle.
+- Each step of a call has a time limit of its own, `[analysis]
+  analysis_budget_s` (default 60 s), on top of the deadline on each parse:
+  reading the sources, each recipe, the check of every source after the
+  reads, and the signal listing. A recipe that runs out of it fails with
+  `analysis_deadline` and costs only its own entry. The result set the call
+  records (its request and source digests) names the folder its CSV and plot
+  artifacts are written to; its id is a digest of what it records, so the
+  same request over the same files gives the same id and the same bytes. A
+  result set that reads a job is deleted, with its artifacts, when the job
+  is ("Job model", §3.1); one that reads only `path` sources expires after
+  `[analysis] result_set_ttl_hours` (default 24).
 - A result set captures each source's RAW, log and console output, including
   their absence, with a content hash for each. Every later read checks each
   file's device, inode, size, modification time and change time (on Windows,
@@ -1571,16 +1602,14 @@ continuation replays them.
   first read raises `analysis_deadline` and creates no result set or cursor;
   retry the original request with fewer sources or a larger
   `[analysis] analysis_budget_s`. The timeout is not stored, so a retry reads
-  the sources again. After that read, every call completes at least one recipe
-  evaluation, and work left over when the budget runs out continues through
-  the returned `result_set_id`.
+  the sources again.
 - A `path` source has no job provenance, so its rows have no `deck_sha256`,
   and an observation says why.
 - Full-resolution data is returned as artifact handles
   `{path, content_type, sha256, bytes}`. Inline waveform data is always
   decimated to at most `max_points`, with `points_returned` and
-  `points_total` reported, and a budget may thin it further (§3.1, the
-  response budget). An inline value is `{format, x, series[{signal, y}],
+  `points_total` reported, and a reply too long for its target thins it
+  further as a series (§1). An inline value is `{format, x, series[{signal, y}],
   points_returned, points_total}`: every trace of one plot is read at the
   same points, so the axis is sent once, as `x`. An AC series has
   `magnitude_db` and `phase_deg` for `y`, and another complex one `real` and
@@ -1588,12 +1617,13 @@ continuation replays them.
   form, which reads back as the same 32-bit value.
 
 Output: `outcome, coverage {runs_requested, runs_analyzed, runs_running?, missing_cases: Page},
-results {key -> {metric, units, reduced[], groups?, steps?, spec?,
-per_run?: Page, warnings}}, observations[],
+results {key -> {metric, units, reduced[], groups?, spec?,
+per_run?: Page, values?, warnings}}, observations[],
 failures[] {code, stage, where, message, wheres?, count?}, signals_available?,
-source_hashes, result_set_id?, hint`.
+source_hashes, result_set_id, rows_not_shown?, cut?, stored_answer?, cursor?,
+next?, hint`.
 
-`results` has an entry for every recipe the page reached, in the order they
+`results` has an entry for every recipe the call asked for, in the order they
 were asked for, whether or not it produced rows. A recipe that produced none
 because it failed, whether it was invalid, its source could not be read or it
 failed on every run, has empty rows and a warning `No rows: ...` naming
