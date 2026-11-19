@@ -295,9 +295,10 @@ def json_default(obj: Any) -> Any:
     raise TypeError(f"Not JSON-serializable: {type(obj).__name__}")
 
 
-def atomic_write_json(path: Path, data: Any) -> None:
-    """Atomically and durably write a store record."""
-    _atomic_write_json(path, data, default=json_default)
+def atomic_write_json(path: Path, data: Any, *, mtime: float | None = None) -> None:
+    """Atomically and durably write a store record, with ``mtime`` as its
+    modification time from the moment it appears at ``path``."""
+    _atomic_write_json(path, data, default=json_default, mtime=mtime)
 
 
 def envelope(kind: str, **payload: Any) -> dict[str, Any]:
@@ -872,6 +873,11 @@ class Store:
             f"{_validate_name(answer_id, 'stored answer id')}.json",
             f"Invalid stored answer id: {answer_id!r}",
         )
+
+    def stored_answers_swept(self) -> Path:
+        """The empty file whose modification time is when the stored answers
+        were last swept (``lib/presenter.py``)."""
+        return self.results_dir / ".stored_answers_swept"
 
     def result_artifacts(self, result_set_id: str) -> Path:
         """Files one result set points at, deleted with it."""

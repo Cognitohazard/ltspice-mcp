@@ -497,8 +497,8 @@ def test_analysis_cursor_request_identity_includes_selection():
     changed_dialect = analyze.AnalyzeResultsInput.model_validate(
         {**payload, "sources": [{**payload["sources"][0], "dialect": "ltspice"}]}
     )
-    assert analyze._request_hash(first) != analyze._request_hash(changed_plot)
-    assert analyze._request_hash(first) != analyze._request_hash(changed_dialect)
+    assert analyze._request_digest(first) != analyze._request_digest(changed_plot)
+    assert analyze._request_digest(first) != analyze._request_digest(changed_dialect)
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.errors import ERROR_HINTS, InvalidCursorError
-from ltspice_mcp.lib import result_store
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
@@ -198,16 +197,14 @@ class TestItemLevelCursors:
 
 
 class TestDecoders:
-    """Every decoder of an analysis cursor raises the one type."""
+    """Every reader of a stored answer's cursor raises the one type."""
 
-    @pytest.mark.parametrize(
-        "decode",
-        [
-            result_store.cursor_result_set_id,
-            result_store.cursor_view,
-            lambda cursor: result_store.reencode_cursor(cursor, view_fields=None),
-        ],
-    )
-    def test_a_garbage_analysis_cursor_raises_the_cursor_error(self, decode: Any) -> None:
+    def test_a_garbage_analysis_cursor_raises_the_cursor_error(self, work_dir: Path) -> None:
+        from ltspice_mcp.lib import presenter
+        from ltspice_mcp.lib.store import Store
+        from ltspice_mcp.tools.analyze import OUTPUT_SCHEMA
+
         with pytest.raises(InvalidCursorError):
-            decode(GARBAGE)
+            presenter.open_page(
+                GARBAGE, OUTPUT_SCHEMA, tool="analyze_results", store=Store(work_dir), gone=""
+            )

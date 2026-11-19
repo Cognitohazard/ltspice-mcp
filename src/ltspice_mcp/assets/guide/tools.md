@@ -314,9 +314,8 @@ first read runs out of time, the call returns `analysis_deadline` with no
 `result_set_id` or cursor; retry the original request with fewer sources or a
 larger configured analysis time budget. A retry reads the sources again,
 because the timeout is not recorded against them. After the first read, every
-call completes at least one recipe evaluation. Work left over when the time
-budget runs out continues when you pass the reply's `next` block
-(`result_set_id` and `cursor`) as `continue`.
+recipe is evaluated in the call, each with that time budget of its own; one
+that runs out of it fails alone, with `analysis_deadline`.
 
 ## Recipes the schema lists by name only
 
@@ -344,7 +343,9 @@ estimated tokens (compact characters / 4, minimum 500). It is the reply's
 target. If you omit it, the server's default (`[analysis] default_budget`,
 4000 tokens) is the target. With the config value set to `0` and no `budget`
 there is no target: a reply is sent whole, except that a reply about a job
-holds at most 50 run rows. The Python API returns every row.
+holds at most 50 run rows, and an `analyze_results` reply at most a `per_run`
+page's `limit` (50 by default) and 100 entries of each other list it can cut.
+The Python API returns every row.
 
 `run_experiments` and `jobs` cut a reply over its target by run rows, whole
 rows from the end, keeping at least one. The reply's `cut` names what it left
@@ -363,6 +364,31 @@ few hundred tokens, and the rows are sized against what it leaves. `failures`, `
 never cut: a target too small for them still returns them in full, with one
 `budget_not_met` observation saying the reply is over its target.
 
+`analyze_results` evaluates every recipe you ask for in one call and cuts a
+reply over its target by its lists: each recipe's rows (`values` or
+`per_run.items`), `groups`, `spec.fail_cases` and `outliers`,
+`coverage.missing_cases`, `signals_available` and `source_hashes`, whole
+entries from the end, at least one kept. `reduced` and the counts of `spec`
+are never cut, and nothing you asked to include is dropped. `cut` names each
+list with its `next`; pass it as `continue: {result_set_id, cursor}` (the
+reply's `next` holds the first) to read the rest, sliced from the stored
+answer: nothing is evaluated again, so a page shows the rows as computed even
+if a source changed since, and its `stored_answer.snapshot` says which
+snapshot they are of. A page holds only its list (`page_of`); read each
+other list from the first reply's `cut`. A cursor lasts as long as the stored answer
+(`result_set_ttl_hours`, 24 hours by default); after that, send the request
+again. `rows_not_shown` names, per recipe, the rows left out that carry a fact
+(`failed_measurements`, `unreadable`, `diagnostics.<code>`, ...), up to 3 of
+them with a cursor that starts at each. A receipt's attached analysis is cut
+the same way, beside the run rows, and read on with `analyze_results`.
+
+An inline `waveform` too long for the reply is drawn again at fewer points
+first, each bucket keeping its minimum and maximum, never below 32 points:
+its `cut` entry at `.../value/x` gives the points the answer holds and those
+sent, with no cursor, and the recipe's `warnings` say so and name the
+`budget` at which the reply sends every point; `"format": "csv"` writes every
+sample to a file.
+
 ### Notes sent once per session
 
 A note that describes the job or your request (a micro sign read as micro, an
@@ -375,24 +401,13 @@ does repeating a `run_experiments` call with the same `request_id`.
 
 ### The reduction ladder
 
-`analyze_results`, `inspect` and a receipt's attached analysis apply the rungs
-of a fixed reduction ladder in order until the reply fits:
+`inspect` applies the rungs of a fixed reduction ladder in order until the
+reply fits:
 
 | rung | what is removed |
 |-|-|
-| 0 trim | `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included); then points of an inline `waveform` whose `max_points` you did not set, thinned to fewer buckets that each keep their minimum and maximum |
-| 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"`, and a `max_points` you set, so any inline waveform may be thinned |
+| 0 trim | a page block with nothing left to read |
+| 1 answer | your detail opt-ins, such as `detail:"full"` |
 | 2 shrink | page size; cursors are created for the smaller page, so paging still reaches every row |
 
-Rung 2 lowers one page limit on every list in the reply at once, to the
-largest limit at which all their rows fit, so the values of three recipes
-share the budget instead of each taking all of it. In a receipt it lowers the
-attached analysis's rows, down to none; `analyze_results` over the `job_id`
-returns them. `reduce` results and spec verdicts are kept.
-
-With no `budget`, only rung 0 applies, so a large response loses only
-`source_hashes` and the inline waveform points you did not ask for; set
-`max_points` to keep a count, or use `"format": "csv"` for every sample. A
-receipt thins its attached waveforms either way; `analyze_results` over the
-job with a larger `max_points` returns more. A thinned recipe says so in its
-`warnings`.
+With no `budget`, only rung 0 applies.

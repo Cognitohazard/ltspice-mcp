@@ -124,7 +124,7 @@ async def _signals(state: SessionState, job_id: str) -> list[str]:
     )
     available = data.get("signals_available")
     assert available, data
-    return [name for names in available.values() for name in names]
+    return [name for entry in available for name in entry["signals"]]
 
 
 async def _op(state: SessionState, job_id: str) -> dict:
