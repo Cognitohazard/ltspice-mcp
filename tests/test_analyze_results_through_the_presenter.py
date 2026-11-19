@@ -258,7 +258,9 @@ async def test_a_page_read_after_its_source_changed_returns_the_stored_rows_and_
         page["results"]["v"]["per_run"]["items"] == whole["results"]["v"]["per_run"]["items"][50:]
     )
     assert page["stored_answer"]["snapshot"] == snapshot
-    assert not [failure for failure in page.get("failures", []) if failure["code"] == "source_drift"]
+    assert not [
+        failure for failure in page.get("failures", []) if failure["code"] == "source_drift"
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -335,3 +337,131 @@ async def test_a_summarys_default_row_keeps_the_measurements_its_log_printed_fai
             "values"
         ]
         assert row["value"].get("failed_measurements") == ["never", "depends"], include
+
+
+# ---------------------------------------------------------------------------
+# Strengths kept
+# ---------------------------------------------------------------------------
+
+#: The fields a delivery sets about itself, not about the answer.
+_DELIVERY = ("cut", "stored_answer", "cursor", "next", "hint", "rows_not_shown")
+
+
+def _answer_of(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if key not in _DELIVERY}
+
+
+@pytest.mark.asyncio
+async def test_one_answer_whoever_asks_the_receipt_analyze_results_or_the_python_api(
+    state_with_sim: SessionState, grid_deck: Path
+):
+    """The analysis in a receipt is the answer analyze_results gives for the
+    same request over the finished job, and the Python API's, once each
+    delivery's own fields are set aside."""
+    from ltspice_mcp.tools import experiments
+
+    values = [f"{index}k" for index in range(1, 5)]
+    _is_error, receipt = await submit_experiment(
+        state_with_sim,
+        {
+            "request_id": "one-answer",
+            "circuits": [{"path": str(grid_deck), "id": "dut"}],
+            "execution": {"wait_s": LIVENESS_S},
+            "variations": [
+                {"kind": "assign", "assign": {"R1": values, "C1": ["1u", "2u"], "V1": ["1", "2"]}}
+            ],
+            "analyze": {"recipes": _GRID_RECIPES},
+            "budget": 10**6,
+        },
+    )
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    payload = experiments._attached_analysis_payload(  # pyright: ignore[reportPrivateUsage]
+        job.job_id, job.analysis.request or {}
+    )
+    tool = await _analyze(state_with_sim, {**payload, "budget": 10**6})
+    api = await asyncio.to_thread(lambda: SyncApi(state_with_sim).analyze_results(**payload))
+    attached = receipt["analysis"]["result"]
+    assert _answer_of(attached) == _answer_of(tool) == _answer_of(api)
+
+    # Cut, each reply's lists read on to the same rows.
+    cut = await _analyze(state_with_sim, {**payload, "budget": 600})
+    for key in ("v_100u", "v_500u", "v_900u"):
+        pointer = f"/results/{key}/values"
+        rows = await _every_row(state_with_sim, cut, pointer) if pointer in cut["cut"] else None
+        assert rows is None or rows == api["results"][key]["values"]
+
+
+@pytest.mark.asyncio
+async def test_a_summary_and_a_specs_counts_are_whole_in_every_first_reply(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job_id = _job(state_no_sim, work_dir, 60)
+    request = {
+        "sources": [{"job_id": job_id, "label": "dut"}],
+        "recipes": [
+            {**_VALUE, "reduce": ["min", "max", "mean"], "spec": {"max": 0.1}},
+            {"key": "w", "metric": "value", "expr": "V(out)", "at": "500u"},
+        ],
+        "include": {"outliers": True},
+    }
+    whole = await asyncio.to_thread(lambda: SyncApi(state_no_sim).analyze_results(**request))
+    for budget in (500, 900, 2000):
+        data = await _analyze(state_no_sim, {**request, "budget": budget})
+        entry = data["results"]["v"]
+        assert entry["reduced"] == whole["results"]["v"]["reduced"], budget
+        for count in ("pass_count", "fail_count", "verdict", "field", "min", "max"):
+            assert entry["spec"].get(count) == whole["results"]["v"]["spec"].get(count), budget
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_fits_writes_no_file(state_no_sim: SessionState, work_dir: Path):
+    job_id = _job(state_no_sim, work_dir, 4)
+    data = await _analyze(state_no_sim, {**_request(job_id), "budget": 10**6})
+    assert "cut" not in data and "stored_answer" not in data
+    results = state_no_sim.store.results_dir
+    assert not list(results.glob("sa_*.json"))
+
+
+def test_rows_not_shown_holds_its_bound_and_gives_a_kind_every_row_carries_by_its_count():
+    """Every row of three recipes carries every kind of fact: the part keeps
+    each kind's count, names no row (a kind every row carries is its count
+    alone), and stays within its stated bound."""
+    from ltspice_mcp.lib.presenter import ListCut
+
+    kinds = analyze_mod._kind_vocabulary()  # pyright: ignore[reportPrivateUsage]
+    diagnostics = [
+        {"code": kind.split(".", 1)[1], "count": 1}
+        for kind in kinds
+        if kind.startswith("diagnostics.")
+    ]
+    value = {
+        "diagnostics": diagnostics,
+        "diagnostics_coverage": "log_unread",
+        **{key: ["m"] for key in ("failed_measurements", "not_finite")},
+        **{key: {"m": "x"} for key in ("unreadable", "answer_unknown", "not_established")},
+        "printed_once": {"m": {}},
+    }
+    rows = [
+        {"source": "s", "case_id": f"c{index}", "run_index": index, "value": value}
+        for index in range(200)
+    ]
+    answer = {
+        "result_set_id": "rs_x",
+        "results": {key: {"metric": "value", "values": rows} for key in ("a", "b", "c")},
+    }
+    annotate, apart = analyze_mod.say_what_was_cut(answer)
+    reply: dict[str, Any] = {"result_set_id": "rs_x", "results": {}}
+    cut = {
+        f"/results/{key}/values": ListCut(total=200, returned=1, next="n")
+        for key in ("a", "b", "c")
+    }
+    annotate(reply, cut, None, None)
+    part = reply["rows_not_shown"]
+    from ltspice_mcp.lib.response_budget import estimate_tokens
+
+    assert estimate_tokens({"rows_not_shown": part}) <= analyze_mod.ROWS_NOT_SHOWN_BOUND_TOKENS
+    assert apart["rows_not_shown"] <= analyze_mod.ROWS_NOT_SHOWN_BOUND_TOKENS
+    counted = {kind for group in part.values() for kind in group["counts"]}
+    assert "failed_measurements" in counted and "diagnostics_coverage.log_unread" in counted
+    assert all(count == 199 for group in part.values() for count in group["counts"].values())
+    assert not any("rows" in group for group in part.values())

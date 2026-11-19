@@ -371,7 +371,13 @@ def _fit(
 def _largest(fits: Callable[[int], bool], most: int) -> int | None:
     """The largest count from 1 to ``most`` that fits, for a ``fits`` that
     holds up to some count and fails above it; None when 1 does not."""
-    low, high, best = 1, most, None
+    return _largest_from(fits, 1, most)
+
+
+def _largest_from(fits: Callable[[int], bool], least: int, most: int) -> int | None:
+    """The largest count from ``least`` to ``most`` that fits, as
+    :func:`_largest`; None when ``least`` does not."""
+    low, high, best = least, most, None
     while low <= high:
         middle = (low + high) // 2
         if fits(middle):
@@ -644,8 +650,27 @@ def _thin(
                 cuts[pointer] = ListCut(total=total, returned=shown)
         return drawn, cuts
 
-    points = _largest(lambda count: measure(*at(count)) <= target, most - 1)
-    return at(max(series.floor, points or series.floor))
+    def kept(count: int) -> bool:
+        drawn, _ = at(count)
+        return all(
+            len(resolve_pointer(drawn, pointer)) >= min(series.floor, total)
+            for pointer, total in held.items()
+        )
+
+    # A drawing can hold fewer points than it is asked for (a bucket with no
+    # sample), so the floor is held on what is drawn: the fewest points asked
+    # for whose drawing keeps it, then the most that fit from there.
+    low, high = series.floor, most
+    while low < high:
+        middle = (low + high) // 2
+        if kept(middle):
+            high = middle
+        else:
+            low = middle + 1
+    if low >= most:
+        return document, {}
+    points = _largest_from(lambda count: measure(*at(count)) <= target, low, most - 1)
+    return at(points if points is not None else low)
 
 
 def _with_values(answer: dict[str, Any], values: Mapping[str, Any]) -> dict[str, Any]:

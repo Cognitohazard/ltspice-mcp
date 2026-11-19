@@ -292,6 +292,7 @@ def test_status_sends_in_full_and_a_wait_and_a_run_shorten():
     assert dict(SHORTENS) == {
         "status": False,
         "replay": False,
+        "analysis": False,
         "wait": True,
         "run": True,
         "resume": True,

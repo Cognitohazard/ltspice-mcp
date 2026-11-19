@@ -3731,6 +3731,9 @@ def _recipe_of(pointer: str) -> str:
 
 TOOL = "analyze_results"
 
+#: The lists of a waveform's value the presenter thins together.
+_SERIES_KEYS = ("x", "series")
+
 #: How each list this tool cuts is said on the page object that holds it.
 _PAGED = ("/per_run/items", "/missing_cases/items", "/fail_cases/items")
 
@@ -3855,7 +3858,7 @@ def say_what_was_cut(
                             page["hint"] = said
                         else:
                             page.pop("hint", None)
-            elif entry.next is None and entry.returned < entry.total:
+            elif keys[-2:-1] == ["value"] and keys[-1] in _SERIES_KEYS:
                 # A series thinned: said once on its recipe.
                 recipe = _owned(reply, join_pointer(keys[:2]))
                 said = _THINNED_WARNING.format(shown=entry.returned, total=entry.total)
