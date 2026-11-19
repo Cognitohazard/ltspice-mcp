@@ -3168,10 +3168,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             **_SIMULATOR_DOCS_DATA_PROPERTIES,
                             **_OPEN_DESIGNS_DATA_PROPERTIES,
                             **_MEASUREMENTS_DATA_PROPERTIES,
-                            "values_read_otherwise": {
-                                **stored_values.STATEMENTS_SCHEMA,
-                                CUT: NEVER,
-                            },
+                            "values_read_otherwise": stored_values.STATEMENTS_SCHEMA,
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
                             "dialect": {"type": "string"},

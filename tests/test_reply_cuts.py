@@ -263,7 +263,25 @@ _NOT_COMPARED = (
     "defines more than once in one scope (netlist_diff.structural_delta)"
 )
 
+_READ_OTHERWISE = (
+    "two per micro sign at a value's suffix in the files read, one per recorded "
+    "build, and none for a build that reads the sign alike (stored_values)"
+)
+_READ_OTHERWISE_EVIDENCE = "the recordings that show one reading: at most three"
+
 NEVER_BOUNDS: dict[tuple[str, str], str] = {
+    **{
+        (handler, f"{at}{tail}"): bound
+        for handler, at in (
+            ("inspect_tools.handle_inspect", "results[].data.values_read_otherwise"),
+            ("verify.handle_verify_circuit", "comparison.values_read_otherwise"),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.values_read_otherwise",
+            ),
+        )
+        for tail, bound in (("", _READ_OTHERWISE), ("[].evidence", _READ_OTHERWISE_EVIDENCE))
+    },
     ("verify.handle_verify_circuit", "comparison.not_compared"): _NOT_COMPARED,
     ("verify.handle_verify_circuit", "export.diff_vs_prior.not_compared"): _NOT_COMPARED,
     ("schematic_edit.handle_edit_schematic", "verification.comparison.not_compared"): (

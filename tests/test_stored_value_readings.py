@@ -224,3 +224,28 @@ async def test_a_run_states_each_build_that_reads_the_source_otherwise(
         for build, number in expected.items():
             assert by_build[build]["file"] == str(deck.resolve())
             assert math.isclose(by_build[build]["build_number"], number, rel_tol=SAME_VALUE_RTOL)
+
+
+# What no recording shows is said not to be established ---------------------------
+
+
+def test_a_reading_no_recording_shows_is_stated_as_not_established():
+    """A micro sign in braces or in a directive, read by XVII as letters,
+    takes a number no recording shows; a Greek mu stored as UTF-16 is
+    recorded on no build. Each is stated, with established false, never
+    assumed alike or otherwise."""
+    from ltspice_mcp.lib.stored_values import readings_of_bytes
+
+    braces = readings_of_bytes(
+        "* t\nR1 a 0 {1µ}\n.param p=1µ\n.end\n".encode(), root=True, file="d.cir"
+    )
+    assert [(r.build, r.line, r.build_reads, r.established) for r in braces] == [
+        ("LTspice XVII", 2, "1Âµ", False),
+        ("LTspice XVII", 3, "1Âµ", False),
+    ]
+    utf16 = readings_of_bytes("* t\nR1 a 0 1μ\n.end\n".encode("utf-16"), root=True)
+    assert [(r.build, r.build_reads, r.established) for r in utf16] == [
+        ("LTspice 26", None, False),
+        ("LTspice XVII", None, False),
+    ]
+    assert all(not r.statement()["established"] for r in (*braces, *utf16))

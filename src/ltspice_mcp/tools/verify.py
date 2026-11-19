@@ -775,7 +775,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "which keys are present."
     ),
     "properties": {
-        "values_read_otherwise": {**STATEMENTS_SCHEMA, CUT: NEVER},
+        "values_read_otherwise": STATEMENTS_SCHEMA,
         "mode": {
             "type": "string",
             "enum": ["equivalence", "structural_diff"],

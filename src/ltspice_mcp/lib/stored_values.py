@@ -34,6 +34,7 @@ from typing import Any, Literal
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, decode_windows_1252
 from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
+from ltspice_mcp.lib.reply_cuts import CUT, NEVER
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
 
@@ -170,26 +171,23 @@ STATEMENT_SCHEMA: dict[str, Any] = {
         "build_reads": {"type": "string", "description": "The text the build reads instead."},
         "build_number": {"type": "number", "description": "The number the build takes."},
         "established": {"type": "boolean"},
-        "evidence": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "detail": {"type": "string"},
     },
     "required": ["code", "value", "line", "encoding", "build", "established", "detail"],
 }
 
-#: A reply's list of statements.
+#: A reply's list of statements, sent whole: a statement left out would read
+#: as a value every build reads alike.
 STATEMENTS_SCHEMA: dict[str, Any] = {
     "type": "array",
+    CUT: NEVER,
     "description": (
         "Each value read from a stored file that a recorded LTspice build reads as another "
         "number than this reply gives. Absent when every value read is read alike."
     ),
     "items": STATEMENT_SCHEMA,
 }
-
-
-def _in_braces(card: SpiceCard, offset: int) -> bool:
-    before = card.body[:offset]
-    return before.count("{") > before.count("}")
 
 
 def _server_number(site: ValueSuffixSite) -> float | None:
@@ -220,7 +218,7 @@ def _reading(
     if decoding == "same":
         return None
     reads = decode_windows_1252(site.token.encode("utf-8"))
-    if site.card.kind != "instance" or _in_braces(site.card, site.offset):
+    if site.card.kind != "instance" or site.in_braces:
         # The bare number is recorded for an instance's value outside braces;
         # in an expression or a directive no recording shows what the build
         # makes of the letters.

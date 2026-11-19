@@ -38,7 +38,6 @@ from ltspice_mcp.lib.spice_lex_ops import (
     fold_micro_suffix_cards,
 )
 from ltspice_mcp.lib.spice_lex_views import WAVEFILE
-from ltspice_mcp.lib.stored_values import CODE as READ_OTHERWISE
 from ltspice_mcp.lib.stored_values import OtherReading, readings_of_cards, statements
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
@@ -176,7 +175,7 @@ def _read_otherwise_observation(path: Path, readings: Sequence[OtherReading]) ->
     (a Monte Carlo nominal, a device's size) is not the one that build reads."""
     stated = statements(readings)
     return {
-        "code": READ_OTHERWISE,
+        "code": "value_read_otherwise",  # stored_values.CODE
         "kind": "provenance",
         "detail": (
             f"{len(stated)} value(s) of {path.name} are read as another number by a "
