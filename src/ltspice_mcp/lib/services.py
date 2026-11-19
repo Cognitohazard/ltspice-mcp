@@ -28,7 +28,7 @@ from ltspice_mcp.errors import (
     ResultError,
     RunNotFinishedError,
 )
-from ltspice_mcp.lib import recent
+from ltspice_mcp.lib import recent, stored_values
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, steps_held
 from ltspice_mcp.lib.experiment_types import (
@@ -57,6 +57,7 @@ from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     other_raw_path,
     points_reached,
+    run_log_path,
 )
 from ltspice_mcp.lib.result_observations import (
     READ_BY_JOB,
@@ -234,18 +235,22 @@ def source_for_raw_path(
     authorized independently on load, where a file the capture needs and does
     not find is refused (``parser_service``); only the contained capture worker
     reads writer evidence. Session simulator defaults are not provenance.
+    The log and console output are the run's (``raw_parser.run_log_path``),
+    beside an other raw of the run (``.op.raw``, ``.fra_1.raw``) too. Blocking:
+    it looks for a log of the file's own name, so a coroutine calls it, and
+    :func:`resolve_analysis_source`, in a thread.
     """
-    sibling = raw.with_suffix(".log")
+    log = run_log_path(raw)
     return AnalysisSource(
         raw=raw,
-        log=sibling,
+        log=log,
         netlist=None,
         dialect=None,
         identity=None,
         trusted_job_artifact=False,
         explicit_dialect=dialect,
         plot_index=plot_index,
-        console=raw.with_suffix(".exe.log"),
+        console=log.with_suffix(".exe.log"),
     )
 
 
@@ -1282,6 +1287,42 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     return found.evidence if found is not None and found.before_24 else None
 
 
+def session_ltspice_builds(state: SessionState) -> dict[str, str | None]:
+    """The recorded LTspice builds this session may run, by the name
+    ``stored_values`` gives them, each with the note a statement about it
+    carries: its detected LTspice and each named executable of the LTspice
+    family, identified as ``cp1252_ltspice`` identifies one
+    (``simulator_build.which_ltspice``, from the executable and the build its
+    latest run reported). One before 24 is LTspice XVII and a later one
+    LTspice 26, each with no note. One whose build nothing shows is not known
+    to read alike: it stands for every recorded build, with the note
+    ``stored_values.UNIDENTIFIED``. A session with no LTspice may run none, so
+    a reply states no build's reading to it.
+
+    Blocking: identifying an executable may read its program file."""
+    identified: set[str] = set()
+    unidentified = False
+    # Keyed by family, and a named executable by its selector (ltspice:xvii),
+    # as every other reader of the session's LTspice keys them.
+    for selector, simulator in state.offered_simulators.items():
+        if selector.partition(":")[0] != "ltspice":
+            continue
+        executable = executable_identity(simulator)
+        program = executable.path if executable is not None else None
+        found = which_ltspice(program, None)
+        if found is None or not found.before_24:
+            found = which_ltspice(program, reported_build_of(state, executable)) or found
+        if found is None:
+            unidentified = True
+        else:
+            identified.add(stored_values.CP1252_BUILD if found.before_24 else "LTspice 26")
+    builds: dict[str, str | None] = dict.fromkeys(sorted(identified))
+    if unidentified:
+        for build in stored_values.BUILDS:
+            builds.setdefault(build, stored_values.UNIDENTIFIED)
+    return builds
+
+
 def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
     """The build the latest run on ``executable`` reported (``reported_version``),
     without which run did."""
@@ -1489,7 +1530,7 @@ async def load_artifacts(
 
 async def load_raw(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     """Load a selected resident plot and its same-capture log facts."""
-    return select_raw(await load_artifacts(source, state, require_raw=True), source.plot_index)
+    return source_raw(source, await load_artifacts(source, state, require_raw=True))
 
 
 def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
@@ -1497,8 +1538,24 @@ def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     deadline = _raw_deadline()
     captured = _resident_artifacts(source, require_raw=True, deadline=deadline)
     if captured is not None:
-        return select_raw(captured, source.plot_index)
-    return _parse_raw_sync(source, state, deadline=deadline)
+        return source_raw(source, captured)
+    return _as_read_from(source, _parse_raw_sync(source, state, deadline=deadline))
+
+
+def source_raw(source: AnalysisSource, artifacts: ParsedArtifacts) -> DecodedRaw:
+    """The plot ``source`` selects of ``artifacts``, as ``source`` reads it
+    (:func:`_as_read_from`): what every reader of a source's results takes."""
+    return _as_read_from(source, select_raw(artifacts, source.plot_index))
+
+
+def _as_read_from(source: AnalysisSource, raw: DecodedRaw) -> DecodedRaw:
+    """``raw`` as ``source`` reads it: where the read found no log under the
+    name the source gives it (``raw_parser.run_log_path``), a plot whose steps
+    cannot be told apart names that log in its refusal. The capture, which a
+    cache shares between sources, holds no file name."""
+    if source.log is None or raw.logs is None or "log" not in raw.logs.captured.absent:
+        return raw
+    return raw.without_log(source.log.name)
 
 
 async def read_steps(

@@ -36,6 +36,7 @@ from ltspice_mcp.lib.recovery_records import (
     RecoveryError,
     StartupPolicy,
 )
+from ltspice_mcp.lib.redirect import redirect_below
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
     EditCards,
@@ -956,7 +957,7 @@ def prepare_startup(
     path = store.recovery_spinit(root_job_id, simulator)
     try:
         root = store.lineage_run_dir(root_job_id, store.run_dir(root_job_id, simulator), simulator)
-        if not path.parent.resolve().is_relative_to(root):
+        if redirect_below(path, root) is not None:
             raise RecoveryError("recovery_path_escape", "Startup directory is outside its lineage")
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(path, _SPINIT, overwrite=False, durable=True)

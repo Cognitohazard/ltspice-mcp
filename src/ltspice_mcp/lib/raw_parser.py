@@ -108,6 +108,35 @@ def other_raw_path(raw: Path, kind: str) -> Path:
     return raw.with_name(f"{raw.stem}.{kind}.raw")
 
 
+def run_log_path(results: Path) -> Path:
+    """The log of the run that wrote the results file ``results``: the one
+    answer for every reader given a results file by its path (but a
+    ``<case>.log.raw``, below).
+
+    A run of ``<case>`` writes ``<case>.log`` beside ``<case>.raw`` and beside
+    each other raw it writes there, ``<case>.<kind>.raw`` (``OTHER_RAW_KINDS``),
+    and no log of that other raw's own name: the recorded runs of ``raw/fra``,
+    ``raw/fra_step`` and ``raw/step_tran_op_raw`` write ``.log``, ``.raw`` and
+    ``.fra_1.raw`` or ``.op.raw``, and no ``.fra_1.log`` or ``.op.log`` (their
+    ``written`` lists). A Fast Access copy keeps the raw's own name
+    (``raw/tran_fastaccess``). So a log of the file's own name, where there
+    is one, is its run's: a circuit named ``amp.op`` writes ``amp.op.raw``
+    and ``amp.op.log``, and ``amp.log`` beside them is another circuit's.
+    Whether the log named is there is the reader's to find out: one that is
+    not is reported by the read, under this name. ``<case>.log.raw``, which
+    LTspice writes for some runs, is kept by no recording, and its log is
+    not established."""
+    own = results.with_suffix(".log")
+    if os.path.isfile(own):
+        return own
+    name = results.name
+    for kind in OTHER_RAW_KINDS:
+        suffix = f".{kind}.raw"
+        if len(name) > len(suffix) and name.lower().endswith(suffix):
+            return results.with_name(f"{name[: -len(suffix)]}.log")
+    return own
+
+
 def other_raws(raw: Path) -> list[str]:
     """The kinds of other raw the run wrote beside ``raw``. Each is probed by
     name, so a folder of many runs costs no more than one of a few."""

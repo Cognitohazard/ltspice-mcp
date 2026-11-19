@@ -341,9 +341,10 @@ def _materialize_raw(
     # Admit every file before the first resident read. Recheck length/digest
     # after each read as well, because files can change after this inventory.
     for entry in entries.values():
-        path = directory / entry.file
+        # Refused here when the file redirects elsewhere (``parser_file_in``).
+        path = parser_file_in(directory, entry.file)
         info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or path != parser_file_in(directory, entry.file):
+        if not stat.S_ISREG(info.st_mode):
             raise ValueError("Parser arrays must be contained regular files")
         if info.st_size != entry.byte_size:
             raise ValueError("Parser numeric file size disagrees")

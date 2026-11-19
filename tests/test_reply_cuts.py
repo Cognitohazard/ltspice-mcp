@@ -267,7 +267,39 @@ _NOT_COMPARED = (
     "defines more than once in one scope (netlist_diff.structural_delta)"
 )
 
+_READ_OTHERWISE = "one per build and kind of reading: at most four (stored_values.summaries)"
+_READ_OTHERWISE_FILES = "stored_values.FILES (3), with files the true number"
+_READ_OTHERWISE_EXAMPLES = "stored_values.EXAMPLES (3), with count the true number"
+_READ_OTHERWISE_EVIDENCE = "the recordings that show the readings: at most five"
+
 NEVER_BOUNDS: dict[tuple[str, str], str] = {
+    **{
+        (handler, f"{at}{key}"): bound
+        for handler, at in (
+            ("inspect_tools.handle_inspect", "results[].data.values_read_otherwise"),
+            ("verify.handle_verify_circuit", "comparison.values_read_otherwise"),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.values_read_otherwise",
+            ),
+        )
+        for key, bound in (
+            ("", _READ_OTHERWISE),
+            ("[].by_file", _READ_OTHERWISE_FILES),
+            ("[].by_file[].examples", _READ_OTHERWISE_EXAMPLES),
+            ("[].evidence", _READ_OTHERWISE_EVIDENCE),
+        )
+    },
+    **{
+        (handler, f"{at}_not_checked"): "one per side of a comparison: at most two"
+        for handler, at in (
+            ("verify.handle_verify_circuit", "comparison.values_read_otherwise"),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.values_read_otherwise",
+            ),
+        )
+    },
     ("verify.handle_verify_circuit", "comparison.not_compared"): _NOT_COMPARED,
     ("verify.handle_verify_circuit", "export.diff_vs_prior.not_compared"): _NOT_COMPARED,
     ("schematic_edit.handle_edit_schematic", "verification.comparison.not_compared"): (

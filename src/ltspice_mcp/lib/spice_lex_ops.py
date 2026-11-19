@@ -357,6 +357,18 @@ class ValueSuffixSite:
         return self.number + self.suffix + self.tail
 
     @property
+    def in_braces(self) -> bool:
+        """The number sits inside braces: an expression, not a value read alone."""
+        before = self.card.body[: self.offset]
+        return before.count("{") > before.count("}")
+
+    @property
+    def after_equals(self) -> bool:
+        """The number is the right-hand side of an assignment (``Rser=1µ``)."""
+        start = self.offset - len(self.number)
+        return self.card.body[:start].rstrip().endswith("=")
+
+    @property
     def micro(self) -> bool:
         """The character is a micro sign, so a reader that knows it reads 1e-6."""
         return self.suffix in MICRO_SIGNS

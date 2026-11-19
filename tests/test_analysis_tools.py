@@ -1844,13 +1844,13 @@ class TestTraceDeviceFilter:
     """Pure helpers behind operating_point's device= filter."""
 
     def test_the_owner_of_each_name(self):
-        assert owner_path("@m1[gm]", xvii=False) == ("m1",)
-        assert owner_path("v(@m1[vth])", xvii=False) == ("m1",)
-        assert owner_path("i(@m1[id])", xvii=False) == ("m1",)
-        assert owner_path("Id(M1)", xvii=False) == ("m1",)
-        assert owner_path("Ic(Q2)", xvii=False) == ("q2",)
-        assert owner_path("I(R1)", xvii=False) == ("r1",)
-        assert owner_path("V(out)", xvii=False) is None
+        assert owner_path("@m1[gm]", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("v(@m1[vth])", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("i(@m1[id])", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("Id(M1)", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("Ic(Q2)", xvii=False, schematic=False) == ("q2",)
+        assert owner_path("I(R1)", xvii=False, schematic=False) == ("r1",)
+        assert owner_path("V(out)", xvii=False, schematic=False) is None
 
     def test_filter_narrows_to_device(self):
         op = {
@@ -1858,7 +1858,7 @@ class TestTraceDeviceFilter:
             "currents": {"Id(M1)": 1e-3, "I(R1)": 2e-3},
             "device_op_points": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
         }
-        assert _filter_operating_point(op, "M1", xvii=False) is True
+        assert _filter_operating_point(op, "M1", xvii=False, schematic=False) is True
         assert op["currents"] == {"Id(M1)": 1e-3}
         assert op["device_op_points"] == {"@m1[gm]": 1e-3}
         # Node voltages are not device-scoped -> dropped from the focused view.
@@ -1866,12 +1866,12 @@ class TestTraceDeviceFilter:
 
     def test_filter_matches_subcircuit_path_suffix(self):
         op = {"voltages": {}, "currents": {}, "device_op_points": {"@m.x1.mn[gm]": 5.0}}
-        assert _filter_operating_point(op, "mn", xvii=False) is True
+        assert _filter_operating_point(op, "mn", xvii=False, schematic=False) is True
         assert op["device_op_points"] == {"@m.x1.mn[gm]": 5.0}
 
     def test_filter_no_match_reports_false(self):
         op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_op_points": {}}
-        assert _filter_operating_point(op, "Q9", xvii=False) is False
+        assert _filter_operating_point(op, "Q9", xvii=False, schematic=False) is False
 
 
 @pytest.mark.asyncio

@@ -392,12 +392,13 @@ class FakeXVII(FakeSim):
     spice_exe: typing.ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
 
 
-@pytest.mark.parametrize("codec", ["utf-8", "utf-8-sig", "utf-16"])
+@pytest.mark.parametrize("codec", ["utf-8", "utf-8-sig"])
 async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xvii(
     config, work_dir, codec
 ):
-    """LTspice XVII decodes a deck as cp1252, so a µ in any other encoding
-    reaches it as other characters and the value runs without its scale."""
+    """LTspice XVII decodes a UTF-8 deck as cp1252, so a µ reaches it as two
+    other characters and the value runs without its scale (deck/micro_utf8,
+    deck/micro_utf8_bom)."""
     state = SessionState.create(config, available={"ltspice": FakeXVII})
     deck = work_dir / "rc.net"
     deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23µ\n.end\n".encode(codec))
@@ -412,7 +413,28 @@ async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xv
     assert finding["evidence"]["suffix"] == "U+00B5"
     assert finding["evidence"]["reader"] == FakeXVII.spice_exe[0]
     assert finding["evidence"]["card"] == "C1 out 0 23µ"
+    (read,) = finding["evidence"]["read_otherwise"]
+    assert (read["build"], read["build_reads"], read["build_number"]) == (
+        "LTspice XVII",
+        "23Âµ",
+        23.0,
+    )
     assert data["outcome"] == "partial"
+
+
+async def test_a_utf16_micro_sign_read_by_xvii_stays_an_observation(config, work_dir):
+    """LTspice XVII reads a µ stored as UTF-16, with a mark or without, as
+    micro (deck/micro_utf16le_bom, deck/micro_utf16le): nothing is misread."""
+    state = SessionState.create(config, available={"ltspice": FakeXVII})
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23µ\n.end\n".encode("utf-16"))
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "observation"
+    assert "Every recorded LTspice build reads them as micro" in finding["evidence"]["reason"]
+    assert data["outcome"] == "complete"
 
 
 async def test_a_cp1252_micro_sign_read_by_xvii_stays_an_observation(config, work_dir):

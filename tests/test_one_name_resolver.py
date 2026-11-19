@@ -438,10 +438,10 @@ def test_a_section_sign_device_names_neither_part_where_both_names_are_there(
     from ltspice_mcp.lib.metrics import filter_operating_point
 
     alone = {"currents": {"I(Load)": 1.0, "I(R1)": 2.0}}
-    assert filter_operating_point(alone, "R§Load", xvii=False)
+    assert filter_operating_point(alone, "R§Load", xvii=False, schematic=False)
     assert alone["currents"] == {"I(Load)": 1.0}
     both = {"currents": {"I(Load)": 1.0, "I(RLoad)": 3.0}}
-    assert not filter_operating_point(both, "R§Load", xvii=False)
+    assert not filter_operating_point(both, "R§Load", xvii=False, schematic=False)
 
 
 def test_a_hierarchy_cursor_does_not_change_when_a_run_names_the_build():

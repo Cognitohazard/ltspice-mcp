@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib.device_names import raw_name, trace_key
+from ltspice_mcp.lib.device_names import raw_name, trace_keys
 from tests import _ltspice_recorded as rec
 from tests.test_inspect_tools import _run
 
@@ -818,7 +818,9 @@ def test_a_name_spelled_for_a_build_reads_back_as_its_path(xvii):
     """What an address writes for a build is what that build's raw is read by."""
     spelled = raw_name(("Xa", "Xin"), "Mid", xvii=xvii)
     assert spelled == ("a:in:mid" if xvii else "xa:xin:mid")
-    assert trace_key(f"V({spelled})", xvii=xvii) == ("v", ("xa", "xin", "mid"))
+    assert trace_keys(f"V({spelled})", xvii=xvii, schematic=False) == (
+        ("v", ("xa", "xin", "mid")),
+    )
 
 
 async def test_a_named_build_spells_for_itself(state_no_sim, work_dir):

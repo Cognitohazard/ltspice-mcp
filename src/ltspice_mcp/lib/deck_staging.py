@@ -38,6 +38,15 @@ from ltspice_mcp.lib.spice_lex_ops import (
     fold_micro_suffix_cards,
 )
 from ltspice_mcp.lib.spice_lex_views import WAVEFILE
+from ltspice_mcp.lib.stored_values import (
+    CP1252_BUILD,
+    SHEET_UNREAD,
+    OtherReading,
+    SessionBuilds,
+    readings_of_cards,
+    readings_of_sheet,
+    summaries,
+)
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -166,6 +175,39 @@ def _micro_fold_observation(
     }
 
 
+def _read_otherwise_observations(
+    readings: Sequence[OtherReading], builds: SessionBuilds | None
+) -> list[dict[str, Any]]:
+    """The values of the run's source files that an LTspice build the session
+    runs reads as another number than the run uses (``stored_values``): one
+    observation per build and kind of reading, over every staged file. The run reads each value
+    as the server does, whatever the simulator, but the file opened in that
+    build is another circuit, and a number drawn or checked from it here (a
+    Monte Carlo nominal, a device's size) is not the one that build reads."""
+    return [
+        {
+            "code": summary["code"],
+            "kind": "provenance",
+            "detail": summary["detail"],
+            "evidence": {
+                key: value for key, value in summary.items() if key not in ("code", "detail")
+            },
+        }
+        for summary in summaries(readings, builds or {})
+    ]
+
+
+def _sheet_unread_observation(sheet: Path) -> dict[str, Any]:
+    """That a sheet run as the server's export could not be read, so how a
+    build reads its own values was not checked."""
+    return {
+        "code": "value_read_otherwise",  # stored_values.CODE
+        "kind": "provenance",
+        "detail": f"{sheet.name}: {SHEET_UNREAD}.",
+        "evidence": {"file": str(sheet), "not_checked": SHEET_UNREAD},
+    }
+
+
 def sha256_file(path: Path) -> str:
     """Return a file's SHA-256 digest."""
     digest = hashlib.sha256()
@@ -221,6 +263,7 @@ def stage_deck(
     simulator_roots: Sequence[Path] = (),
     compact_digests: Collection[str] = (),
     cp1252_reader: str | None = None,
+    stated_builds: SessionBuilds | None = None,
 ) -> StagedDeck:
     """Copy a primary deck, its include/lib closure and the data files it
     reads into ``staging_root``.
@@ -282,8 +325,13 @@ def stage_deck(
     had to be rewritten is written in its source's encoding, so the characters
     it did not rewrite keep their bytes. ``cp1252_reader`` names the target
     simulator when it decodes decks as cp1252 (``services.cp1252_ltspice``):
-    only then does the fold change what a value means to the simulator, and
-    only then is it reported, as a ``micro_sign_folded`` observation.
+    only then, and only for a file whose signs that build reads otherwise
+    (``stored_values``: UTF-8, not cp1252 or UTF-16), does the fold change what
+    a value means to the simulator, and only then is it reported, as a
+    ``micro_sign_folded`` observation. ``stated_builds`` are the LTspice
+    builds the session runs (``services.session_ltspice_builds``): a value of
+    a source that one of them reads as another number is reported as a
+    ``value_read_otherwise`` observation.
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
@@ -330,6 +378,8 @@ def stage_deck(
     processed_depths: dict[Path, int] = {}
     processing: set[Path] = set()
     observations: list[dict[str, Any]] = []
+    # The values of the staged files another build reads otherwise.
+    stated: list[OtherReading] = []
     # The data files read in place, each reported once.
     live_data: set[Path] = set()
     # The data references rewritten to an absolute path, for the LTspice note.
@@ -552,10 +602,28 @@ def stage_deck(
             # is spelled 'u', which every simulator in every encoding reads as
             # micro: a UTF-8 µ reaches LTspice XVII as the two cp1252
             # characters 'Âµ' and silently loses its scale.
+            # Read before the fold, which spells the signs the readings name.
+            # A sheet's export is the server's file, not one the caller stored:
+            # how a build reads its bytes says nothing of how it reads the sheet.
+            readings = readings_of_cards(parsed.read, encoding, file=resolved)
+            if exported and resolved == source:
+                # A sheet's export is the server's file, not one the caller
+                # stored: the sheet's own bytes are what a build reads.
+                of_sheet = readings_of_sheet(parsed.read, authored)
+                if of_sheet is None:
+                    observations.append(_sheet_unread_observation(authored))
+                else:
+                    stated.extend(of_sheet)
+            else:
+                stated.extend(readings)
             folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True
-                if cp1252_reader is not None:
+                # The fold changes what a value means only where the cp1252
+                # reader reads the file's sign otherwise (stored_values).
+                if cp1252_reader is not None and any(
+                    reading.build == CP1252_BUILD for reading in readings
+                ):
                     observations.append(_micro_fold_observation(resolved, folded, cp1252_reader))
             codec = rewrite_codec(encoding)
             staged_text = emit(parsed.cards) if changed else text
@@ -676,6 +744,9 @@ def stage_deck(
         return source_digests[resolved]
 
     staged_primary = snapshot_file(source, primary_destination, 0)
+    # Every staged file's readings, stated together: one observation per build
+    # and kind of reading, whatever the number of files and values.
+    observations.extend(_read_otherwise_observations(stated, stated_builds))
     primary_sha = next(
         entry.sha256 for entry in manifest if entry.path == source and entry.section is None
     )

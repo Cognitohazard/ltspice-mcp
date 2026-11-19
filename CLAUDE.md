@@ -81,7 +81,7 @@ All source is under `src/ltspice_mcp/`.
   - Schematics: `schematic_ops.py` (the `.asc` editor behind `edit_schematic`), `asc_document.py`, `sheet.py`, `symbol_file.py`, `symbol_library.py`, `symbol_geometry.py`, `geometry.py`, `connectivity.py` (LTspice's rules for which points of a sheet are one net), `nets.py` (a sheet's nets in a form that holds no tool's rules, which every reader of nets uses), `routing.py` (route rules), `sheet_findings.py` (the sheet rules that both `edit_schematic` and `verify_circuit` report), `component_value.py`, `plot_settings.py` (`.plt` files).
   - Rendering and comparison: `schematic_scene.py`, `schematic_renderer.py` (SVG), `raster.py` (PNG, with `resvg-py`, a dependency), `netlist_graph.py`, `netlist_diff.py`, `pin_legend.py`, `plot_html.py`, `plot_svg.py`.
   - Open LTspice windows (native Windows): `ltspice_bridge.py`, `ltspice_window.py`, `ltspice_frame.py`, `pe_menu.py`.
-  - Other: `guide.py` (the agent-facing guide), `simulator_docs.py`, `observability.py` (structured events on stderr), `pathutil.py` (`safe_path`), `filelock.py` (`circuit_file_lock`), `model_fields.py`.
+  - Other: `guide.py` (the agent-facing guide), `simulator_docs.py`, `observability.py` (structured events on stderr), `pathutil.py` (`safe_path`), `redirect.py` (the one spelling of a store folder, whether a path the server builds redirects elsewhere, and whether two paths are one place; no check compares the text of a resolved path), `filelock.py` (`circuit_file_lock`), `model_fields.py`.
 
 The agent-facing guide exists only once, as a core (`assets/guide/core.md`) and one file per section, listed in `guide.py:SECTION_ORDER`. Add guidance there, never under `skills/`.
 

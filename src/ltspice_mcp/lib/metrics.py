@@ -55,6 +55,8 @@ from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, declared_unit
 from ltspice_mcp.lib.device_names import (
+    AmbiguousName,
+    ambiguous_detail,
     current_device,
     device_names,
     device_query,
@@ -159,8 +161,10 @@ from ltspice_mcp.lib.signal_analysis import (
 )
 from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.lib.trace_names import (
+    ambiguous_candidates,
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
     is_input_noise,
+    names_sheet_parts,
     naming_note,
 )
 from ltspice_mcp.state import SessionState
@@ -706,20 +710,24 @@ def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool, schematic: bool) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched.
 
     Each name is read back to the device path it belongs to
     (``device_names.device_query``; ``xvii`` for a build that names devices as
-    XVII does), so ``device`` matches a device as the simulator spells it, a
-    top-level device (``m1``), a device in a subcircuit by its own name or
-    path (``mtail``, ``xin.mtail``, ``xa.xin.mtail``) whichever build or
+    XVII does, ``schematic`` for a run of a schematic), so ``device`` matches a
+    device as the simulator spells it, a top-level device (``m1``), a device in
+    a subcircuit by its own name or path (``mtail``, ``xin.mtail``,
+    ``xa.xin.mtail``, or as XVII writes it, ``in:tail``) whichever build or
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
     every = [name for bucket in OP_BUCKETS for name in op_data.get(bucket, {})]
-    names_device = device_query(device, xvii=xvii, among=every)
+    try:
+        names_device = device_query(device, xvii=xvii, schematic=schematic, among=every)
+    except AmbiguousName as exc:
+        raise ResultError(str(exc), show_hint=False) from None
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
@@ -1375,7 +1383,8 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    found = find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))
+    xvii, schematic = writes_xvii_names(raw), names_sheet_parts(raw.raw_params, raw.dialect)
+    found = find_trace(list(flat), recipe.expr, xvii=xvii, schematic=schematic)
     match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
@@ -1392,6 +1401,11 @@ async def _value_from_operating_point(
                 "warnings": op.get("warnings", []),
             }
     if match is None:
+        candidates = ambiguous_candidates(
+            list(flat), recipe.expr, xvii=xvii, schematic=schematic
+        )
+        if candidates:
+            raise ResultError(ambiguous_detail(recipe.expr, candidates), show_hint=False)
         present = ", ".join(sorted(flat)[:8])
         if len(flat) > 8:
             present += f", ... ({len(flat)} total)"
@@ -2799,16 +2813,17 @@ async def operating_point(
     # misleading empty result when nothing matches. ``available_devs`` is
     # gathered before the filter, which empties the buckets in place.
     xvii = writes_xvii_names(raw)
+    schematic = names_sheet_parts(raw.raw_params, raw.dialect)
     if recipe.device is not None:
         available_devs = sorted(
             {
                 path_text(path)
                 for bucket in ("currents", "device_op_points")
                 for name in op_data.get(bucket, {})
-                if (path := owner_path(name, xvii=xvii)) is not None
+                if (path := owner_path(name, xvii=xvii, schematic=schematic)) is not None
             }
         )
-        if not filter_operating_point(op_data, recipe.device, xvii=xvii):
+        if not filter_operating_point(op_data, recipe.device, xvii=xvii, schematic=schematic):
             dev_list = ", ".join(available_devs) if available_devs else "none found"
             raise ResultError(
                 f"No operating-point params or terminal currents for device "
@@ -2832,7 +2847,9 @@ async def operating_point(
     # and the raw names its writer. api.device_op_points has the log alone
     # and reads the build its first line names (device_names.table_naming);
     # the two differ only for a raw and a log of different runs.
-    if names := device_names(table, op_data.get("currents", {}), xvii=xvii):
+    if names := device_names(
+        table, op_data.get("currents", {}), xvii=xvii, schematic=schematic
+    ):
         op_data["device_names"] = names
 
     # Unit per trace, only where the simulator declared the type.

@@ -217,6 +217,7 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "errors.py:UnreadableCardError.__init__": "the refusal keeps the tokenizer error's fields",
     "lib/asc_document.py:Text.format": "not a deck card: a schematic TEXT line",
     "lib/guide.py:headings": "not a deck card: a guide section's Markdown body",
+    "lib/stored_values.py:_sheet_texts": "not a deck card: a parsed sheet's TEXT directive",
     "lib/component_value.py:_apply_b_source": (
         "moves to a view in a follow-up: an element card's fields (a B source's value)"
     ),

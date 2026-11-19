@@ -67,7 +67,13 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
 )
-from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
+from ltspice_mcp.lib.device_names import (
+    DevicePath,
+    path_text,
+    spelled_name,
+    split_path,
+    trace_keys,  # noqa: TID251 - a deck's own .save names and cards, one reading each
+)
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_conditions import said_lines
@@ -717,6 +723,7 @@ NOT_READ_BY_JOB: Mapping[str, str] = {
     # Where the deck came from; the staged copy is what ran.
     "circuit_id_derived": "how the circuit was named, not what its run wrote",
     "micro_sign_folded": "how the staged deck spells a suffix, not what its run wrote",
+    "value_read_otherwise": "how another build reads the source, not what its run wrote",
     "live_include": "which input the run read live, not what its run wrote",
     "live_data_file": "which input the run read live, not what its run wrote",
     "data_path_unrecorded": "how the staged deck names a data file, not what its run wrote",
@@ -738,7 +745,7 @@ def saves_not_stored(
     when every entry is held.
 
     ``traces`` is the raw's first plot (``raw_parser.first_plot_traces``),
-    each read as ``naming`` writes a raw (``device_names.trace_key``). An
+    each read as ``naming`` writes a raw (``device_names.trace_keys``). An
     entry is not stored where the reader is known to store nothing for it (an
     ngspice ``.save`` of a colon path, another LTspice build's spelling, both
     measured or recorded), or where it is a node voltage whose trace the raw
@@ -746,7 +753,12 @@ def saves_not_stored(
     own spelling (ngspice writes ``v1#branch`` for ``i(v1)``), an entry whose
     reading is not established, and a pattern (``V(x1:*)``) are not checked:
     which name the run would store is not established, so none is guessed."""
-    stored = {trace_key(name, xvii=naming.xvii) for name, _ in traces}
+    # Read as a deck's run names them, each instance its card, as the .save
+    # entries are the deck's own names: a sheet's export is a deck too, whose
+    # card XMB1 XVII writes mb1 (export/sheet_part_names).
+    stored = {
+        key for name, _ in traces for key in trace_keys(name, xvii=naming.xvii, schematic=False)
+    }
     missing: list[dict[str, str]] = []
     unchecked: list[dict[str, str]] = []
     if naming.family not in ("ltspice", "ngspice"):
@@ -852,7 +864,7 @@ def subcircuit_nodes_not_saved(
     net ``<instance path>/<net>``) and no trace of ``traces`` (the raw's first
     plot, as ``raw_parser.first_plot_traces`` reads it) is a node voltage
     inside any instance it calls, its path read as ``naming`` writes a raw
-    (``device_names.trace_key``). A deck whose subcircuits have only ports
+    (``device_names.trace_keys``). A deck whose subcircuits have only ports
     (``raw/op_subckt``) is never said to miss one.
 
     The causes are the recorded ones: what the deck's ``.save`` cards name
@@ -874,7 +886,9 @@ def subcircuit_nodes_not_saved(
     for name, declared in traces:
         if not is_node_voltage(name, declared or None):
             continue
-        _, path = trace_key(name, xvii=naming.xvii)
+        # As a deck's run names it, each instance its card: ``calls`` are the
+        # deck's own cards (see saves_not_stored).
+        ((_, path),) = trace_keys(name, xvii=naming.xvii, schematic=False)
         if len(path) > 1 and path[:-1] in instances:
             return None
     scope, net = inner[0]

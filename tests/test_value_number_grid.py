@@ -26,7 +26,13 @@ server's dispatch and the Python API. A route either takes LTspice's number
 round it by less than a part in ten million) or declines the value; a route
 that takes another number, or takes one where LTspice refused the deck, is a
 difference, declared on its cell (``differs``) and counted in
-``KNOWN_DIFFERENCES``. The same forms are read live by ngspice in each
+``KNOWN_DIFFERENCES``. A build that reads other text than the server from
+the stored file (a micro sign stored as UTF-8, which LTspice XVII decodes as
+cp1252) is declared on its cell (``decoded``, with the text it reads): that
+difference is the decoding's, so no route that reads the server's text is
+held to the build's number, and every route that starts from the stored file
+states it, with that number (``stored_values``); a route states nothing for a
+build no cell declares so. The same forms are read live by ngspice in each
 compatibility mode and compared with the server's reading for ngspice.
 """
 
@@ -42,6 +48,7 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import LTSpiceMCPError
 from ltspice_mcp.lib import montecarlo
 from ltspice_mcp.lib.encoding import read_spice_text, read_spice_text_with_encoding, rewrite_codec
@@ -58,10 +65,12 @@ from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.metrics import parse_freq, parse_time
 from ltspice_mcp.lib.netlist_graph import values_equal
 from ltspice_mcp.lib.ngspice_mode import run_batch
+from ltspice_mcp.lib.services import session_ltspice_builds
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 from ltspice_mcp.lib.step_values import step_number
+from ltspice_mcp.lib.stored_values import summaries
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests._recorded_grids import Cell, grid
@@ -73,7 +82,7 @@ GRID = grid("value-number")
 #: How many routes answer otherwise than a recorded cell, per build, each
 #: declared on its cell (``differs``, with the route and the reason). A count
 #: may only fall: a fix lowers it here in the same change.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 3, "ltspice17": 46}
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 3, "ltspice17": 4}
 
 
 def _recorded(build: str, case_id: str) -> bool:
@@ -353,30 +362,47 @@ def _same(taken: float | None, ltspice: float | None) -> bool:
     return math.isclose(taken, ltspice, rel_tol=SAME_VALUE_RTOL)
 
 
-async def _hierarchy_values(state: SessionState, deck: Path) -> dict[str, dict[str, float | None]]:
+async def _hierarchy_values(
+    state: SessionState, deck: Path
+) -> tuple[dict[str, dict[str, float | None]], dict[str, list[dict[str, Any]]]]:
     """Each probe node's value as ``inspect(kind="hierarchy")`` resolves it,
-    through the server's dispatch and through the Python API."""
+    through the server's dispatch and through the Python API, and what each
+    route states of a value a recorded build reads otherwise
+    (``stored_values``). These are the routes that start from the stored file."""
     query = {"kind": "hierarchy", "path": str(deck), "simulator": "ltspice"}
     reply = await dispatched(state, "inspect", queries=[query])
     api_reply = await asyncio.to_thread(lambda: SyncApi(state).inspect(queries=[query]))
     found: dict[str, dict[str, float | None]] = {}
+    stated: dict[str, list[dict[str, Any]]] = {}
     for route, data in (("inspect", reply), ("api inspect", api_reply)):
         (result,) = data["results"]
         assert result["ok"], result
+        stated[route] = result["data"].get("values_read_otherwise", [])
         for row in result["data"]["instances"]:
             if row["instance"][0][:1].upper() in ("R", "V"):
                 node = row["nodes"][0]["name"].lower()
                 found.setdefault(route, {})[node] = row["value"].get("value")
     in_process = load_hierarchy(str(deck), None, SemanticProfile("ltspice"))
+    stated["load_hierarchy"] = summaries(in_process.readings, session_ltspice_builds(state))
     for row in in_process.instances:
         if row.reference[:1].upper() in ("R", "V"):
             found.setdefault("load_hierarchy", {})[row.nodes[0].name.lower()] = row.value.value
-    return found
+    return found, stated
+
+
+#: The name a statement gives each recorded build.
+_BUILD_NAMES = {"ltspice26": "LTspice 26", "ltspice17": "LTspice XVII"}
+
+
+def _decoded(cell: Cell, build: str) -> dict[str, Any] | None:
+    """The cell's ``decoded`` entry for ``build``: that build reads other text
+    than the server from the stored file."""
+    return next((entry for entry in cell.extra.get("decoded", ()) if entry["build"] == build), None)
 
 
 @pytest.mark.parametrize(("build", "case_id"), _runs())
 async def test_every_recorded_cell_reads_as_ltspice_read_it_on_every_route(
-    build: str, case_id: str, tmp_path: Path, state_no_sim: SessionState, work_dir: Path
+    build: str, case_id: str, tmp_path: Path, config: ServerConfig, work_dir: Path
 ):
     """The declared number is the number LTspice took, and every route takes
     it or declines; a route that takes another is declared on its cell."""
@@ -389,7 +415,14 @@ async def test_every_recorded_cell_reads_as_ltspice_read_it_on_every_route(
     )
     deck = work_dir / _source_of(case_id).name
     deck.write_bytes(_source_of(case_id).read_bytes())
-    hierarchy = await _hierarchy_values(state_no_sim, deck)
+    # A session that runs both recorded builds, so each build's reading of the
+    # stored file is stated (a reply states only the builds a session runs).
+    session = SessionState.create(
+        config,
+        available={"ltspice": rec.launcher("ltspice17")},
+        named={"ltspice:26": rec.launcher("ltspice26")},
+    )
+    hierarchy, stated = await _hierarchy_values(session, deck)
     read = _values_by_node(case_id, as_written=False)
     found: set[tuple[str, str]] = set()
     declared: set[tuple[str, str]] = set()
@@ -408,6 +441,31 @@ async def test_every_recorded_cell_reads_as_ltspice_read_it_on_every_route(
             assert math.isclose(ltspice, declared_number, rel_tol=SAME_VALUE_RTOL), (
                 f"{cell.id}: LTspice took {ltspice}, the cell declares {declared_number}"
             )
+        decoded = _decoded(cell, build)
+        # What each route that starts from the stored file states of this value.
+        on_build = {
+            route: [
+                example
+                for summary in said
+                if summary["build"] == _BUILD_NAMES[build]
+                for entry in summary["by_file"]
+                for example in entry["examples"]
+                if example["value"] == cell.item
+            ]
+            for route, said in stated.items()
+        }
+        if decoded is not None:
+            # The build reads other text from the file: no route that reads
+            # the server's text is held to its number, and every route that
+            # starts from the file states the number it takes.
+            assert ltspice is not None, f"{cell.id}: {build} took no number to state"
+            for route, said in on_build.items():
+                assert len(said) == 1, (cell.id, route, stated[route])
+                (statement,) = said
+                assert statement["build_reads"] == decoded["reads"], (cell.id, route)
+                assert math.isclose(statement["build_number"], ltspice, rel_tol=SAME_VALUE_RTOL)
+            continue
+        assert not any(on_build.values()), (cell.id, build, on_build)
         answers = {route: _taken(reader, text) for route, reader in TEXT_ROUTES.items()}
         for route, values in hierarchy.items():
             answers[route] = values[node]

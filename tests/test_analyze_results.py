@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import threading
-import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -17,12 +16,10 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import (
-    AnalysisDeadlineExceeded,
     InvalidCursorError,
     compact_validation_error,
 )
 from ltspice_mcp.lib import (
-    atomic_write,
     cursor_codec,
     experiment_store,
     metrics,
@@ -58,6 +55,7 @@ from tests.conftest import (
     stage_recorded_fixture,
     staged_raw_result,
 )
+from tests.test_analyze_results_call_bound import _slow_csv, _slow_read
 from tests.test_measurement_aggregation import TCROSS_AT as SWEEP_TCROSS
 from tests.test_measurement_aggregation import VFINAL as SWEEP_VFINAL
 
@@ -623,33 +621,19 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("slow", [False, True], ids=["read", "slow_read"])
 async def test_a_slow_csv_fails_its_recipe_and_removes_its_temp(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    slow: bool,
 ):
     """A recipe that runs out of the call's bound fails with
     ``analysis_deadline``, the recipe after it fails alone, and no temp is
     left behind (``test_analyze_results_call_bound.py`` pins the bound)."""
-    from ltspice_mcp.tools import analysis
-
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 1.0
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 0.0)
-
-    def slow_writer(*args):
-        out_path = args[8]
-        should_abort = args[9]
-        with atomic_write(out_path) as handle:
-            handle.write("partial\n")
-            while not should_abort():
-                # timing: a fake writer spinning until its abort callback fires
-                time.sleep(0.002)
-            # What the real writer raises when its abort callback fires: the
-            # deadline is carried by the exception type, not its wording.
-            raise AnalysisDeadlineExceeded("CSV artifact exceeded its analysis item deadline")
-
-    monkeypatch.setattr(analysis, "build_waveform_csv", slow_writer)
+    _slow_csv(monkeypatch)
+    _slow_read(monkeypatch, slow)
     data = await _analyze(
         state_no_sim,
         raw,
@@ -663,7 +647,11 @@ async def test_a_slow_csv_fails_its_recipe_and_removes_its_temp(
             {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"},
         ],
     )
-    assert {failure["code"] for failure in data["failures"]} == {"analysis_deadline"}
+    failures = data.get("failures", [])
+    assert {(failure["code"], failure["where"]) for failure in failures} == {
+        ("analysis_deadline", "dut:0"),
+        ("analysis_deadline", "v"),
+    }, failures
     assert not data["results"]["v"].get("values")
     assert "next" not in data
     assert not list((work_dir / ".ltspice-mcp" / "results").rglob("*.pending"))

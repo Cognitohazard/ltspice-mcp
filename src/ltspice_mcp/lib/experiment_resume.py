@@ -62,6 +62,7 @@ from ltspice_mcp.lib.recovery_records import (
     ProcessIdentity,
     RecoveryError,
 )
+from ltspice_mcp.lib.redirect import same_location
 from ltspice_mcp.lib.simulator import (
     dialect_for_simulator_name,
     is_ngspice,
@@ -277,7 +278,9 @@ def _verify_execution(job: ExperimentJob, store: Store, simulator: type) -> None
     for case in job.cases:
         if case.recovery is None:
             raise RecoveryError("recovery_record_invalid", "Case has no frozen input snapshot")
-        if case.recovery.inputs.lineage_root != root:
+        # By location, not spelling: the recorded root was spelled when the
+        # case was frozen, possibly by another process (``same_location``).
+        if not same_location(case.recovery.inputs.lineage_root, root):
             raise RecoveryError("recovery_record_invalid", "Case belongs to a different lineage")
         verify_case_inputs(
             case.recovery.inputs,
