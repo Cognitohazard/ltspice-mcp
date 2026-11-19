@@ -1,0 +1,31 @@
+* the number grid: each source's value is the number LTspice read, as the voltage of its node
+V1 n01 0 {1}
+V2 n02 0 {1t}
+V3 n03 0 {1T}
+V4 n04 0 {1g}
+V5 n05 0 {1G}
+V6 n06 0 {1meg}
+V7 n07 0 {1MEG}
+V8 n08 0 {1Meg}
+V9 n09 0 {1k}
+V10 n10 0 {1K}
+V11 n11 0 {1m}
+V12 n12 0 {1M}
+V13 n13 0 {1u}
+V14 n14 0 {1U}
+V15 n15 0 {1n}
+V16 n16 0 {1N}
+V17 n17 0 {1p}
+V18 n18 0 {1P}
+V19 n19 0 {1f}
+V20 n20 0 {1F}
+V21 n21 0 {1.5}
+V22 n22 0 {1.}
+V23 n23 0 {.5}
+V24 n24 0 {1e3}
+V25 n25 0 {1E3}
+V26 n26 0 {1e-3}
+V27 n27 0 {+1}
+V28 n28 0 {-1}
+.op
+.end
