@@ -330,6 +330,50 @@ async def test_symbol_pins_per_rotation(asc_state: SessionState):
     assert data["pins_by_rotation"]["R0"] != data["pins_by_rotation"]["R90"]
 
 
+async def test_symbol_at_one_rotation_holds_that_rotation_alone(asc_state: SessionState):
+    """``rotation`` narrows the geometry to the placement the caller has; the
+    pins and box it returns are the ones the whole reply gives that rotation."""
+    (whole,) = await _run(asc_state, [{"kind": "symbol", "name": "nmos"}])
+    for rot in insp.ROTATIONS:
+        (one,) = await _run(asc_state, [{"kind": "symbol", "name": "nmos", "rotation": rot}])
+        assert one["ok"] is True, one
+        data = one["data"]
+        assert data["pins_by_rotation"] == {rot: whole["data"]["pins_by_rotation"][rot]}
+        assert data["bbox_by_rotation"] == {rot: whole["data"]["bbox_by_rotation"][rot]}
+        # Everything that does not depend on the rotation is the same.
+        rest = {k: v for k, v in data.items() if not k.endswith("_by_rotation")}
+        assert rest == {k: v for k, v in whole["data"].items() if not k.endswith("_by_rotation")}
+
+
+def test_symbol_rotation_takes_exactly_the_rotations_table():
+    """The names ``rotation`` accepts are ``ROTATIONS`` itself, not a second
+    list beside it: every one validates, the published enum is that table, and
+    a name outside it is refused with the eight named."""
+    for rot in insp.ROTATIONS:
+        query = insp._validate_query({"kind": "symbol", "name": "res", "rotation": rot})
+        assert isinstance(query, insp.SymbolQuery) and query.rotation == rot
+    schema = insp.SymbolQuery.model_json_schema()["properties"]["rotation"]
+    enums = [branch["enum"] for branch in schema.get("anyOf", [schema]) if "enum" in branch]
+    assert enums == [list(insp.ROTATIONS)]
+    for bad in ("r0", "R45", "M360", "R0 "):
+        with pytest.raises(ValueError, match="rotation") as caught:
+            insp._validate_query({"kind": "symbol", "name": "res", "rotation": bad})
+        assert all(rot in str(caught.value) for rot in insp.ROTATIONS)
+
+
+async def test_an_unknown_rotation_fails_only_its_item(asc_state: SessionState):
+    bad, good = await _run(
+        asc_state,
+        [
+            {"kind": "symbol", "name": "res", "rotation": "R45"},
+            {"kind": "symbol", "name": "res", "rotation": "R90"},
+        ],
+    )
+    assert bad["ok"] is False and bad["error"]["code"] == "invalid_query"
+    assert all(rot in bad["error"]["message"] for rot in insp.ROTATIONS)
+    assert good["ok"] is True and set(good["data"]["pins_by_rotation"]) == {"R90"}
+
+
 async def test_symbol_not_found(asc_state: SessionState):
     (res,) = await _run(asc_state, [{"kind": "symbol", "name": "definitely_not_a_symbol"}])
     assert res["ok"] is False
