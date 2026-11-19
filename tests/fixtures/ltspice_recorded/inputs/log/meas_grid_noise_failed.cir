@@ -1,0 +1,20 @@
+* every form failing whole: a noise analysis
+.param r=1k
+V1 in 0 0 AC 1
+R1 in out {r}
+C1 out 0 159.154943n
+.noise V(out) V1 dec 10 10 100k
+.meas noise max_f MAX V(onoise) FROM 200k TO 800k
+.meas noise min_f MIN V(onoise) FROM 200k TO 800k
+.meas noise pp_f PP V(onoise) FROM 200k TO 800k
+.meas noise avg_f AVG V(onoise) FROM 200k TO 800k
+.meas noise rms_f RMS V(onoise) FROM 200k TO 800k
+.meas noise integ_f INTEG V(onoise) FROM 200k TO 800k
+.meas noise find_at_f FIND V(onoise) AT 1Meg
+.meas noise find_when_f FIND V(inoise) WHEN V(onoise)=1
+.meas noise when_f WHEN V(onoise)=1
+.meas noise deriv_at_f DERIV V(onoise) AT 1Meg
+.meas noise deriv_when_f DERIV V(onoise) WHEN V(onoise)=1
+.meas noise trig_targ_f TRIG V(onoise) VAL=3n FALL=1 TARG V(onoise) VAL=1 FALL=1
+.meas noise param_f PARAM when_f*2
+.end

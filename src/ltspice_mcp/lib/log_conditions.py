@@ -842,6 +842,11 @@ def said_text(condition: Mapping[str, Any]) -> str:
     return str(condition.get("severity_text") or condition["first_text"])
 
 
+def diagnostic_codes() -> frozenset[str]:
+    """Every code a diagnostic can carry: each rule's, and :data:`UNCLASSIFIED`."""
+    return frozenset({rule.code for rule in _RULES if rule.code} | {UNCLASSIFIED})
+
+
 def reply_fields(found: Mapping[str, Any]) -> dict[str, Any]:
     """A :class:`RunDiagnostics` as the fields a run row or a summary carries:
     ``diagnostics`` and ``diagnostics_coverage``, each only when it says

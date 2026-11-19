@@ -1,0 +1,8 @@
+* DERIV WHEN in a transfer function: a deck of its own, since a build may refuse the form there
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.tf V(out) V1
+.meas tf deriv_when_v DERIV transfer_function WHEN transfer_function=0.8
+.meas tf deriv_when_f DERIV transfer_function WHEN transfer_function=99
+.end

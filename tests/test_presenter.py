@@ -28,10 +28,13 @@ from ltspice_mcp.errors import InvalidCursorError
 from ltspice_mcp.lib.presenter import (
     ListCut,
     Presented,
+    Record,
     cuttable_lists,
     open_page,
+    open_record,
     present,
     present_page,
+    present_record_page,
     resolve_pointer,
 )
 from ltspice_mcp.lib.reply_cuts import schema_lists
@@ -324,6 +327,92 @@ def test_every_page_in_order_rebuilds_each_list(made_up, tmp_path):
         assert read == resolve_pointer(answer, pointer), (name, pointer)
 
 
+def test_every_page_of_a_record_rebuilds_its_list(made_up, tmp_path):
+    """The second kind of source: a list the server keeps in a record. Its
+    cut stores nothing, its cursor names the record and an offset, and reading
+    every page from the record, in order, rebuilds the list."""
+    name, schema, answer = made_up
+    store = _store(tmp_path)
+    target = estimate_tokens(answer, as_sent=False) // 3
+    records = {
+        pointer: Record("made_up", f"record-{index}")
+        for index, (pointer, _) in enumerate(cuttable_lists(answer, schema))
+    }
+
+    shown = present(
+        answer,
+        schema,
+        target=target,
+        tool="tool",
+        snapshot={},
+        store=store,
+        ttl_hours=1.0,
+        records=records,
+    )
+
+    assert shown.stored is None
+    assert "stored_answer" not in shown.reply
+    assert not list(store.results_dir.glob("*.json")), name
+    for pointer, entry in shown.cut.items():
+        record = records[pointer]
+        read = list(resolve_pointer(shown.reply, pointer, default=[]))
+        following: str | None = entry.next
+        pages = 0
+        while following is not None:
+            key, offset = open_record(following, kind=record.kind)
+            assert (key, offset) == (record.key, len(read))
+            page = present_record_page(answer, pointer, offset, record, target=target)
+            more = page.cut[pointer]
+            assert more.offset == offset
+            assert more.total == len(resolve_pointer(answer, pointer))
+            assert more.returned >= 1
+            read.extend(resolve_pointer(page.reply, pointer)[: more.returned])
+            following = more.next
+            pages += 1
+            assert pages <= len(resolve_pointer(answer, pointer))
+        assert read == resolve_pointer(answer, pointer), (name, pointer)
+
+
+def test_a_record_cursor_is_not_a_stored_answers(tmp_path):
+    record_page_cursor = (
+        present(
+            _big(),
+            _SCHEMA,
+            target=400,
+            tool="tool",
+            snapshot={},
+            store=_store(tmp_path),
+            ttl_hours=1.0,
+            records={"/rows": Record("rows", "r1")},
+        )
+        .cut["/rows"]
+        .next
+    )
+    assert record_page_cursor is not None
+    with pytest.raises(InvalidCursorError):
+        open_page(record_page_cursor, _SCHEMA, tool="tool", store=_store(tmp_path), gone="")
+    with pytest.raises(InvalidCursorError):
+        open_record(record_page_cursor, kind="another")
+
+
+def test_a_reply_over_its_target_says_so_once(tmp_path):
+    said: list[tuple[int, int]] = []
+
+    shown = present(
+        {"notes": [f"note {index} " + "x" * 40 for index in range(50)]},
+        _SCHEMA,
+        target=100,
+        tool="tool",
+        snapshot={},
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+        over=lambda reply, size, target: said.append((size, target)),
+    )
+
+    assert not shown.met
+    assert said == [(shown.size, 100)]
+
+
 # ---------------------------------------------------------------------------
 # The stored answer and its cursor
 # ---------------------------------------------------------------------------
@@ -546,3 +635,45 @@ def test_a_snapshot_function_is_read_only_when_the_answer_is_stored(tmp_path):
     )
     assert read == [1]
     assert cut.stored is not None and cut.stored.snapshot == {"sha256": "f" * 64}
+
+
+def test_a_fit_is_found_when_a_note_on_the_entries_left_out_shrinks_as_more_are_kept(tmp_path):
+    """An annotation can say more the fewer entries a reply keeps (a note on
+    each entry left out), so the reply's size is not monotone in the count:
+    keeping one entry can be over the target while keeping several fits."""
+    rows = [f"row {index:03d} " + "y" * 40 for index in range(40)]
+
+    def note_on_the_rest(reply, cut, _stored, _paged):
+        # A note per entry left out among the first twelve: a reply that
+        # keeps ten says two, and one that keeps twelve says none.
+        entry = cut.get("/rows")
+        if entry is not None:
+            reply["left_out"] = ["x" * 400] * max(0, 12 - entry.returned)
+
+    record = {"/rows": Record("rows", "r1")}
+    plain = present(
+        {"rows": rows},
+        _SCHEMA,
+        target=estimate_tokens({"rows": rows[:15]}, as_sent=False) + 80,
+        tool="tool",
+        snapshot={},
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+        records=record,
+    )
+    assert plain.met and 12 <= plain.cut["/rows"].returned < 20, "the premise"
+    shown = present(
+        {"rows": rows},
+        _SCHEMA,
+        target=plain.target,
+        tool="tool",
+        snapshot={},
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+        records=record,
+        annotate=note_on_the_rest,
+        # The note is declared apart, with the bound it reserves.
+        apart={"left_out": estimate_tokens({"left_out": ["x" * 400] * 11})},
+    )
+    assert shown.met, shown.size
+    assert shown.cut["/rows"].returned > 1

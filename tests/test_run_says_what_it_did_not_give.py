@@ -145,6 +145,13 @@ async def test_a_run_row_names_the_measurements_ltspice_printed_failed(
         for row in rows:
             assert _measured(row) == {"failed_measurements": ["never", "depends"]}, route
     for route, data in (await _every_receipt(state_with_sim, receipt)).items():
+        if route == "jobs wait":
+            # The route is a standing note: this session's first receipt sent
+            # it in full, so a wait names it by code and the call that repeats
+            # it; status, and the Python API, send it in full.
+            assert "measurements recipe" in data["hint"], (route, data["hint"])
+            assert 'jobs(action="status"' in data["hint"], (route, data["hint"])
+            continue
         assert _ROUTE in data["hint"], (route, data["hint"])
         assert "api.analyze_results" in data["hint"], route
 
@@ -175,7 +182,9 @@ async def test_a_run_with_no_failed_measurement_says_nothing_of_them(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """``log/meas_when_threshold_tran`` on LTspice 26 prints a value for every
-    requested ``.meas``, so the run rows and the hint say nothing of them."""
+    requested ``.meas``, so the run rows and the hint name no failure. The
+    hint names the recipe that reads the deck's ``.meas`` values, once per
+    session."""
     deck, raw, log = _recorded_run(
         "ltspice26", "log/meas_when_threshold_tran", "raw/tran_uncompressed", work_dir
     )
@@ -183,7 +192,9 @@ async def test_a_run_with_no_failed_measurement_says_nothing_of_them(
     receipt = await _run(state_with_sim, deck, "meas-clean")
     for row in receipt["runs"]["items"]:
         assert _measured(row) == {}
-    assert _ROUTE not in receipt["hint"]
+    assert "names a .meas that gave no value" not in receipt["hint"]
+    assert "The deck has .meas cards" in receipt["hint"]
+    assert _ROUTE in receipt["hint"]
 
 
 def test_a_record_written_before_measurements_were_kept_says_they_were_not_read(
@@ -823,3 +834,30 @@ async def test_a_run_on_a_simulator_whose_measures_are_not_read_says_so(
         assert _measured(row) == {"measurements_coverage": "simulator_unsupported"}
     assert _ROUTE not in receipt["hint"]
     assert _every_run_failed(receipt.get("observations", [])) == []
+
+
+async def test_a_deck_with_meas_cards_names_the_recipe_unless_the_request_attached_it(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The first receipt of a session for a job whose deck has ``.meas`` cards
+    names the ``measurements`` recipe; a wait after it names it by a shorter
+    sentence; a request that attached the recipe is not sent to it."""
+    deck, raw, log = _recorded_run(
+        "ltspice26", "log/meas_when_threshold_tran", "raw/tran_uncompressed", work_dir
+    )
+    replaying_simulator(monkeypatch, raw, log)
+    receipt = await _run(state_with_sim, deck, "meas-cards")
+    assert "The deck has .meas cards" in receipt["hint"]
+    waited = await dispatched(
+        state_with_sim, "jobs", action="wait", job_id=receipt["job_id"], timeout_s=0
+    )
+    assert "The deck has .meas cards" not in waited["hint"]
+    assert "measurements recipe" in waited["hint"]
+
+    attached = await _run(
+        state_with_sim,
+        deck,
+        "meas-cards-attached",
+        analyze={"recipes": [{"key": "m", "metric": "measurements"}]},
+    )
+    assert "The deck has .meas cards" not in attached["hint"]

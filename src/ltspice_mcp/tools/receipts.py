@@ -17,15 +17,13 @@ import copy
 import functools
 import json
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
-
-from mcp import types
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
+from ltspice_mcp.lib.continuation import call_to_continue
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
@@ -45,6 +43,7 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
+from ltspice_mcp.lib.presenter import ListCut, Record, record_cursor
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
     keep_plan,
@@ -53,12 +52,14 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
+from ltspice_mcp.lib.response_budget import estimate_tokens
 from ltspice_mcp.lib.result_observations import measurements_failed_in_every_run
 from ltspice_mcp.lib.sheet_results import places_results, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    CUT_SCHEMA,
     DIAGNOSTICS_COVERAGE_SCHEMA,
     ENVELOPE_ERROR_SCHEMA,
     FINDING_LIST_CUT,
@@ -66,15 +67,13 @@ from ltspice_mcp.tools._base import (
     OUTCOME_SCHEMA,
     RUN_DIAGNOSTICS_SCHEMA,
     CallOutcome,
-    ResponseBudget,
+    JobAnswerParts,
     failures_schema,
-    format_response,
     outcome_of,
     page_schema,
 )
 
-_RUN_PAGE_LIMIT = 50
-
+#: The most circuit groups one ``jobs(action="list")`` reply sends.
 JOBS_PAGE_LIMIT = 50
 
 _MANIFEST_SCHEMA: dict[str, Any] = {
@@ -99,16 +98,50 @@ _MANIFEST_SCHEMA: dict[str, Any] = {
     ],
 }
 
-OBSERVATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "code": {"type": "string"},
-        "kind": {"type": "string"},
-        "detail": {"type": "string"},
-        "evidence": {},
-    },
-    "required": ["code", "kind", "detail"],
+#: How a standing note already sent in full this session is sent again: by its
+#: code, with this count in place of its text (``lib/said_once.py``).
+SAID_BEFORE_SCHEMA: dict[str, Any] = {
+    "type": "integer",
+    "minimum": 1,
+    "description": (
+        "Present in place of the note's text when this session was already sent it "
+        "in full: how many replies carried it before. jobs(action='status') sends "
+        "every note in full."
+    ),
 }
+
+
+def said_before_or_whole(whole: dict[str, Any], *names: str) -> dict[str, Any]:
+    """An entry that is either ``whole``, with no ``said_before``, or a
+    standing note already sent in full: ``names`` (its identity) and
+    ``said_before``, and nothing else. Two branches, so a whole entry still
+    has to carry every field ``whole`` requires."""
+    short = {
+        "type": "object",
+        "properties": {
+            **{name: whole["properties"][name] for name in names},
+            "said_before": SAID_BEFORE_SCHEMA,
+        },
+        "required": [*names, "said_before"],
+        "additionalProperties": False,
+    }
+    return {"anyOf": [{**whole, "not": {"required": ["said_before"]}}, short]}
+
+
+OBSERVATION_SCHEMA: dict[str, Any] = said_before_or_whole(
+    {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string"},
+            "kind": {"type": "string"},
+            "detail": {"type": "string"},
+            "evidence": {},
+        },
+        "required": ["code", "kind", "detail"],
+    },
+    "code",
+    "kind",
+)
 
 #: A receipt failure names the case that failed, not a stage (see Envelope).
 CASE_FAILURE_SCHEMA: dict[str, Any] = {
@@ -297,7 +330,14 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
 RUN_ROWS_CUT: dict[str, Any] = rows("case_id", "run_index", projected_by="run_fields")
 
 RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema(
-    {"type": "array", "items": RUN_RECORD_SCHEMA, CUT: RUN_ROWS_CUT}
+    {"type": "array", "items": RUN_RECORD_SCHEMA, CUT: RUN_ROWS_CUT},
+    hint={
+        "type": "string",
+        "description": (
+            "Present when the rows were cut and no cursor reads the rest (a "
+            "receipt with no job): where the rest is."
+        ),
+    },
 )
 
 #: Every top-level key a run row can carry, read off its schema: the roots a
@@ -359,6 +399,15 @@ _PROGRESS_SCHEMA: dict[str, Any] = {
     "required": ["expanded", "terminal", "remaining"],
 }
 
+#: Marks a reply field that belongs to how the job's answer was delivered (a
+#: wait's ``timed_out``, a run's ``replayed``, the jobs ``action``), not to the
+#: answer: two deliveries of one finished job differ in these and in nothing else.
+DELIVERY = "x-delivery"
+
+#: Every job this server runs is an experiment. The key stays on the wire
+#: because a client reads it to tell a receipt from the error envelope.
+JOB_TYPE_SCHEMA: dict[str, Any] = {"type": "string"}
+
 LINEAGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -368,6 +417,49 @@ LINEAGE_SCHEMA: dict[str, Any] = {
     },
     "required": ["root_job_id", "parent_job_id", "attempt_index"],
     "additionalProperties": False,
+}
+
+
+#: How many kinds of fact ``runs_not_shown`` names a run for, over all kinds:
+#: the first run of each of the first kinds, each run naming at most
+#: :data:`NOT_SHOWN_KINDS_PER_RUN` of them. Every kind keeps its count.
+NOT_SHOWN_NAMED = 3
+
+#: How many kinds one named run is named for.
+NOT_SHOWN_KINDS_PER_RUN = 2
+
+#: The schema of ``runs_not_shown``: never cut and never shortened.
+RUNS_NOT_SHOWN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present when run rows were left out and some of the runs after the rows "
+        "sent carry a fact about their outcome. counts: per kind "
+        "('diagnostics.<code>', 'failed_measurements', 'measurements_not_established', "
+        "'measurements_not_printed', 'measurements_coverage.<value>', "
+        "'diagnostics_coverage.<value>', 'status.<status>'), how many of those runs "
+        f"carry it. runs: the first run of each of the first {NOT_SHOWN_NAMED} kinds "
+        "that not every run of the job carries, with the cursor that reads its row "
+        "when the job has a record. Bounded by itself, whatever the number of kinds "
+        "and runs (receipts.NOT_SHOWN_BOUND_TOKENS)."
+    ),
+    "properties": {
+        "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
+        "runs": {
+            "type": "array",
+            CUT: NEVER,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "run_index": {"type": "integer"},
+                    "kinds": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
+                    "cursor": {"type": "string"},
+                },
+                "required": ["case_id", "run_index", "kinds"],
+            },
+        },
+    },
+    "required": ["counts"],
 }
 
 
@@ -382,37 +474,39 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         # and canonical payload matched an existing durable experiment, so its
         # receipt came back and no cases were submitted. The replay leaves the
         # job's record as it was.
-        "replayed": {"type": "boolean"},
+        "replayed": {"type": "boolean", DELIVERY: True},
         "status": JOB_STATUS_SCHEMA,
+        "job_type": JOB_TYPE_SCHEMA,
+        "dialect": {"type": ["string", "null"]},
+        "analysis_status": {"type": "string"},
         "outcome": OUTCOME_SCHEMA,
         "source": {
             "type": "array",
-            CUT: ITEMS,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "circuit": {"type": "string"},
-                    "path": {"type": "string"},
-                    "sha256": {"type": "string"},
-                    "staged_deck": {"type": "string"},
-                    "manifest": {"type": "array", "items": _MANIFEST_SCHEMA, CUT: ITEMS},
-                    "linter_version": {"type": "string"},
-                    "simulator": {"type": "string"},
-                    "dialect": {"type": ["string", "null"]},
-                    "staged_files": {"type": "integer"},
+            # One entry per circuit the request names: the request bounds it.
+            CUT: NEVER,
+            "items": said_before_or_whole(
+                {
+                    "type": "object",
+                    "properties": {
+                        "circuit": {"type": "string"},
+                        "path": {"type": "string"},
+                        "sha256": {"type": "string"},
+                        "staged_deck": {"type": "string"},
+                        "manifest": {"type": "array", "items": _MANIFEST_SCHEMA, CUT: ITEMS},
+                        "linter_version": {"type": "string"},
+                        "simulator": {"type": "string"},
+                        "dialect": {"type": ["string", "null"]},
+                        "staged_files": {"type": "integer"},
+                    },
+                    # Only the fields every receipt carries are required. The
+                    # digests, staging paths and full manifest are provenance:
+                    # they are emitted when 'provenance' is set, and otherwise
+                    # omitted, because they are a third of a receipt's bytes
+                    # and name files the caller does not open.
+                    "required": ["circuit", "path", "simulator", "dialect"],
                 },
-                # Only the fields every receipt carries are required. The
-                # digests, staging paths and full manifest are provenance: they
-                # are emitted when 'provenance' is set, and otherwise omitted,
-                # because they are a third of a receipt's bytes and name files
-                # the caller does not open.
-                "required": [
-                    "circuit",
-                    "path",
-                    "simulator",
-                    "dialect",
-                ],
-            },
+                "circuit",
+            ),
         },
         # The program the job's cases launched, as identified at submission.
         # Provenance: emitted under 'provenance' only.
@@ -430,15 +524,27 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "progress": _PROGRESS_SCHEMA,
         "lint": {
             "type": "array",
-            CUT: rows("circuit"),
-            "items": {
-                "type": "object",
-                "properties": {
-                    "circuit": {"type": "string"},
-                    "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_LIST_CUT},
+            # One entry per circuit the request names: the request bounds it.
+            CUT: NEVER,
+            "items": said_before_or_whole(
+                {
+                    "type": "object",
+                    "properties": {
+                        "circuit": {"type": "string"},
+                        "findings": {
+                            "type": "array",
+                            "items": FINDING_SCHEMA,
+                            CUT: FINDING_LIST_CUT,
+                            # Lint lists only the circuits with findings; the
+                            # reply rule would otherwise let a whole entry
+                            # leave them out.
+                            "minItems": 1,
+                        },
+                    },
+                    "required": ["circuit", "findings"],
                 },
-                "required": ["circuit", "findings"],
-            },
+                "circuit",
+            ),
         },
         "runs": RUNS_PAGE_SCHEMA,
         "analysis": {
@@ -466,9 +572,12 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "failures": failures_schema(CASE_FAILURE_SCHEMA),
         "observations": {"type": "array", "items": OBSERVATION_SCHEMA, CUT: NEVER},
         "warnings": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
-        "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA, CUT: ITEMS},
+        # What the job recorded beside its runs: the job bounds it.
+        "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA, CUT: NEVER},
         "hint": {"type": "string"},
         "error": ENVELOPE_ERROR_SCHEMA,
+        "cut": CUT_SCHEMA,
+        "runs_not_shown": RUNS_NOT_SHOWN_SCHEMA,
     },
     "required": [
         "job_id",
@@ -489,47 +598,25 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     ],
 }
 
-#: Renders a receipt at a page limit and, under a budget, a ladder rung.
-ReceiptBuild = Callable[[int, response_budget.Rung | None], dict[str, Any]]
+#: Where a receipt's run rows are, as the presenter names a list.
+RUN_ROWS = "/runs/items"
 
-# The receipt itself has no rung-0 allowlist: run_experiments and jobs
-# status/wait render the same receipt envelope, whose empty blocks every reply
-# leaves out anyway. The attached analysis is that tool's own envelope, trimmed
-# by that tool's own allowlist (`analyze.trim_analysis`): its `source_hashes`
-# is one identity row per run, so a receipt that kept it grew by every case it
-# ran whatever the budget.
-# `source` is deliberately not trimmed, and no other rung empties it either. It is
-# not an identity echo the way the analysis envelope's `source_hashes` is: with
-# `provenance` off it still carries the staging disclosures — the live,
-# unstaged or unexplained manifest entries `_source_payload` keeps precisely so
-# a caller is told about them — and with `provenance` on it carries an opt-in
-# the caller asked for, which the trim rung's charter forbids revoking. Facts
-# under one flag and an opt-in under the other leaves no rung a claim on it.
-
-#: Where a receipt's trimmed echo still is, for a caller under the server's
-#: default budget, who set none and so has none to raise.
-RECEIPT_DEFAULT_ROUTE = (
-    "Attached-analysis rows still name their run by case_id; analyze_results "
-    "over this job_id with include.provenance returns source_hashes."
-)
-
-_RUN_BUDGET_NOTES = response_budget.Notes(
-    cut="presentation was reduced; no run, failure, or analysis fact was dropped.",
-    route=(
-        "Ask again with a larger 'budget' for the full presentation, or continue "
-        "through the returned cursor/jobs route."
-    ),
-    default_route=RECEIPT_DEFAULT_ROUTE,
-)
+#: The kind of record run rows are read back from: the job's own record,
+#: which holds every row, so a cut of them stores nothing.
+JOB_RUNS = "job_runs"
 
 
-def _receipt_row_pages(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every run page carried at the top level or under a receipt."""
-    pages = [data] if isinstance(data.get("items"), list) else []
-    runs = data.get("runs")
-    if isinstance(runs, dict) and isinstance(runs.get("items"), list):
-        pages.append(runs)
-    return pages
+def run_rows_record(job_id: str) -> Record:
+    """The record a job's run rows are read back from: ``jobs(action="runs")``."""
+    return Record(JOB_RUNS, job_id)
+
+
+# The attached analysis is that tool's own envelope, trimmed by that tool's own
+# allowlist (`analyze.trim_analysis`) until analyze_results moves onto the
+# presenter: its `source_hashes` is one identity row per run, so a receipt that
+# kept it grew by every case it ran whatever the budget. The receipt's own
+# lists are the presenter's: its run rows are cut as rows, read back from the
+# job's record, and every other list is sent whole.
 
 
 def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -539,29 +626,30 @@ def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-def _receipt_surfaces(data: dict[str, Any]) -> list[list[Any]]:
-    """Every row surface a receipt-shaped response shows, one list apiece: its
-    run pages, and the attached analysis's surfaces when it carries one. The
-    one measure every receipt is shrunk against, whichever tool returns it."""
-    surfaces = [page["items"] for page in _receipt_row_pages(data)]
-    result = _attached_result(data)
-    if result is not None:
-        surfaces.extend(analyze.analysis_surfaces(result))
-    return surfaces
-
-
 #: Where a caller reads more of an attached waveform the receipt thinned.
 _THINNED_ATTACHED_ROUTE = (
-    "analyze_results over this job_id returns more, and format 'csv' writes every sample."
+    "analyze_results over this job_id with a larger max_points returns more points, "
+    "and format 'csv' writes every sample."
 )
 
 
-def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[str]:
-    """Apply presentation rungs to either public receipt envelope.
+def _with_one_run_row(data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` as the presenter's smallest cut leaves it: one run row. What
+    the attached analysis is fitted against, since the rows are cut after."""
+    runs = data.get("runs")
+    if not isinstance(runs, dict) or not isinstance(runs.get("items"), list):
+        return data
+    return {**data, "runs": {**runs, "items": runs["items"][:1]}}
 
-    Returns the blocks the trim emptied of content, for the rung's note. An
-    attached analysis's inline waveforms are then thinned to fit at every rung,
-    whatever ``max_points`` the request set: the receipt's rows preview what
+
+def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[str]:
+    """Apply a ladder rung to a receipt's attached analysis, by that tool's
+    own trim, in place.
+
+    Returns the blocks the trim emptied of content. An attached analysis's
+    inline waveforms are then thinned to fit at every rung, whatever
+    ``max_points`` the request set, measured with the receipt cut to one run
+    row as the presenter cuts it: the receipt's rows preview what
     ``analyze_results`` over the job returns, and that call sizes them.
     """
     emptied: list[str] = []
@@ -572,71 +660,302 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[s
             results = result.get("results")
             if isinstance(results, dict):
                 analyze.fit_waveform_samples(
-                    data, results, rung, list(results), _THINNED_ATTACHED_ROUTE
+                    _with_one_run_row(data), results, rung, list(results), _THINNED_ATTACHED_ROUTE
                 )
     return emptied
 
 
-async def negotiate_receipt(
-    budget: ResponseBudget,
-    build: ReceiptBuild,
-    page_limit: int,
-    *,
-    notes: response_budget.Notes,
+def trim_attached_analysis(
+    data: dict[str, Any], rung: response_budget.Rung, rows: int | None, target: int
+) -> None:
+    """Fit a receipt's attached analysis to ``rung`` by ``analyze_results``'
+    own trimming, in place, and say what it took. ``rows`` is the count the
+    analysis was rendered with (None: all). Until that tool moves onto the
+    presenter, this is how its envelope is shortened inside a receipt."""
+    if _attached_result(data) is None:
+        return
+    emptied = _degrade_receipt(data, rung)
+    parts: list[str] = []
+    if emptied:
+        parts.append("emptied " + ", ".join(emptied))
+    if rung.answer_channel:
+        parts.append("rendered on its answer channel, without the opt-ins the request set")
+    if rows is not None:
+        parts.append(f"its rows held to {rows} per list")
+    if parts:
+        data["observations"] = [
+            *data.get("observations", []),
+            response_budget.attached_trimmed_observation(target, parts, data.get("job_id")),
+        ]
+
+
+#: The statuses of a run that ended without its output, which a run row says
+#: and a reply that leaves the row out names.
+_ENDED_WITHOUT_OUTPUT = ("failed", "cancelled", "skipped")
+
+
+def row_facts(row: Mapping[str, Any]) -> list[str]:
+    """The facts about a run's outcome its row carries, by kind: each
+    diagnostic's code, each measurement field that names a ``.meas`` that gave
+    no value, what of its log was not read, and a status that ended without
+    output. What a reply that leaves the row out names (``runs_not_shown``)."""
+    kinds = [f"diagnostics.{entry['code']}" for entry in row.get("diagnostics") or ()]
+    if row.get("diagnostics_coverage"):
+        kinds.append(f"diagnostics_coverage.{row['diagnostics_coverage']}")
+    kinds.extend(
+        field
+        for field in (
+            "failed_measurements",
+            "measurements_not_established",
+            "measurements_not_printed",
+        )
+        if row.get(field)
+    )
+    if row.get("measurements_coverage"):
+        kinds.append(f"measurements_coverage.{row['measurements_coverage']}")
+    if row.get("status") in _ENDED_WITHOUT_OUTPUT:
+        kinds.append(f"status.{row['status']}")
+    return list(dict.fromkeys(kinds))
+
+
+#: Each row of a job's table that carries a fact, by its index in the table:
+#: ``(index, case_id, run_index, kinds)``.
+FactIndex = tuple[tuple[int, str, int, tuple[str, ...]], ...]
+
+
+def fact_index(rows: Sequence[Mapping[str, Any]]) -> FactIndex:
+    """The rows of a job's whole table that carry a fact (:func:`row_facts`),
+    read from rows no ``run_fields`` projected."""
+    return tuple(
+        (index, str(row.get("case_id")), int(row.get("run_index", index)), tuple(kinds))
+        for index, row in enumerate(rows)
+        if (kinds := row_facts(row))
+    )
+
+
+@dataclass(frozen=True)
+class RowFacts:
+    """The facts on a job's whole table, and the kinds every run carries:
+    what ``runs_not_shown`` is made from, whatever page a reply holds."""
+
+    facts: FactIndex
+    #: The kinds every run of the job carries, shown or not: given by count.
+    every: frozenset[str]
+
+    @classmethod
+    def of(cls, rows: Sequence[Mapping[str, Any]]) -> RowFacts:
+        facts = fact_index(rows)
+        every: frozenset[str] = frozenset()
+        if rows and len(facts) == len(rows):
+            every = frozenset.intersection(*(frozenset(kinds) for *_, kinds in facts))
+        return cls(facts, every)
+
+    def not_shown(
+        self, start: int, record: Record | None, *, statuses: bool = True
+    ) -> dict[str, Any]:
+        """``runs_not_shown`` for the rows from ``start`` on (:func:`runs_not_shown`)."""
+        return runs_not_shown(self, start, record, statuses=statuses)
+
+    def reserve(self, start: int, record: Record | None, *, statuses: bool = True) -> int:
+        """A first estimate of what ``runs_not_shown`` takes in a reply that
+        holds rows from ``start - 1`` on: its size when one row is kept, with
+        the margin of a longer name, never above :data:`NOT_SHOWN_BOUND_TOKENS`.
+        A larger count can take more (the runs left out then name more
+        kinds apart), so the presenter measures the whole reply at the count
+        it picks and takes rows off while it is over (``presenter._fit``)."""
+        note = self.not_shown(start, record, statuses=statuses)
+        if not note:
+            return 0
+        return min(
+            estimate_tokens({"runs_not_shown": note}) + _RESERVE_MARGIN, NOT_SHOWN_BOUND_TOKENS
+        )
+
+
+#: What a longer case id or count of a later page may add to a reserve.
+_RESERVE_MARGIN = 16
+
+
+def runs_not_shown(
+    table: RowFacts, start: int, record: Record | None, *, statuses: bool = True
 ) -> dict[str, Any]:
-    """Render a receipt at the mildest shared budget rung that fits.
-
-    The shrink rung measures the page its estimate priced and searches below it
-    when that page is still over. The search goes down to a limit of zero: a
-    receipt's rows preview surfaces other calls page (``jobs(runs)``,
-    ``analyze_results``), so at the floor ``completeness``, ``runs.total`` and
-    the cursor stand in for them and the floor is the same size however many
-    cases the job ran. A page whose cursor continues itself floors its own
-    limit at one row.
-    """
-    rendered: dict[str, Any] = {}
-
-    def candidate(limit: int, rung: response_budget.Rung) -> response_budget.Rendered:
-        data = build(limit, rung)
-        return data, _degrade_receipt(data, rung)
-
-    async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal rendered
-        if rung.shrink:
-            rendered, cut = response_budget.shrink_to_fit(
-                response_budget.RowMeasure.of(_receipt_surfaces(rendered), page=rung.measured),
-                lambda limit: candidate(limit, rung),
-                rung,
-                floor=0,
-                cap=page_limit,
-            )
-        elif rung.level == response_budget.RUNG_TRIM:
-            # The undegraded rung built this same page; degrade it in place.
-            cut = _degrade_receipt(rendered, rung)
-        else:
-            rendered, cut = candidate(page_limit, rung)
-        rung.cut.extend(cut)
-        return rendered
-
-    assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
-    response_budget.attach_notes(result, notes)
-    return result.data
+    """What the runs from ``start`` on carry, bounded by
+    :data:`NOT_SHOWN_BOUND_TOKENS`: every kind's count, and the first run of
+    each of the first :data:`NOT_SHOWN_NAMED` kinds that not every run carries,
+    with a record cursor that starts at its row. Rows keep their order, so a
+    cursor names a row by its index. ``statuses`` False leaves out the kinds
+    a reply's failures already name (a receipt with no job)."""
+    counts: dict[str, int] = {}
+    runs: list[dict[str, Any]] = []
+    named: set[str] = set()
+    for index, case_id, run_index, kinds in table.facts:
+        if index < start:
+            continue
+        kept = [kind for kind in kinds if statuses or not kind.startswith("status.")]
+        for kind in kept:
+            counts[kind] = counts.get(kind, 0) + 1
+        fresh = [kind for kind in kept if kind not in table.every and kind not in named]
+        room = NOT_SHOWN_NAMED - len(named)
+        if fresh and room > 0:
+            fresh = fresh[: min(room, NOT_SHOWN_KINDS_PER_RUN)]
+            named.update(fresh)
+            run: dict[str, Any] = {"case_id": case_id, "run_index": run_index, "kinds": fresh}
+            if record is not None:
+                run["cursor"] = record_cursor(record, index)
+            runs.append(run)
+    if not counts:
+        return {}
+    note: dict[str, Any] = {"counts": counts}
+    if runs:
+        note["runs"] = runs
+    # Long names can take a named run past the bound; the counts never do.
+    while runs and estimate_tokens({"runs_not_shown": note}) > NOT_SHOWN_BOUND_TOKENS:
+        runs.pop()
+        if not runs:
+            note.pop("runs")
+    return note
 
 
-async def render_run_receipt(
-    budget: ResponseBudget,
-    build: ReceiptBuild,
-    *,
-    is_error: bool = False,
-) -> types.CallToolResult:
-    if budget.tokens is None:
-        data = build(_RUN_PAGE_LIMIT, None)
-    else:
-        data = await negotiate_receipt(budget, build, _RUN_PAGE_LIMIT, notes=_RUN_BUDGET_NOTES)
-    result = format_response(data)
-    result.is_error = is_error
-    return result
+def _kind_vocabulary() -> list[str]:
+    """Every kind :func:`row_facts` can give a row."""
+    from ltspice_mcp.lib import log_conditions
+
+    return [
+        *(f"diagnostics.{code}" for code in sorted(log_conditions.diagnostic_codes())),
+        *(f"diagnostics_coverage.{value}" for value in log_conditions.COVERAGE),
+        "failed_measurements",
+        "measurements_not_established",
+        "measurements_not_printed",
+        *(f"measurements_coverage.{value}" for value in MEASUREMENTS_COVERAGE),
+        *(f"status.{status}" for status in _ENDED_WITHOUT_OUTPUT),
+    ]
+
+
+def _worst_note() -> dict[str, Any]:
+    """``runs_not_shown`` at its largest for ids of ordinary length: every
+    kind counted in the hundreds of thousands, and every named run with a 48-character case id
+    and a cursor for a 48-character job id."""
+    vocabulary = _kind_vocabulary()
+    longest = sorted(vocabulary, key=len, reverse=True)
+    record = Record(JOB_RUNS, "j" * 48)
+    return {
+        "counts": dict.fromkeys(vocabulary, 999_999),
+        "runs": [
+            {
+                "case_id": "c" * 48,
+                "run_index": 999_999,
+                "kinds": longest[:NOT_SHOWN_KINDS_PER_RUN],
+                "cursor": record_cursor(record, 999_999),
+            }
+            for _ in range(NOT_SHOWN_NAMED)
+        ],
+    }
+
+
+def _say_where_the_runs_are(
+    run_fields: list[str] | None, rows: Callable[[], Sequence[Mapping[str, Any]]]
+) -> Callable[
+    [str | None, Mapping[str, Any]],
+    tuple[
+        Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None], dict[str, int]
+    ],
+]:
+    """The words a receipt adds when its run rows are cut: its ``runs`` page
+    fields set from the cut, what the rows left out carry (``runs_not_shown``)
+    and the way to read the rest, first in its hint; and the bound
+    ``runs_not_shown`` reserves of the target. ``rows`` gives the job's whole
+    table before any ``run_fields`` projection, read once, off the loop where
+    the presentation runs."""
+    table: list[RowFacts] = []
+
+    def for_job(
+        job_id: str | None, _answer: Mapping[str, Any]
+    ) -> tuple[
+        Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None], dict[str, int]
+    ]:
+        if not table:
+            table.append(RowFacts.of(rows()))
+        facts = table[0]
+        record = run_rows_record(job_id) if job_id is not None else None
+        # A receipt with no job names every failed case in its failures.
+        statuses = job_id is not None
+
+        def annotate(
+            reply: dict[str, Any], cut: Mapping[str, ListCut], stored: Any, _paged: str | None
+        ) -> None:
+            entry = cut.get(RUN_ROWS)
+            if entry is None:
+                return
+            runs = reply["runs"]
+            runs["returned"] = entry.returned
+            runs["truncated"] = entry.next is not None
+            runs["next_cursor"] = entry.next
+            if entry.next is None:
+                return
+            said = [_the_rest_of_the_rows(entry, job_id, run_fields, stored)]
+            if job_id is None:
+                # Rows with no job are stored, and no tool's cursor argument
+                # reads a stored receipt: the stored file is the way to them.
+                runs["next_cursor"] = None
+                runs["hint"] = said[0]
+                reply["cut"][RUN_ROWS].pop("next", None)
+            left_out = facts.not_shown(entry.offset + entry.returned, record, statuses=statuses)
+            if left_out:
+                reply["runs_not_shown"] = left_out
+            hint = reply.get("hint")
+            if isinstance(hint, str) and hint:
+                said.append(hint)
+            reply["hint"] = " ".join(said)
+
+        reserve = facts.reserve(1, record, statuses=statuses)
+        return annotate, ({"runs_not_shown": reserve} if reserve else {})
+
+    return for_job
+
+
+def _the_rest_of_the_rows(
+    entry: ListCut, job_id: str | None, run_fields: list[str] | None, stored: Any = None
+) -> str:
+    """The one sentence a reply cut short of a job's run rows says of the
+    rest, on a receipt and a runs page alike. An answer that names no job has
+    no record: its rest is in the stored answer."""
+    left = f"{entry.total - entry.offset - entry.returned} of {entry.total} run rows are not in this reply"
+    if job_id is None:
+        where = f" in {stored.path}" if stored is not None else ""
+        return f"{left}; the complete receipt is{where} under 'answer'."
+    read_on = call_to_continue("jobs", {"action": "runs", "job_id": job_id, "cursor": entry.next})
+    same = " with the same run_fields" if run_fields else ""
+    return f"{left}; read them from the job's record with {read_on}{same}."
+
+
+def receipt_parts(
+    run_fields: list[str] | None = None,
+    snapshot: ReceiptSnapshot | None = None,
+    rows: Sequence[Mapping[str, Any]] | None = None,
+) -> JobAnswerParts:
+    """What the reply layer needs to deliver a job's answer
+    (``tools/_base.present_job_answer``): where its run rows are and the
+    record they are read back from, the words a cut of them adds, the
+    attached analysis's own trimming, and the measurements routes, which are
+    standing notes. ``snapshot``, or ``rows`` for a receipt built without one,
+    is the whole table before any ``run_fields`` projection: the facts on
+    every row are read from it whatever ``run_fields`` keeps."""
+
+    def whole() -> Sequence[Mapping[str, Any]]:
+        # The rows as the job holds them, before any projection or native
+        # evidence is rendered: every fact a row carries is on them.
+        if snapshot is not None:
+            return list(snapshot.runs_by_key.values())
+        return rows or ()
+
+    return JobAnswerParts(
+        rows=RUN_ROWS,
+        record=run_rows_record,
+        annotate=_say_where_the_runs_are(run_fields, whole),
+        trim_attached=trim_attached_analysis,
+        attached=lambda data: _attached_result(dict(data)) is not None,
+        route=measurements_routes,
+        short_route=_SHORT_MEASUREMENTS_ROUTE,
+    )
 
 
 #: How many assign points an ``identical_samples`` observation names; the
@@ -884,6 +1203,9 @@ class ReceiptSnapshot:
     analysis_request: dict[str, Any] | None
     simulator_executable: SimulatorExecutable | None = None
     lineage: dict[str, Any] | None = None
+    measures: bool = False
+    """Whether a finished job's deck requests a ``.meas``, as the runner kept
+    it on its cases (:func:`_requests_measures`)."""
     path_denied_hint: str | None = None
     """The session's sandbox guidance, which a ``path_denied`` failure row
     carries as its hint. Not a job fact: the remedy is the sandbox setting as
@@ -893,6 +1215,33 @@ class ReceiptSnapshot:
     def outcome(self) -> CallOutcome:
         """Receipt outcome derived only from copied status and completeness."""
         return _terminal_outcome(self)
+
+    _projected: dict[tuple[str, ...] | None, tuple[dict[str, Any], tuple[str, ...]]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+    """Each ``run_fields`` projection of the run rows, rendered once: a reply
+    builds its answer once per presentation it tries, and no presentation
+    changes the rows."""
+
+    def projected_runs(
+        self, run_fields: list[str] | None
+    ) -> tuple[dict[str, Any], tuple[str, ...]]:
+        """Every run row projected by ``run_fields``, as one page, with the
+        warnings the projection gave; rendered once per projection. The page
+        is shared: copy it before changing it."""
+        key = None if run_fields is None else tuple(run_fields)
+        if key not in self._projected:
+            said: list[str] = []
+            rows = list(self.runs_by_key.values())
+            page = page_of(rows, offset=0, total=len(rows))
+            page["items"] = _project_run_rows(
+                [dict(row) for row in page["items"]],
+                run_fields,
+                native_by_key=self.native_by_key,
+                warnings=said,
+            )
+            self._projected[key] = (page, tuple(said))
+        return self._projected[key]
 
     @functools.cached_property
     def rendered_failures(self) -> tuple[dict[str, Any], ...]:
@@ -907,29 +1256,29 @@ def render_receipt_snapshot(
     control_token: str | None = None,
     provenance: bool = False,
     run_fields: list[str] | None = None,
-    runs_cap: int = _RUN_PAGE_LIMIT,
     analysis_fields: list[str] | None = None,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
     analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Render the existing receipt envelope from detached neutral facts.
+    """A job's complete answer at the moment of ``snapshot``, with every run
+    row, as every delivery of it sends it: the run receipt, a wait, a status.
+    It knows nothing of a wait; what a delivery adds (``timed_out``,
+    ``replayed``, ``action``) is the delivery's to add.
 
     The snapshot's leaves are already detached from the job, and rendering
     never writes through them — the only row edits build or own their dicts —
     so the envelope shares them rather than copying them per render.
     """
     run_warnings: list[str] = []
-    runs = project_receipt_runs(
-        snapshot,
-        run_fields,
-        limit=runs_cap,
-        warnings=run_warnings,
-    )
+    runs = project_receipt_runs(snapshot, run_fields, warnings=run_warnings)
     data: dict[str, Any] = {
         "job_id": snapshot.job_id,
         "request_id": snapshot.request_id,
+        "job_type": "experiment",
         "status": snapshot.status,
+        "analysis_status": snapshot.analysis_status,
+        "dialect": snapshot.dialect,
         "outcome": snapshot.outcome,
         "source": [
             _source_payload(source, provenance=provenance)
@@ -948,7 +1297,7 @@ def render_receipt_snapshot(
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
             "job_id to continue waiting."
             if snapshot.status not in TERMINAL_STATUSES
-            else _terminal_hint(snapshot, runs)
+            else _terminal_hint(snapshot)
         ),
     }
     emitted_control_token = control_token if control_token is not None else snapshot.control_token
@@ -1194,20 +1543,14 @@ def runs_page(
     cases: list[ExperimentCase],
     run_fields: list[str] | None = None,
     *,
-    cap: int = _RUN_PAGE_LIMIT,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The first page of ``cases``' run rows, projected by ``run_fields``.
+    """Every run row of ``cases``, projected by ``run_fields``, as one page.
 
-    A ``run_fields`` path no row on the page reaches is said in ``warnings``,
-    as :func:`project_receipt_runs` says it for a receipt read from a job.
+    A ``run_fields`` path no row reaches is said in ``warnings``, as
+    :func:`project_receipt_runs` says it for a receipt read from a job.
     """
-    # Paged first, projected second: the projection is one row in, one row out,
-    # so it only has to run over the rows this page actually carries. The cap is
-    # floored at one row for the same reason ``page`` floors its limit — a page
-    # of none would report itself truncated with a cursor back at the same
-    # offset, which is a pagination loop that never advances.
-    selected = cases[: max(1, cap)]
+    selected = cases
     native_by_key = {}
     for case in selected:
         if case.native_statistics is not None:
@@ -1226,31 +1569,16 @@ def project_receipt_runs(
     snapshot: ReceiptSnapshot,
     run_fields: list[str] | None,
     *,
-    offset: int = 0,
-    limit: int | None = None,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Purely apply one invocation's run projection to copied canonical rows.
-
-    ``run_fields`` is the original request's projection policy; without it
-    every row is whole. ``limit=None`` renders the complete page shape for an in-process consumer.
-    ``offset`` is already decoded from the caller's cursor — a malformed one is
-    that tool's error to raise, not this renderer's.
-
-    ``limit=0`` is a receipt's budget floor, no row inline; ``jobs(runs)``
-    floors its own limit at one row.
+    """Every run row of the snapshot, projected by one invocation's
+    ``run_fields``, as one page: the job's whole table, which the presenter
+    cuts as rows (:data:`RUN_ROWS`). Without ``run_fields`` every row is whole.
     """
-    rows = list(snapshot.runs_by_key.values())
-    start = min(max(offset, 0), len(rows))
-    end = len(rows) if limit is None else start + limit
-    page = page_of(rows[start:end], offset=start, total=len(rows))
-    page["items"] = _project_run_rows(
-        [dict(row) for row in page["items"]],
-        run_fields,
-        native_by_key=snapshot.native_by_key,
-        warnings=warnings,
-    )
-    return page
+    page, said = snapshot.projected_runs(run_fields)
+    if warnings is not None:
+        warnings.extend(said)
+    return {**page, "items": list(page["items"])}
 
 
 def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
@@ -1277,27 +1605,17 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     )
 
 
-def _terminal_hint(snapshot: ReceiptSnapshot, runs: Mapping[str, Any]) -> str:
+def _terminal_hint(snapshot: ReceiptSnapshot) -> str:
     """Every recovery route this receipt has, not the first one that matched.
 
     A process that stops mid-run sets BOTH conditions: the abandoned cases become
     failures AND the attached analysis is marked failed. Under an exclusive
     ladder the failures branch won and the caller was never told that the runs
     that DID produce data are still analyzable by job_id — so the obvious move
-    was to re-run an experiment whose results were sitting on disk. A paged
-    run list is one more route, not a reason to drop the others: a budget's
-    floor pages every receipt, failed ones included.
+    was to re-run an experiment whose results were sitting on disk. Run rows a
+    reply cut are one more route, which the presenter's annotation puts first.
     """
-    routes: list[str] = []
-    if runs["truncated"]:
-        routes.append(
-            f"The inline run page is truncated; use jobs(runs) with job_id "
-            f"{snapshot.job_id} for the remaining cases."
-            if runs["returned"]
-            else "No run row is inline at this budget; completeness and runs.total "
-            f"count them, and jobs(runs) with job_id {snapshot.job_id} pages them."
-        )
-    routes.extend(_recovery_routes(snapshot))
+    routes: list[str] = list(_recovery_routes(snapshot))
     if not routes:
         routes.append(f"Experiment {snapshot.job_id} is {snapshot.status}.")
     return " ".join(routes)
@@ -1323,14 +1641,61 @@ def _recovery_routes(snapshot: ReceiptSnapshot) -> list[str]:
             "measurements_not_printed",
         )
     ):
-        routes.append(
-            "A run row names a .meas that gave no value (failed_measurements, "
-            "measurements_not_established, measurements_not_printed); read every value "
-            "with analyze_results("
-            f'sources=[{{"job_id": "{snapshot.job_id}"}}], recipes=[{{"metric": '
-            '"measurements"}]), or api.analyze_results in Python.'
+        routes.append(measurements_route(snapshot.job_id))
+    elif (
+        snapshot.measures
+        and not _attaches_measurements(snapshot.analysis_request)
+        # A simulator whose measure output the server does not read: the
+        # recipe could not read the values either.
+        and not any(
+            row.get("measurements_coverage") == "simulator_unsupported"
+            for row in snapshot.runs_by_key.values()
         )
+    ):
+        routes.append(measurements_cards_route(snapshot.job_id))
     return routes
+
+
+def _attaches_measurements(request: Mapping[str, Any] | None) -> bool:
+    """Whether the request already attached the ``measurements`` recipe."""
+    recipes = (request or {}).get("recipes") or ()
+    return any(isinstance(r, Mapping) and r.get("metric") == "measurements" for r in recipes)
+
+
+def measurements_cards_route(job_id: str) -> str:
+    """The sentence of a receipt's hint that routes a deck's ``.meas`` cards
+    to the ``measurements`` recipe: a standing note, said in full once per
+    session (``lib/said_once.py``)."""
+    return (
+        "The deck has .meas cards; read their values with analyze_results("
+        f'sources=[{{"job_id": "{job_id}"}}], recipes=[{{"metric": "measurements"}}]), '
+        "or api.analyze_results in Python."
+    )
+
+
+def measurements_routes(job_id: str) -> tuple[str, ...]:
+    """Every sentence a receipt's hint may route to the ``measurements``
+    recipe with, which said-once shortens alike."""
+    return (measurements_route(job_id), measurements_cards_route(job_id))
+
+
+def measurements_route(job_id: str) -> str:
+    """The sentence of a receipt's hint that routes to the ``measurements``
+    recipe: a standing note, said in full once per session
+    (``lib/said_once.py``)."""
+    return (
+        "A run row names a .meas that gave no value (failed_measurements, "
+        "measurements_not_established, measurements_not_printed); read every value "
+        "with analyze_results("
+        f'sources=[{{"job_id": "{job_id}"}}], recipes=[{{"metric": '
+        '"measurements"}]), or api.analyze_results in Python.'
+    )
+
+
+#: The measurements route once this session was sent it in full.
+_SHORT_MEASUREMENTS_ROUTE = (
+    "The measurements recipe over this job reads every .meas value (said before)."
+)
 
 
 def snapshot_receipt(
@@ -1347,7 +1712,8 @@ def snapshot_receipt(
     call.  Outcome and guidance are intentionally absent from that live-read
     interval; renderers derive them only from the returned detached value.
     Native record holders are copied, sharing only their frozen nested facts;
-    large evidence lists are serialized after the renderer selects a page.
+    their evidence is rendered once per projection of the whole table
+    (``ReceiptSnapshot.projected_runs``), off the loop.
 
     ``live_progress`` is ``live_run_progress``'s read, taken off the loop just
     before this call (``snapshot_receipt_live`` pairs the two). An entry joins
@@ -1432,6 +1798,7 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         simulator_executable=job.simulator_executable,
+        measures=_requests_measures(job),
         lineage=(
             {
                 "root_job_id": job.recovery.root_job_id,
@@ -1472,33 +1839,41 @@ async def snapshot_receipt_live(
     )
 
 
+def _requests_measures(job: ExperimentJob) -> bool:
+    """Whether a finished job's deck requests a ``.meas``: what the runner
+    kept on a produced case when its run ended (``measurement_facts``'
+    ``requested``, from ``result_observations.deck_observation_inputs``). No
+    file is read. A running job has no route to name yet, so it is not read."""
+    if job.status not in TERMINAL_STATUSES:
+        return False
+    return any(
+        case.status == "produced"
+        and isinstance(case.measurement_facts, dict)
+        and bool(case.measurement_facts.get("requested"))
+        for case in job.cases
+    )
+
+
 def render_jobs_receipt_snapshot(
     action: Literal["status", "wait"],
     snapshot: ReceiptSnapshot,
     *,
     timed_out: bool | None = None,
-    runs_cap: int = JOBS_PAGE_LIMIT,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
     analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Render one complete jobs receipt from detached snapshot facts."""
+    """One jobs delivery of a job's complete answer: the answer
+    (:func:`render_receipt_snapshot`) and the delivery's own fields."""
     data = render_receipt_snapshot(
         snapshot,
-        runs_cap=runs_cap,
         analysis_answer_channel=analysis_answer_channel,
         analysis_rows_cap=analysis_rows_cap,
         analysis_served=analysis_served,
     )
     data.update(
         {
-            # Every job this server runs is an experiment. The key stays on the
-            # wire because a client reads it to tell a receipt apart from the
-            # error envelope, which says "unknown".
-            "job_type": "experiment",
-            "dialect": snapshot.dialect,
             "action": action,
-            "analysis_status": snapshot.analysis_status,
             # Only 'wait' reports whether it ran out of time; 'status' never waited.
             "timed_out": timed_out,
         }
@@ -1508,33 +1883,12 @@ def render_jobs_receipt_snapshot(
 
 
 def _jobs_receipt_hint(snapshot: ReceiptSnapshot, data: dict[str, Any]) -> str:
-    """The one next step this jobs receipt offers, in precedence order.
-
-    A live job outranks a paged one: continuing the wait is what gets the rest
-    of the runs in the first place. A paged one keeps the failure routes after
-    its own, since a budget's floor pages every receipt. Whatever the receipt
-    renderer already put on ``hint`` survives when neither applies.
-    """
+    """The one next step this jobs receipt offers: continuing the wait for a
+    live job, else whatever the receipt renderer put on ``hint``."""
     if snapshot.status in NON_TERMINAL_LIVE_STATUSES:
         return (
             f"Job {snapshot.job_id} is still {snapshot.status}; continue with "
             f"jobs(action='wait', job_id='{snapshot.job_id}')."
-        )
-    if data["runs"]["truncated"]:
-        return " ".join(
-            [
-                "Run records are paged; read the rest with "
-                + call_to_continue(
-                    "jobs",
-                    {
-                        "action": "runs",
-                        "job_id": snapshot.job_id,
-                        "cursor": data["runs"]["next_cursor"],
-                    },
-                )
-                + ".",
-                *_recovery_routes(snapshot),
-            ]
         )
     return data.get("hint") or f"Job {snapshot.job_id} is {snapshot.status}."
 
@@ -1542,45 +1896,74 @@ def _jobs_receipt_hint(snapshot: ReceiptSnapshot, data: dict[str, Any]) -> str:
 def render_runs_envelope(
     snapshot: ReceiptSnapshot,
     *,
-    offset: int = 0,
-    limit: int | None = None,
     run_fields: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Render one jobs(runs) envelope over a snapshot's full run records.
-
-    ``limit=None`` returns every recorded run, which is also what makes the
-    truncation hint below collapse to the complete-page wording. ``offset`` is
-    the caller's decoded cursor position.
-    """
+    """One job's ``jobs(action="runs")`` answer: every recorded run, read
+    from the job as it stands, with its status and progress, which the
+    presenter cuts as rows (:func:`say_which_rows`)."""
     run_warnings: list[str] = []
-    page = project_receipt_runs(
-        snapshot,
-        run_fields,
-        offset=offset,
-        # This page's cursor continues this page, so it never renders empty.
-        limit=None if limit is None else max(1, limit),
-        warnings=run_warnings,
-    )
+    page = project_receipt_runs(snapshot, run_fields, warnings=run_warnings)
     return {
         "action": "runs",
         "outcome": snapshot.outcome,
         "job_id": snapshot.job_id,
         "request_id": snapshot.request_id,
         "status": snapshot.status,
+        "progress": progress_from_completeness(snapshot.completeness),
         "dialect": snapshot.dialect,
         **page,
         "observations": [],
         "warnings": run_warnings,
         "failures": [],
-        "hint": (
-            "Run records are paged; read the rest with "
-            + call_to_continue(
-                "jobs",
-                {"action": "runs", "job_id": snapshot.job_id, "cursor": Unfilled("next_cursor")},
-            )
-            # The cursor is an offset: the projection is the call's to repeat.
-            + (", with the same run_fields." if run_fields else ".")
-            if page["truncated"]
-            else f"Returned all recorded runs for job {snapshot.job_id}."
-        ),
+        "hint": f"Returned all recorded runs for job {snapshot.job_id}.",
     }
+
+
+#: Where a ``jobs(action="runs")`` answer's rows are, as the presenter names a list.
+RUNS_PAGE_ROWS = "/items"
+
+
+def say_which_rows(
+    snapshot: ReceiptSnapshot, run_fields: list[str] | None, offset: int
+) -> tuple[
+    Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None], dict[str, int]
+]:
+    """The words a ``jobs(action="runs")`` reply carries when its rows are
+    cut: its page fields set from the cut, which rows it holds, that they were
+    read from the job's record as it stands now, what the rows after it carry
+    (``runs_not_shown``), and the call that reads on; and the bound
+    ``runs_not_shown`` reserves of the target for a page from ``offset``."""
+    job_id = snapshot.job_id
+    record = run_rows_record(job_id)
+    facts = RowFacts.of(list(snapshot.runs_by_key.values()))
+
+    def annotate(
+        reply: dict[str, Any], cut: Mapping[str, ListCut], _stored: Any, _paged: str | None
+    ) -> None:
+        entry = cut.get(RUNS_PAGE_ROWS)
+        if entry is None:
+            return
+        reply["returned"] = entry.returned
+        reply["truncated"] = entry.next is not None
+        reply["next_cursor"] = entry.next
+        said = [
+            f"Run rows {entry.offset + 1} to {entry.offset + entry.returned} of "
+            f"{entry.total} of job {job_id}, read from its record now, while it is "
+            f"{reply.get('status')}."
+        ]
+        if reply.get("status") not in TERMINAL_STATUSES:
+            said.append("A row of a job still running may change between pages.")
+        if entry.next is not None:
+            said.append(_the_rest_of_the_rows(entry, job_id, run_fields))
+            left_out = facts.not_shown(entry.offset + entry.returned, record)
+            if left_out:
+                reply["runs_not_shown"] = left_out
+        reply["hint"] = " ".join(said)
+
+    reserve = facts.reserve(offset + 1, record)
+    return annotate, ({"runs_not_shown": reserve} if reserve else {})
+
+
+#: The most ``runs_not_shown`` takes, in estimated tokens, whatever the number
+#: of kinds and runs (:func:`runs_not_shown` holds it to this).
+NOT_SHOWN_BOUND_TOKENS: int = estimate_tokens({"runs_not_shown": _worst_note()})

@@ -1,0 +1,20 @@
+* every form with a result: a DC sweep, stepped
+V1 in 0 0
+R1 in out {r}
+R2 out 0 1k
+.step param r list 1k 2k
+.dc V1 0 5 0.1
+.meas dc max_v MAX V(out) FROM 1 TO 4
+.meas dc min_v MIN V(out) FROM 1 TO 4
+.meas dc pp_v PP V(out) FROM 1 TO 4
+.meas dc avg_v AVG V(out) FROM 1 TO 4
+.meas dc rms_v RMS V(out) FROM 1 TO 4
+.meas dc integ_v INTEG V(out) FROM 1 TO 4
+.meas dc find_at_v FIND V(out) AT 3
+.meas dc find_when_v FIND I(R1) WHEN V(out)=1
+.meas dc when_v WHEN V(out)=1
+.meas dc deriv_at_v DERIV V(out) AT 3
+.meas dc deriv_when_v DERIV V(out) WHEN V(out)=1
+.meas dc trig_targ_v TRIG V(out) VAL=0.5 RISE=1 TARG V(out) VAL=2 RISE=1
+.meas dc param_v PARAM max_v*2
+.end
