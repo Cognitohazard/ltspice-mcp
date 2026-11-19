@@ -2239,8 +2239,10 @@ functions = [
 ]
 item_axis = "form"
 # Keys of a cell beside its coordinates: the steps, from 1, that an outcome in
-# one step concerns.
-item_keys = ["steps"]
+# one step concerns; and zero_by_form, for a result that is 0 in every step by
+# what its form is where each step has one point (a PP, a derivative, a
+# TRIG/TARG at one level, in a stepped .tf).
+item_keys = ["steps", "zero_by_form"]
 groups = [
     ["form", "analysis", "stepped", "outcome"],
     ["name", "printed"],
@@ -3457,7 +3459,7 @@ min_f = { form = "min", outcome = "failed", printed = "failed" }
 cases = ["log/meas_grid_tf_step_pp"]
 at = { analysis = "tf", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-pp_v = { form = "pp", outcome = "value" }
+pp_v = { form = "pp", outcome = "value", zero_by_form = true }
 pp_f = { form = "pp", outcome = "failed", printed = "failed" }
 
 [[grid.printed-measurement.cell]]
@@ -3507,21 +3509,21 @@ param_f = { form = "param", outcome = "failed", printed = "failed" }
 cases = ["log/meas_grid_tf_step_deriv_at"]
 at = { analysis = "tf", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = { form = "deriv_at", outcome = "value" }
+deriv_at_v = { form = "deriv_at", outcome = "value", zero_by_form = true }
 deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_deriv_when"]
 at = { analysis = "tf", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-deriv_when_v = { form = "deriv_when", outcome = "value" }
+deriv_when_v = { form = "deriv_when", outcome = "value", zero_by_form = true }
 deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_trig_targ"]
 at = { analysis = "tf", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-trig_targ_v = { form = "trig_targ", outcome = "value" }
+trig_targ_v = { form = "trig_targ", outcome = "value", zero_by_form = true }
 trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
 
 [[grid.printed-measurement.cell]]

@@ -239,6 +239,11 @@ def test_a_measurement_cell_is_a_card_of_its_deck_as_it_declares(cell: Cell):
     for build in rec.BUILDS:
         one_step = cell.at(build)["outcome"] in ("step_fails", "step_zero")
         assert bool(cell.extra.get("steps")) == one_step, (cell.id, build)
+        assert all(step >= 1 for step in cell.extra.get("steps", ())), cell.id
+    # Only a result over a sweep can be 0 by its form, where a step has one point.
+    if cell.extra.get("zero_by_form"):
+        assert at["analysis"] in ("op", "tf") and at["outcome"] == "value", cell.id
+        assert at["form"] in ("pp", "deriv_at", "deriv_when", "trig_targ"), cell.id
 
 
 def test_every_card_of_a_measurement_deck_is_a_cell():

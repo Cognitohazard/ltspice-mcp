@@ -378,13 +378,14 @@ def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
         assert outcome == "value", (cell.id, build)
         return
     assert shown.rows, (cell.id, build, "a table with no rows")
-    assert all(step < len(shown.rows) for step in steps), (cell.id, build, steps, shown.rows)
+    assert all(0 <= step < len(shown.rows) for step in steps), (cell.id, build, steps, shown.rows)
     if GRID.expected(cell, build) == "point":
         assert len(shown.columns) == 1, (cell.id, build, shown.columns)
     for step, row in enumerate(shown.rows):
         zero = row != "failed" and _printed_number(row, at.get("complex_format", "")) == 0
         if step not in steps:
-            assert row != "failed" and not zero, (cell.id, build, step, row)
+            assert row != "failed", (cell.id, build, step, row)
+            assert not zero or cell.extra.get("zero_by_form"), (cell.id, build, step, row)
         elif outcome == "step_zero":
             assert zero, (cell.id, build, step, row)
         elif rec.generation(build) == "xvii":
