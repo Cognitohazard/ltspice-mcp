@@ -222,6 +222,8 @@ C1 out 0 {C}
 
 ## Other LTspice Quirks
 
+### Encodings: the micro sign and 8-bit decks
+
 - **Micro sign**: LTspice writes the `u` suffix as µ in saved files and
   exported netlists. LTspice 24 writes it in UTF-8 and reads it back; LTspice
   XVII reads the file as cp1252 and drops the scale, so `23µ` runs as 23.
@@ -236,6 +238,14 @@ C1 out 0 {C}
   `Âµ`) is an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`)
   is a warning, read as the bare number. These checks run on a netlist and on
   an `.asc`'s exported netlist.
+- **8-bit decks**: LTspice reads a deck that is not UTF-8 as Latin-1. Byte
+  0x85 (an ellipsis in a Western editor) ends the line on LTspice 24 and
+  later, and a node named with a byte from 0x80 to 0x9F is refused by LTspice
+  26 and saved under a control character by XVII. The linter warns of both
+  (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
+
+### `.meas` names, values and analyses
+
 - **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
   evaluator and cannot name a measurement. LTspice 26 refuses the whole deck and
   XVII skips that measurement. `run_experiments` refuses them before the run
@@ -255,19 +265,15 @@ C1 out 0 {C}
   LTspice before it runs (`.op` may appear with one), and `vdb()`, `phase()`
   and `group_delay()` are not `.meas` functions. `run_experiments` refuses
   both decks (`analysis-count-ltspice`, `meas-function-ltspice`).
-- **8-bit decks**: LTspice reads a deck that is not UTF-8 as Latin-1. Byte
-  0x85 (an ellipsis in a Western editor) ends the line on LTspice 24 and
-  later, and a node named with a byte from 0x80 to 0x9F is refused by LTspice
-  26 and saved under a control character by XVII. The linter warns of both
-  (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
 - **A failed step on XVII**: in a stepped measurement table XVII prints `0`
   where LTspice 24 and later print `failed`, which replies name in
   `failed_measurements`. XVII prints a crossing at 0 s as `0` too, so a `0`
   in its table is not taken as the result: the step's value is null and
   replies name it under `not_established`. A log read by path whose files
   name no build may be XVII's and is read the same way.
-- **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
-  from zero. ngspice has no equivalent keyword.
+
+### Frequency response analysis (`.fra`)
+
 - **Frequency response analysis** (`.fra` with an analyzer `@N`): the run
   writes its transient raw and, beside it, `<run>.fra_N.raw`, which holds
   complex values over frequency in the same form as an AC result (its
@@ -288,6 +294,11 @@ C1 out 0 {C}
   agrees, and `fra_margin_not_checked` says the log held none to compare.
   Read that observation before trusting the margin. LTspice XVII 17.0 has no
   FRA and refuses the analyzer.
+
+### `startup`, text of several lines, A-devices and multipliers
+
+- **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
+  from zero. ngspice has no equivalent keyword.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
   `\n` and a backslash as `\\`; a `\n` inside a path such as `C:\new` is a
   line break too. On export, both builds split a directive at each line break

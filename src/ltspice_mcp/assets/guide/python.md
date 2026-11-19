@@ -136,6 +136,14 @@ ops = api.device_op_points(job_id=job_id, case_id=case_id)  # ops["m1"]["gm"], .
 d = r.compare(api.load_raw("archived.raw"))  # d["signals"]["V(out)"]["max_abs"], per signal
 ```
 
+Arrays are copies, so you can modify them. Trace math across steps and its
+statistics are in guide section 'signals'. `api.analyze_results(...)` returns
+every row of every recipe; pass `include={"per_run": True}` for the per-run
+rows. Variation values are SPICE literals (`"5p"`), and `parse_spice_value`
+parses one.
+
+### Comparing two runs
+
 `r.compare(other, signals=None, step=0, other_step=None)` measures how far
 another run's traces are from these. For each signal it reports the largest
 difference, that difference as a share of this run's peak, and where it
@@ -148,6 +156,8 @@ The other run is read at this run's points over the span both cover,
 interpolated where its axis differs (as in a compressed LTspice raw, guide
 section 'ltspice'). You choose the tolerance.
 
+### Reading part of a large file
+
 A file too large to read whole (one read keeps 512 MiB of numbers) can still
 be read for the signals you need: `api.load_raw(..., signals=["V(out)",
 "I(R1)"])` keeps only those traces, the axis and any step parameters. A node
@@ -159,6 +169,8 @@ axis at a time: `api.load_raw(..., window=("1m", "2m"))` keeps the points from
 time, which is decoded whole, and a file in its Fast Access layout is decoded
 for the traces kept, each along its whole axis. For a larger file, convert it
 with `LTspice -FastAccess <file>.raw` and choose signals.
+
+### Choosing a plot, and plots with no axis
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
 zero-based position in the file, separately from the case (or run) and the
@@ -178,6 +190,8 @@ Step parameters (`r.steps`) are read at the same time as the traces, from the
 RAW itself or the `.log` beside it. LTspice writes a step parameter's name in
 lower case, so a name is found whatever its case: `r.steps[0]["RD"]` reads
 `rd`, as `step={axis:'RD', ...}` and `group_by` do.
+
+### Reading a log without a RAW file
 
 For a log without a RAW file:
 
@@ -211,11 +225,7 @@ RAW beside the log, and in a request that also has RAW recipes, a malformed
 RAW fails only those recipes. Guide section 'tools' covers when a page cursor stops working because
 a file changed, and a timeout while `analyze_results` first reads its sources.
 
-Arrays are copies, so you can modify them. Trace math across steps and its
-statistics are in guide section 'signals'. `api.analyze_results(...)` returns
-every row of every recipe; pass `include={"per_run": True}` for the per-run
-rows. Variation values are SPICE literals (`"5p"`), and `parse_spice_value`
-parses one.
+### Keeping one run's numbers in a file
 
 To keep one run's numbers for later, write them to a file you choose, in a
 layout you decide. Each read takes one line:
