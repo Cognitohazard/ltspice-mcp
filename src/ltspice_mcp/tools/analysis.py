@@ -60,7 +60,6 @@ from ltspice_mcp.lib.ltspice_window import (
     OpenWindows,
     Shown,
     WindowsUnavailable,
-    results_beside,
 )
 from ltspice_mcp.lib.metrics import (
     guarded_axis,
@@ -83,7 +82,7 @@ from ltspice_mcp.lib.raw_parser import (
 from ltspice_mcp.lib.recipes import WAVEFORM_MAX_POINTS_CAP, StepSelector
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
-from ltspice_mcp.lib.sheet_results import place_beside_sheet
+from ltspice_mcp.lib.sheet_results import files_beside, place_beside_sheet
 from ltspice_mcp.lib.signal_analysis import (
     TraceStats,
     downsample_minmax,
@@ -1299,7 +1298,7 @@ def _show_from_sheet(
     are not in the file and knows of no results for it, and the results beside
     the sheet are then opened on their own.
     """
-    beside = results_beside(sheet)
+    beside = files_beside(sheet).raw
     left_alone: str | None = None
 
     def place() -> None:

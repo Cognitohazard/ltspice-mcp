@@ -364,6 +364,7 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the values the refused argument accepts"
     ),
     ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
+    ("jobs.handle_jobs", "not_checked"): "at most two: the digest not compared, a netlist's window",
     # A sheet finding's own parts, in edit_schematic's preexisting view.
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,
