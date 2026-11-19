@@ -1673,7 +1673,8 @@ class TestMeasurements:
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
         """The measurements recipe gives no number for a step whose row XVII
-        printed 0, and names the step as not established; LTspice 26, which
+        printed 0, and names the step as not established, which its
+        statistics count as such and not as a failure; LTspice 26, which
         prints ``failed``, has its failure counted. A bare log path names no
         build, so it may be XVII's: its zero is not established either."""
         log = work_dir / "meas_step.log"
@@ -1686,13 +1687,16 @@ class TestMeasurements:
         )
         assert "observations" not in result
         stats = result["stats"]["s_when"]
-        assert stats["failure_count"] == 1
         assert stats["valid_count"] == 2
         assert stats["min"] > 0
         if rec.generation(build) == "xvii":
+            assert stats["failure_count"] == 0
+            assert stats["no_number"] == {"not_established": 1}
             assert result["not_established"]["s_when"]["steps"] == [2]
             assert "failed_measurements" not in result
         else:
+            assert stats["failure_count"] == 1
+            assert stats["no_number"] == {}
             assert "not_established" not in result
             assert result["failed_measurements"] == ["s_when"]
 

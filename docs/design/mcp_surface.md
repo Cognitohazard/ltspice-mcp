@@ -1505,6 +1505,22 @@ names it in one of five places, by why:
   an `inspect` measurements row and the Python API's `measurements()` carry
   the same statement.
 
+A stepped run's `measurements` row gives each name's statistics in `stats`
+(and so does any row read with `include.fields=["value"]`). They are over the
+steps with a number (`valid_count`); the other steps are counted by the same
+reasons, as the log decoder decides them (`log_types.no_number_reasons`, from
+the one list `log_types.NO_NUMBER_REASONS`): `failure_count` counts the steps
+LTspice printed failed, and `no_number: {reason: count}` counts every other
+step under the name of the row field that gives its reason (`unreadable`,
+`answer_unknown`, `not_established`), a count of 0 left out. `total_count`
+is `valid_count` plus `failure_count` plus every count in `no_number`. A
+`not_established` count beside `failure_count` makes it a lower bound: each
+such step may be a failure or a real 0. A value printed once for several
+steps is a number, so it is counted in `valid_count`. The Python API's
+`compute_measurement_stats` takes the reasons as `reasons`; a null in a
+caller's own list that comes with no reason is counted under
+`no_number.reason_not_given`, never as a failure.
+
 `failed_measurements` means "LTspice printed it as failed" in every reply
 that carries it. The summary, `inspect(kind="results", view="measurements")`
 and the Python API's `measurements` name each measurement LTspice printed as
