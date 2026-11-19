@@ -486,9 +486,13 @@ async def present_job_answer(
     memory takes its own lock.
     """
     memory = None if in_automatic_door() else state.notes_sent
-    return await asyncio.to_thread(
+    reply, planned = await asyncio.to_thread(
         _present_job_answer, build, parts, tool, schema, budget, state, delivery, memory
     )
+    # Remembered on the loop, once the reply is in hand: a call cancelled
+    # while the thread ran records nothing it did not send.
+    said_once.commit(planned, memory)
+    return reply
 
 
 def _present_job_answer(
@@ -500,7 +504,9 @@ def _present_job_answer(
     state: SessionState,
     delivery: said_once.Delivery,
     memory: said_once.NotesSent | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], said_once.Plan | None]:
+    """The reply, and the plan of standing notes it carries, which the caller
+    commits to the memory."""
     planned: said_once.Plan | None = None
     planned_once = False
     attached = False
@@ -542,8 +548,7 @@ def _present_job_answer(
     shown = candidate(None, None)
     if budget.tokens is not None and attached:
         shown = _walk_attached(candidate, shown, target=budget.tokens, max_rung=budget.max_rung)
-    said_once.commit(planned, memory)
-    return shown.reply
+    return shown.reply, planned
 
 
 def image_content(image: RenderedImage) -> types.ImageContent:
