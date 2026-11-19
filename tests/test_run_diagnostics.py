@@ -88,15 +88,16 @@ EXPECTED = {
     },
 }
 
-# What the summary recipe's ``errors`` held for the same logs before runs
-# carried diagnostics; it holds the same.
+# What the summary recipe's ``errors`` hold for the same logs: each condition
+# of the run row the simulator wrote an error word on, as the row holds it
+# (``log_conditions.said_as``). LTspice 26 writes none on the ignored
+# parameter, so its summary has no errors.
 SUMMARY_ERRORS = {
-    "ltspice26": [
-        "C:\\recording\\unknown_model_param.cir(5): Ignoring unknown model parameter. "
-        "This may or may not be a problem.\n.model DX D(Is=1e-14 Bogus=3)\n"
-        "^^^^^^^ (repeated 3 times)"
+    "ltspice26": None,
+    "ltspice17": [
+        "Error on line 5 : .model dx d(is=1e-14 bogus=3)\n"
+        '\t* Unrecognized parameter "bogus" -- ignored'
     ],
-    "ltspice17": ["Error on line 5 : .model dx d(is=1e-14 bogus=3)"],
 }
 
 # The program each build runs as: XVII is known by its stock name, 26 by the
@@ -234,7 +235,7 @@ async def test_the_recorded_unknown_model_parameter_on_every_path(
 
     summary = await _summary(state, reply["job_id"])
     assert _row_diagnostics(summary) == expected
-    assert summary["errors"] == SUMMARY_ERRORS[build]
+    assert summary.get("errors") == SUMMARY_ERRORS[build]
     assert "warnings" not in summary or not any(
         "unknown model parameter" in warning.lower() for warning in summary["warnings"]
     )
@@ -437,6 +438,7 @@ def test_log_and_console_lines_keep_their_channel():
         "first_text": "Error: something only the console said",
         "channel": "console",
         "severity": "Error",
+        "written": [{"text": "Error: something only the console said", "severity": "Error"}],
     }
 
 
@@ -454,12 +456,23 @@ def test_the_producer_chooses_the_rules_and_says_when_they_are_not_its_own():
     unknown = log_conditions.run_diagnostics(conditions, Producer(None, None, None))
     assert unknown["coverage"] == "producer_unknown"
     assert [entry["code"] for entry in unknown["diagnostics"]] == ["unknown_model_parameter"]
-    # A simulator with no recordings has every line counted as unclassified.
+    # A simulator with no recordings is read by the line classifier's
+    # patterns: what it lists as an error or a warning is counted under
+    # simulator_error or simulator_warning, every other line as unclassified.
     xyce = log_conditions.run_diagnostics(conditions, Producer("xyce", None, None))
     assert xyce["coverage"] == "unverified"
-    ((entry),) = xyce["diagnostics"]
-    assert entry["code"] == "unclassified"
-    assert entry["count"] == sum(1 for line in read_spice_text(log).splitlines() if line.strip())
+    by_code = {entry["code"]: entry for entry in xyce["diagnostics"]}
+    assert set(by_code) == {"simulator_error", "unclassified"}
+    assert by_code["simulator_error"]["first_text"].endswith("^^^^"), by_code
+    said = log_conditions.classify(
+        {"log": "Xyce run\nError: no such model\nWarning: a note\ntime step too small\n"},
+        "unverified",
+    )
+    assert [(c["code"], c.get("severity"), c["count"]) for c in said] == [
+        ("unclassified", None, 1),
+        ("simulator_error", "Error", 2),
+        ("simulator_warning", "Warning", 1),
+    ]
     # A log that was not read says so.
     assert log_conditions.run_diagnostics(None, Producer("ltspice", None, None)) == {
         "coverage": "log_unread"

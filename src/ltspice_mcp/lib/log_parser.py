@@ -15,7 +15,7 @@ from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from uuid import uuid4
 
 from spicelib.log.ltsteps import LTSpiceLogReader
@@ -697,7 +697,7 @@ def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] 
     return "execution_failed", None
 
 
-def _op_block_recovered(lines: list[str], idx: int) -> bool:
+def _op_block_recovered(lines: Sequence[str], idx: int) -> bool:
     """Whether the OP-solve block holding a stepping-failure at ``idx`` converged.
 
     LTspice escalates within one solve (Direct Newton -> Gmin -> Source stepping
@@ -724,12 +724,121 @@ def _op_block_recovered(lines: list[str], idx: int) -> bool:
     return False
 
 
+class LineReading(NamedTuple):
+    """What the line classifier reads at one line of a log: ``kind`` the list
+    it puts the text in (None for neither), ``text`` as listed, and ``taken``
+    how many lines it consumed."""
+
+    kind: Literal["error", "warning"] | None
+    text: str
+    taken: int
+
+
+def classify_line(lines: Sequence[str], i: int) -> LineReading:
+    """The line classifier's reading of ``lines[i]`` and the lines it takes
+    with it: the one place its patterns are applied. :func:`extract_log_diagnostics`
+    lists by it, and ``log_conditions`` reads a log by it for a simulator whose
+    wording has no recordings (the ``unverified`` rule set)."""
+    line = lines[i]
+    stripped = line.strip()
+
+    # filepath(line): message — collect the block (source line + caret)
+    if _RE_FILE_ERROR.match(line):
+        block = [stripped]
+        # Grab following source line + caret if present
+        j = i + 1
+        while j < len(lines) and j <= i + 2:
+            next_stripped = lines[j].strip()
+            if not next_stripped:
+                break
+            block.append(next_stripped)
+            if _RE_CARET.match(lines[j]):
+                j += 1
+                break
+            j += 1
+        return LineReading("error", "\n".join(block), j - i)
+
+    # Fatal Error:
+    if _RE_FATAL.match(stripped):
+        # LTspice XVII ends "Unknown subcircuit called in:" with the colon
+        # and gives the card on the next line; the two are one message.
+        follows = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if stripped.endswith(":") and follows:
+            return LineReading("error", f"{stripped} {follows}", 2)
+        return LineReading("error", stripped, 1)
+
+    # Error on line N:, and a bare "Error:" / "ERROR:" prefix (floating node,
+    # circuit-not-parsed, ...)
+    if _RE_LINE_ERROR.match(stripped) or _RE_ERROR.match(stripped):
+        return LineReading("error", stripped, 1)
+
+    # ngspice convergence FAILURES arrive "Warning:"-prefixed; classify the
+    # terminal ones as errors (substring match, so the prefix is ignored)
+    # before the generic warning rule below would downgrade a no-data run.
+    stripped_lower = stripped.lower()
+    # Gmin/source stepping "failed" is an intermediate escalation rung on
+    # LTspice — drop it when THIS solve block later converged; keep it as an
+    # error otherwise (ngspice no-data run, or a step that never converged).
+    if is_op_stepping_failure(stripped):
+        recovered = _op_block_recovered(lines, i)
+        return LineReading(None if recovered else "error", stripped, 1)
+    if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
+        return LineReading("error", stripped, 1)
+
+    # Warning: / WARNING: / Warning --
+    if _RE_WARNING.match(stripped):
+        return LineReading("warning", stripped, 1)
+
+    # Bare convergence / runtime phrases — anchored at start of line to
+    # avoid false positives on lines that merely contain the phrase as a
+    # substring (e.g., "the singular matrix decomposition succeeded").
+    if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
+        return LineReading("error", stripped, 1)
+    if _RE_UNSOLVABLE_MATRIX.search(stripped) or _RE_COMPONENT_REFUSAL.match(stripped):
+        return LineReading("error", stripped, 1)
+
+    # ngspice-specific diagnostics
+    if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
+        return LineReading(
+            "warning",
+            stripped + " Use the analyze_results 'signal_stats' or 'value' "
+            "recipes for post-processing.",
+            1,
+        )
+    if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
+        return LineReading(
+            "warning",
+            stripped + " ngspice skips .four when writing a rawfile; the "
+            "analyze_results 'tone' and 'thd' recipes read harmonics from the raw.",
+            1,
+        )
+    if _RE_NGSPICE_UNIMPLEMENTED.search(stripped):
+        return LineReading("error", stripped, 1)
+    m_note = _RE_NGSPICE_NOTE.match(stripped)
+    if m_note:
+        note_body = m_note.group(1).strip()
+        if not any(skip in note_body.lower() for skip in _NGSPICE_NOTE_SKIP):
+            return LineReading("warning", stripped, 1)
+    return LineReading(None, stripped, 1)
+
+
 def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     """Extract structured warnings and errors from a simulator log file.
 
     ``conditions`` is what the log and its console capture say under every set
     of rules ``log_conditions`` has, without knowing who wrote them; a reader
     picks its producer's set with ``log_conditions.run_diagnostics``.
+
+    How severe the simulator called a line, as any reply shows it, is the
+    conditions' answer (``log_conditions.said_as``): the ``summary`` recipe's
+    errors, warnings and ``meas_errors`` and its relays read them. The
+    ``errors`` and ``warnings`` lists here are kept for readers that ask
+    something else of the lines, each named in
+    ``tests/test_summary_says_what_the_run_row_says.py``: whether a run failed
+    (``runner_base.collect_run_outcome``), whether the simulator refused the
+    deck before it ran (``log_decode.decode_logs``, ``empty_measurements``),
+    and which lines name a failed solve or an unrecognized variable
+    (``services.solve_failure_lines``, ``metrics.read_log_warnings``).
 
     Detects all known LTspice diagnostic patterns:
     - filepath(line): message + source line + ^^^ caret blocks
@@ -783,132 +892,28 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     lines = log_lines(content)
     i = 0
     while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-
-        # filepath(line): message — collect the block (source line + caret)
-        if _RE_FILE_ERROR.match(line):
-            block = [stripped]
-            # Grab following source line + caret if present
-            j = i + 1
-            while j < len(lines) and j <= i + 2:
-                next_stripped = lines[j].strip()
-                if not next_stripped:
-                    break
-                block.append(next_stripped)
-                if _RE_CARET.match(lines[j]):
-                    j += 1
-                    break
-                j += 1
-            full_block = "\n".join(block)
-            errors.append(full_block)
-
-            # If the source line in the block is a .MEAS directive, classify
-            # it as a meas_error and attach a suggestion when the failure
-            # matches a known pattern. The source line is the second entry
-            # in the block (first is "file(line): message").
-            if len(block) >= 2:
+        reading = classify_line(lines, i)
+        head = lines[i]
+        i += reading.taken
+        if reading.kind == "warning":
+            warnings.append(reading.text)
+        elif reading.kind == "error":
+            errors.append(reading.text)
+            # A ``filepath(line): message`` block whose source line is a .MEAS
+            # directive is a meas_error, with a suggestion when the failure
+            # matches a known pattern (the source line is the block's second).
+            block = reading.text.split("\n")
+            if _RE_FILE_ERROR.match(head) and len(block) >= 2:
                 source_line = block[1].lstrip()
                 if source_line.lower().startswith(".meas"):
                     val_err = validate_directive(source_line, simulator="LTspice")
                     meas_errors.append(
                         {
                             "directive": source_line,
-                            "raw_block": full_block,
+                            "raw_block": reading.text,
                             "suggestion": val_err.suggestion if val_err else None,
                         }
                     )
-            i = j
-            continue
-
-        # Fatal Error:
-        if _RE_FATAL.match(stripped):
-            # LTspice XVII ends "Unknown subcircuit called in:" with the colon
-            # and gives the card on the next line; the two are one message.
-            follows = lines[i + 1].strip() if i + 1 < len(lines) else ""
-            if stripped.endswith(":") and follows:
-                errors.append(f"{stripped} {follows}")
-                i += 2
-                continue
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # Error on line N:
-        if _RE_LINE_ERROR.match(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # Bare "Error:" / "ERROR:" prefix (floating node, circuit-not-parsed, ...)
-        if _RE_ERROR.match(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # ngspice convergence FAILURES arrive "Warning:"-prefixed; classify the
-        # terminal ones as errors (substring match, so the prefix is ignored)
-        # before the generic warning rule below would downgrade a no-data run.
-        stripped_lower = stripped.lower()
-        # Gmin/source stepping "failed" is an intermediate escalation rung on
-        # LTspice — drop it when THIS solve block later converged; keep it as an
-        # error otherwise (ngspice no-data run, or a step that never converged).
-        if is_op_stepping_failure(stripped):
-            if not _op_block_recovered(lines, i):
-                errors.append(stripped)
-            i += 1
-            continue
-        if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # Warning: / WARNING: / Warning --
-        if _RE_WARNING.match(stripped):
-            warnings.append(stripped)
-            i += 1
-            continue
-
-        # Bare convergence / runtime phrases — anchored at start of line to
-        # avoid false positives on lines that merely contain the phrase as a
-        # substring (e.g., "the singular matrix decomposition succeeded").
-        if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
-            errors.append(stripped)
-            i += 1
-            continue
-        if _RE_UNSOLVABLE_MATRIX.search(stripped) or _RE_COMPONENT_REFUSAL.match(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # ngspice-specific diagnostics
-        if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
-            warnings.append(
-                stripped + " Use the analyze_results 'signal_stats' or 'value' "
-                "recipes for post-processing."
-            )
-            i += 1
-            continue
-        if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
-            warnings.append(
-                stripped + " ngspice skips .four when writing a rawfile; the "
-                "analyze_results 'tone' and 'thd' recipes read harmonics from the raw."
-            )
-            i += 1
-            continue
-        if _RE_NGSPICE_UNIMPLEMENTED.search(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-        m_note = _RE_NGSPICE_NOTE.match(stripped)
-        if m_note:
-            note_body = m_note.group(1).strip()
-            if not any(skip in note_body.lower() for skip in _NGSPICE_NOTE_SKIP):
-                warnings.append(stripped)
-            i += 1
-            continue
-
-        i += 1
 
     return {
         "warnings": _collapse_repeats(warnings),

@@ -991,6 +991,64 @@ async def test_job_status_reports_result_files_that_exist(
     assert hashes["raw_sha256"]
 
 
+async def test_a_four_in_batch_mode_is_reported_skipped_where_ngspice_says_so(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """ngspice run with a raw output does not evaluate ``.four``. The reply
+    reports the ``.four`` as skipped in batch mode exactly when the run's
+    diagnostics hold ngspice's notice of it (``fourier_skipped_batch``), and as
+    missing otherwise; it asserts nothing about which wording a version
+    writes, and no Fourier values are made up."""
+    net = _write(
+        work_dir,
+        "four.cir",
+        "* rc four\n"
+        "V1 in 0 SIN(0 1 1k)\n"
+        "R1 in out 1k\n"
+        "C1 out 0 100n\n"
+        ".tran 10u 5m\n"
+        ".four 1k V(out)\n"
+        ".end\n",
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "ng-four-batch-skip",
+            "circuits": [{"path": net, "id": "dut"}],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+            "lint": "off",
+        },
+    )
+    assert receipt["completeness"]["produced"] == 1, receipt
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [{"key": "sum", "metric": "summary"}],
+        include={"provenance": True},
+    )
+    (value,) = [v["value"] for v in data["results"]["sum"]["values"]]
+    assert not value.get("fourier"), value
+    (row,) = receipt["runs"]["items"]
+    noticed = any(d["code"] == "fourier_skipped_batch" for d in row.get("diagnostics", []))
+    # Whatever a version writes, a line it starts with ".fourier" is the
+    # notice and must be read as one.
+    (hashes,) = data["source_hashes"]
+    log = Path(hashes["log_path"])
+    written = "".join(
+        p.read_text(errors="replace")
+        for p in (log, log.with_suffix(".exe.log"))
+        if p.exists()
+    )
+    if any(line.strip().startswith(".fourier") for line in written.splitlines()):
+        assert noticed, (written, row)
+    reasons = [
+        o["evidence"]["reason"]
+        for o in data.get("observations", [])
+        if o["code"] == "unmet_request" and o["evidence"].get("request_kind") == "four"
+    ]
+    assert reasons == ["skipped_in_batch_mode" if noticed else "missing"], (reasons, row)
+
+
 async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
     ngspice_state: SessionState, work_dir: Path
 ):
@@ -1037,10 +1095,15 @@ async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
             {"key": "vout", "metric": "signal_stats", "signal": "V(out)"},
         ],
     )
+    # ngspice writes "No .measure possible in batch mode" with no severity
+    # word, so it is in the summary's diagnostics, not its warnings
+    # (log_conditions.said_as), and the .meas is reported skipped for it.
     assert any(
-        "No .measure possible in batch mode" in warning
-        for warning in data["results"]["sum"]["warnings"]
-    )
+        o["code"] == "unmet_request"
+        and o.get("evidence", {}).get("reason") == "skipped_in_batch_mode"
+        for o in data.get("observations", [])
+    ), data.get("observations")
+
     measured = data["results"]["measured"]
     assert (
         not measured.get("values")

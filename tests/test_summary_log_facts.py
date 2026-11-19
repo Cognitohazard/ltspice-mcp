@@ -154,19 +154,41 @@ def test_section_errors_surface_original_exception(tmp_path, section, label):
 @pytest.mark.parametrize(
     "body",
     [
-        "Circuit: test\n.step R=1\n.step R=2\ngmin stepping failed\n",
+        "Circuit: test\n.step R=1\n.step R=2\nGmin stepping failed to find operating point.\n",
         "Circuit: test\nDirect Newton iteration succeeded in finding operating point.\n"
-        "Direct Newton iteration failed to find operating point.\ngmin stepping failed\n",
+        "Direct Newton iteration failed to find operating point.\n"
+        "Gmin stepping failed to find operating point.\n",
     ],
 )
-def test_op_attempts_or_step_rows_keep_later_failure(tmp_path, body):
+def test_op_attempts_or_step_rows_say_the_op_is_stepped(tmp_path, body):
+    """A stepped ``.op`` says so; its stepping rung, which LTspice writes with
+    no error word, is no error (``log_conditions.said_as``)."""
     summary = build_simulation_summary(
         _raw(operating=True), captured_log_facts(tmp_path, text=body)
     )
-    assert summary["errors"] == ["gmin stepping failed"]
+    assert "errors" not in summary
     warning = next(w for w in summary["warnings"] if "Stepped .op detected" in w)
     assert "2 bias-point iterations" in warning
     assert ".dc R" in warning if ".step R" in body else ".dc <param>" in warning
+
+
+#: A rung of the bias-point search written with an error word: no recorded
+#: build writes one, so it is injected into the decoded log, for the demote
+#: that acts on the condition's code.
+_ERROR_RUNG = {
+    "code": "operating_point_fallback",
+    "count": 1,
+    "first_text": "Error: gmin stepping failed",
+    "channel": "log",
+    "severity": "Error",
+}
+
+
+def _with_error_rung(tmp_path, **sections) -> DecodedLog:
+    metadata = captured_log_facts(tmp_path, text="Circuit: test\n").as_dict()
+    metadata["diagnostics"]["value"]["conditions"] = {"wording": [dict(_ERROR_RUNG)]}
+    metadata.update(sections)
+    return DecodedLog(metadata)
 
 
 @pytest.mark.parametrize(
@@ -178,24 +200,30 @@ def test_op_attempts_or_step_rows_keep_later_failure(tmp_path, body):
         ([1, 1, 1], [0, 1], False),
     ],
 )
-def test_single_solve_recovery_requires_finite_complete_raw(tmp_path, values, steps, recovered):
-    log = captured_log_facts(tmp_path, text="Circuit: test\ngmin stepping failed\n")
-    summary = build_simulation_summary(_raw(values=values, steps=steps), log)
+def test_an_error_rung_is_demoted_by_its_code_where_the_raw_holds_the_point(
+    tmp_path, values, steps, recovered
+):
+    """An ``operating_point_fallback`` condition the simulator called an
+    error is demoted to a warning when one solve wrote finite, complete node
+    data: the point was found after all. It is read by the condition's code,
+    never by its wording."""
+    summary = build_simulation_summary(
+        _raw(values=values, steps=steps), _with_error_rung(tmp_path)
+    )
     assert ("errors" not in summary) is recovered
     assert any("OP solve recovered" in w for w in summary.get("warnings", [])) is recovered
 
 
 @pytest.mark.parametrize("section", ["steps", "op_iterations"])
 def test_unknown_op_coverage_never_demotes_solve_error(tmp_path, section):
-    metadata = captured_log_facts(tmp_path, text="Circuit: test\ngmin stepping failed\n").as_dict()
-    metadata[section] = {
+    unknown = {
         "status": "error",
         "value": None,
         "nonfinite_count": 0,
         "error": {"type": "ValueError", "message": "synthetic unknown solve coverage"},
     }
-    summary = build_simulation_summary(_raw(), DecodedLog(metadata))
-    assert summary["errors"] == ["gmin stepping failed"]
+    summary = build_simulation_summary(_raw(), _with_error_rung(tmp_path, **{section: unknown}))
+    assert summary["errors"] == ["Error: gmin stepping failed"]
     assert "unknown solve coverage" in " ".join(summary["warnings"])
 
 
@@ -224,6 +252,25 @@ def test_failed_meas_and_diagnostics_reach_reconciliation(tmp_path):
 
 
 def test_structured_meas_error_preserves_suggestion_and_raw_block(tmp_path):
+    """A ``.meas`` the simulator called an error (XVII's wording) is a
+    ``meas_errors`` entry with the fix the pre-flight rules suggest, and is
+    relayed with the simulator's own word for it."""
+    log = captured_log_facts(
+        tmp_path,
+        text=("Circuit: test\n.meas AC fc_3dB WHEN vdb(out)=-3\nError: unknown function vdb\n"),
+    )
+    summary = build_simulation_summary(_raw(), log)
+    (entry,) = summary["meas_errors"]
+    assert entry["directive"] == ".meas AC fc_3dB WHEN vdb(out)=-3"
+    assert "Error: unknown function vdb" in entry["raw_block"]
+    assert "mag" in entry["suggestion"].lower()
+    (relayed,) = [o for o in summary["observations"] if o["code"] == "meas_parse_error"]
+    assert relayed["severity"] == "Error"
+
+
+def test_a_meas_error_with_no_severity_word_is_no_meas_error(tmp_path):
+    """LTspice 26 writes a ``.meas`` it cannot read as ``file(N): message``
+    with no error word: it is in the summary's diagnostics only."""
     log = captured_log_facts(
         tmp_path,
         text=(
@@ -232,12 +279,8 @@ def test_structured_meas_error_preserves_suggestion_and_raw_block(tmp_path):
         ),
     )
     summary = build_simulation_summary(_raw(), log)
-    assert summary["meas_errors"] == log.value("diagnostics")["meas_errors"]
-    entry = summary["meas_errors"][0]
-    assert entry["directive"] == ".meas AC fc_3dB WHEN vdb(out)=-3"
-    assert "^^^" in entry["raw_block"]
-    assert "mag" in entry["suggestion"].lower()
-    assert any(o["code"] == "meas_parse_error" for o in summary["observations"])
+    assert "meas_errors" not in summary
+    assert "errors" not in summary
 
 
 def test_resident_log_facts_preserve_axisless_first_trace_value_observations(tmp_path):
