@@ -1,0 +1,1 @@
+A value written with a micro sign (`1µ`, `1μ`) in a deck stored as UTF-8 is read as micro by the server and by LTspice 26, but LTspice XVII reads the same bytes as the bare number. Every reply that gives such a value, or compares it, read from a stored deck now says so: it names the value, the build and the number that build takes.
