@@ -399,7 +399,9 @@ FINDINGS_OMITTED_SCHEMA: dict[str, Any] = {
                 "description": "Pass as findings_cursor to read the findings after these.",
             },
         },
-        "required": ["omitted", "total", "next_cursor"],
+        # next_cursor is absent only when the answer was not kept
+        # (stored_answer.not_kept): the counts still say what was left out.
+        "required": ["omitted", "total"],
     },
 }
 
@@ -3053,7 +3055,7 @@ def _say_how_to_read_the_rest(
     # Every list verify_circuit cuts is stored: it names no record.
     assert stored is not None
     findings = cut.get("/findings")
-    if findings is not None and findings.next is not None:
+    if findings is not None and findings.left_out:
         every = Counter(str(f["rule_id"]) for f in stored.answer.get("findings", ()))
         after = Counter(
             str(f["rule_id"])
@@ -3075,8 +3077,11 @@ def _say_how_to_read_the_rest(
             "since. The snapshot does not cover the symbols, includes, libraries or "
             "export the findings also read."
         )
-    more = {pointer: _left_out(entry) for pointer, entry in cut.items() if entry.next is not None}
-    if more:
+    more = {pointer: _left_out(entry) for pointer, entry in cut.items() if entry.left_out}
+    if more and stored.not_kept is not None:
+        not_sent = ", ".join(f"{count} of {pointer}" for pointer, count in more.items())
+        said.append(f"Not sent: {not_sent}; the answer was not kept (see stored_answer).")
+    elif more:
         read_on = call_to_continue(
             "verify_circuit",
             {

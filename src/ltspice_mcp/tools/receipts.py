@@ -814,7 +814,7 @@ def _say_where_the_runs_are(
                 return
             runs = reply["runs"]
             runs["returned"] = entry.returned
-            runs["truncated"] = entry.next is not None
+            runs["truncated"] = entry.left_out
             runs["next_cursor"] = entry.next
             if entry.next is None:
                 return
@@ -1902,7 +1902,7 @@ def say_which_rows(
         if entry is None:
             return
         reply["returned"] = entry.returned
-        reply["truncated"] = entry.next is not None
+        reply["truncated"] = entry.left_out
         reply["next_cursor"] = entry.next
         said = [
             f"Run rows {entry.offset + 1} to {entry.offset + entry.returned} of "

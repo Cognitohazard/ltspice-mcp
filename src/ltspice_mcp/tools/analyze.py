@@ -2697,7 +2697,13 @@ def _published_size(path: Path) -> int | None:
     return status.st_size if S_ISREG(status.st_mode) else None
 
 
-async def _publish(pending: list[_PendingArtifact], deadline: float) -> list[dict[str, Any]]:
+#: The deadline of each digest a publish takes, in seconds: a file a recipe
+#: already answered with is published under this, not under what is left of
+#: the call's bound, so the bound never loses an answered recipe's artifact.
+PUBLISH_DEADLINE_S: Final = services.RAW_PARSE_TIMEOUT_S
+
+
+async def _publish(pending: list[_PendingArtifact]) -> list[dict[str, Any]]:
     """Publish each pending artifact at its final path, and its handle.
 
     A final path holds only what :func:`_rename_artifacts` moved there: a
@@ -2709,18 +2715,17 @@ async def _publish(pending: list[_PendingArtifact], deadline: float) -> list[dic
     as it is: never replaced or opened for writing, so a program holding it
     open (a CSV in a spreadsheet, on Windows) does not fail the repeat. When
     its bytes differ (a writer of another release, or a file changed after it
-    was published) it is replaced, and a refusal to replace it fails the
-    recipe as before."""
+    was published), or the comparison cannot finish (the file is unreadable,
+    or its digest runs out of time), it is replaced, as before this check
+    existed, and a refusal to replace it fails the recipe as before. Each
+    digest has :data:`PUBLISH_DEADLINE_S`."""
     prepared: list[dict[str, Any]] = []
     moved: list[_PendingArtifact] = []
     kept: list[_PendingArtifact] = []
-    loop = asyncio.get_running_loop()
 
     async def digest_of(path: Path) -> str:
         return await services.bounded_parse(
-            path,
-            lambda: result_store.sha256_file(path),
-            timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - loop.time()),
+            path, lambda: result_store.sha256_file(path), timeout_s=PUBLISH_DEADLINE_S
         )
 
     for artifact in pending:
@@ -2729,8 +2734,9 @@ async def _publish(pending: list[_PendingArtifact], deadline: float) -> list[dic
         published = await asyncio.to_thread(_published_size, artifact.final)
         same = False
         if published == size:
-            # An unreadable published file is replaced, as one that differs.
-            with contextlib.suppress(OSError):
+            # The comparison only decides whether to keep the old file: one
+            # that cannot finish replaces it, as one that differs does.
+            with contextlib.suppress(OSError, AnalysisDeadlineExceeded):
                 same = await digest_of(artifact.final) == digest
         (kept if same else moved).append(artifact)
         prepared.append(
@@ -2870,8 +2876,12 @@ def _page_of(item_schema: dict[str, Any], cut: Any) -> dict[str, Any]:
     silent pass. A fresh dict per call — the surfaces that share this shape
     each declare their own row type.
     """
+    page = page_schema({"type": "array", "items": item_schema, CUT: cut})
     return {
-        **page_schema({"type": "array", "items": item_schema, CUT: cut}),
+        **page,
+        # Beside truncated when the page has no cursor to give: the answer
+        # was not kept (stored_answer.not_kept).
+        "properties": {**page["properties"], "hint": HINT_SCHEMA},
         "additionalProperties": False,
     }
 
@@ -3319,12 +3329,16 @@ class AnalysisEvaluation:
     #: The request's identity: a page read with ``include.per_run.cursor``
     #: must name the same request.
     request: str = ""
+    #: The steps of the call no recipe owns (the signal listing) that did
+    #: not finish, each named with what it left undone.
+    step_failures: tuple[Failure, ...] = ()
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
         """Every failure of the evaluation, one per place."""
         failures = [failure for _position, failure in self.skipped]
         failures.extend(failure for unit in self.processed for failure in unit.failures)
+        failures.extend(self.step_failures)
         return tuple(failures)
 
     def snapshot(self) -> dict[str, Any]:
@@ -3694,11 +3708,22 @@ _THINNED_WARNING = (
 
 def _say_how_to_read_fail_cases(entry: ListCut) -> str | None:
     """What a cut ``spec.fail_cases``, which has no next_cursor of its own,
-    says beside its flag: the call that reads the rest."""
-    if entry.next is None:
+    says beside its flag: the call that reads the rest, or why none does."""
+    if not entry.left_out:
         return None
     left = entry.total - entry.offset - entry.returned
+    if entry.next is None:
+        return _not_sent(entry, "failing case(s)")
     return f"{left} more failing case(s); read them with {_READ_ON}."
+
+
+def _not_sent(entry: ListCut, what: str) -> str:
+    """What a page left short with no cursor says beside its flag."""
+    left = entry.total - entry.offset - entry.returned
+    return (
+        f"{left} more {what} not sent, and no cursor reads them: the answer was not "
+        "kept (see stored_answer.not_kept)."
+    )
 
 
 def answer_caps(
@@ -3799,7 +3824,7 @@ def say_what_was_cut(
                 if isinstance(page, dict):
                     page = _owned(reply, holder)
                     page["returned"] = entry.returned
-                    page["truncated"] = entry.next is not None
+                    page["truncated"] = entry.left_out
                     if "next_cursor" in page or pointer.endswith(_PAGED[:2]):
                         page["next_cursor"] = entry.next
                     if pointer.endswith("/fail_cases/items"):
@@ -3808,6 +3833,8 @@ def say_what_was_cut(
                             page["hint"] = said
                         else:
                             page.pop("hint", None)
+                    elif entry.left_out and entry.next is None:
+                        page["hint"] = _not_sent(entry, "entries")
             elif keys[-2:-1] == ["value"] and keys[-1] in _SERIES_KEYS:
                 # A series thinned: said once on its recipe.
                 recipe = _owned(reply, join_pointer(keys[:2]))
@@ -3940,21 +3967,18 @@ class AttachedAnalysisNotRendered(ResultError):
 NOT_RENDERED_CODE: Final = AttachedAnalysisNotRendered.code
 
 _NOT_RENDERED = (
-    "The attached analysis was stored by an earlier release (no answer version "
-    "{version}); this release does not render it. Run analyze_results over the job "
-    "with the same recipes for its answer."
+    "The attached analysis was stored by an earlier release; this release does not "
+    "render it. Run analyze_results over the job with the same recipes for its answer."
 )
 
 
 def stored_analysis(stored: Any) -> StoredAnalysis:
     """The attached analysis a job's record holds, or
     :class:`AttachedAnalysisNotRendered` for one of another version."""
-    if (
-        analysis_snapshot.classify(stored) != "snapshot"
-        or stored.get("answer_version") != ANSWER_VERSION
-        or not isinstance(stored.get("answer"), dict)
+    if analysis_snapshot.classify(stored) != "snapshot" or not isinstance(
+        stored.get("answer"), dict
     ):
-        raise AttachedAnalysisNotRendered(_NOT_RENDERED.format(version=ANSWER_VERSION))
+        raise AttachedAnalysisNotRendered(_NOT_RENDERED)
     return StoredAnalysis(
         stored["answer"], dict(stored.get("snapshot") or {}), dict(stored.get("request") or {})
     )
@@ -4151,7 +4175,7 @@ def _discard_drifted(
 
 
 async def _publish_unit_artifacts(
-    processed: list[WorkUnit], pending: list[_PendingArtifact], deadline: float
+    processed: list[WorkUnit], pending: list[_PendingArtifact]
 ) -> None:
     """Publish every surviving artifact once and hand each record its handle.
 
@@ -4161,7 +4185,7 @@ async def _publish_unit_artifacts(
     that fails takes the temps with it and marks only the units that had one.
     """
     try:
-        handles = await _publish(pending, deadline)
+        handles = await _publish(pending)
     except (LTSpiceMCPError, OSError) as exc:
         await asyncio.to_thread(_remove_pending, pending)
         code = (
@@ -4327,30 +4351,36 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
         )
         all_pending = _discard_drifted(processed, all_pending, postcheck)
 
-    await _publish_unit_artifacts(processed, all_pending, postcheck_deadline)
+    await _publish_unit_artifacts(processed, all_pending)
 
     signals: dict[str, list[str]] | None = None
+    step_failures: list[Failure] = []
     if include.signals_available:
-        signals_deadline = call_deadline
         signals = {run.manifest_id: [] for run in runs}
-        for run in runs:
-            if loop.time() >= signals_deadline:
+        listed = [
+            run
+            for run in runs
+            if manifests[run.manifest_id].get("raw_present")
+            and run.manifest_id not in precheck
+            and run.manifest_id not in postcheck
+        ]
+        unread: list[_ResolvedRun] = []
+        for index, run in enumerate(listed):
+            if loop.time() >= call_deadline:
+                unread = listed[index:]
                 break
-            if (
-                not manifests[run.manifest_id].get("raw_present")
-                or run.manifest_id in precheck
-                or run.manifest_id in postcheck
-            ):
-                continue
             try:
-                with services.analysis_deadline(signals_deadline):
+                with services.analysis_deadline(call_deadline):
                     source = await _captured_source(run.source, state, captures, require_raw=True)
                     raw = await services.load_raw(source, state)
                 signals[run.manifest_id] = list(raw.get_trace_names())
             except AnalysisDeadlineExceeded:
+                unread = listed[index:]
                 break
             except LTSpiceMCPError:
                 continue
+        if unread:
+            step_failures.append(_signals_left_by_the_bound(unread, len(listed), budget_s))
 
     return AnalysisEvaluation(
         item=item,
@@ -4364,6 +4394,38 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
         signals=signals,
         argument_notes=tuple(args.argument_notes()),
         request=_request_digest(args),
+        step_failures=tuple(step_failures),
+    )
+
+
+def _signals_left_by_the_bound(
+    unread: Sequence[_ResolvedRun], listed: int, budget_s: float
+) -> Failure:
+    """The failure of a signal listing the call's bound ended: the sources
+    it did not read, and the call that reads them."""
+    labels = list(dict.fromkeys(run.label for run in unread))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(
+                _FAILURE_WHERE_CAP,
+                len(labels),
+                "sources",
+                "ask for the signals in a call of its own",
+            )
+            + ")"
+        )
+    return Failure(
+        code="analysis_deadline",
+        stage="signals",
+        where="signals_available",
+        message=(
+            f"The call's work bound ([analysis] analysis_budget_s, {budget_s:g} s) ended the "
+            f"signal listing before {len(unread)} of {listed} runs were read (sources "
+            f"{named}); signals_available lists only the runs read. Ask for the "
+            "signals in a call of its own."
+        ),
     )
 
 
@@ -4428,27 +4490,12 @@ async def capture_attached_analysis(
     return attached_analysis_record(answer, evaluation.snapshot(), _request_inputs(args))
 
 
-#: The version of the attached analysis a job's record holds: its complete
-#: answer, the snapshot it was computed from and its request. An earlier
-#: release stored a snapshot of its own assembly under the same store
-#: version, with no such field; :func:`stored_analysis` tells the two apart
-#: by this, never by the shape failing.
-ANSWER_VERSION: Final = 2
-
-
 def attached_analysis_record(
     answer: dict[str, Any], snapshot: dict[str, Any], request: dict[str, Any]
 ) -> dict[str, Any]:
-    """The attached analysis as a job's record holds it, at
-    :data:`ANSWER_VERSION`."""
-    return analysis_snapshot.envelope(
-        {
-            "answer_version": ANSWER_VERSION,
-            "answer": answer,
-            "snapshot": snapshot,
-            "request": request,
-        }
-    )
+    """The attached analysis as a job's record holds it, at the version
+    ``analysis_snapshot.envelope`` writes."""
+    return analysis_snapshot.envelope({"answer": answer, "snapshot": snapshot, "request": request})
 
 
 #: What a cursor whose stored answer is gone adds: how to get the answer again.

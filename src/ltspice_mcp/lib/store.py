@@ -299,9 +299,10 @@ def json_default(obj: Any) -> Any:
     raise TypeError(f"Not JSON-serializable: {type(obj).__name__}")
 
 
-def atomic_write_json(path: Path, data: Any) -> None:
-    """Atomically and durably write a store record."""
-    _atomic_write_json(path, data, default=json_default)
+def atomic_write_json(path: Path, data: Any, *, mtime: float | None = None) -> None:
+    """Atomically and durably write a store record, with ``mtime`` as its
+    modification time from the moment it appears at ``path``."""
+    _atomic_write_json(path, data, default=json_default, mtime=mtime)
 
 
 def envelope(kind: str, **payload: Any) -> dict[str, Any]:

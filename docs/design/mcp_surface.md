@@ -326,7 +326,12 @@ The Python API's automatic mode returns every row.
   costs more than its entries) is left whole, and a list that is over at one
   entry is held there while the next is cut. A reply is over its target only
   when the lists, each at the least the search cuts it to, are over it
-  together. A list declared
+  together. A larger target does not always give a larger reply: for lists
+  of whole entries at targets at or above that floor it gives one at most 40
+  estimated tokens smaller (`tests/test_presenter_fit_property.py`), but a
+  series is redrawn at the most points that fit, so a larger target can draw
+  it with fewer, and below the floor the note that says a reply is over its
+  target adds its own size. A list declared
   `never` is sent whole, and nothing inside a list's entries is cut apart from
   its entry: a list inside a row goes with the row. A reply that still does
   not fit goes out over the target.
@@ -358,7 +363,9 @@ A cut reply carries two fields, declared once in `tools/_base.py`:
   disk), the reply is still sent, cut as it would be: `stored_answer` holds
   only `not_kept` (`{code: "stored_answer_not_kept", message}`, saying why
   and to ask again with a larger budget, a narrower request or, for a
-  waveform, the CSV format), and no `cut` entry carries a cursor.
+  waveform, the CSV format), and no `cut` entry carries a cursor. Every page
+  object still says what it left out (`truncated`, with a `hint` saying no
+  cursor reads the rest), and every count stands.
 
 A stored answer's file has its expiry as its modification time, so deciding
 which have expired reads none of them. A cut reply sweeps the expired ones
@@ -679,7 +686,12 @@ them, with its caps, words and `rows_not_shown`, and stored, when cut, as an
 answer of `analyze_results`, whose cursors that tool reads with `continue`.
 Its inline `waveform` samples are thinned as a series (§1). Nothing the
 request asked to include is dropped, and no `budget_truncated` observation
-is made: a cut is said by `cut`.
+is made: a cut is said by `cut`. The job's record keeps it at a version
+(`analysis_snapshot.ANSWER_VERSION`); `analysis_snapshot.classify` alone
+says whether this build renders a stored analysis. One an earlier release
+stored is not rendered: the receipt, its status and its run rows answer as
+for any job, and `analysis.error` with an `attached_analysis_not_rendered`
+observation say to run `analyze_results` over the job.
 
 **Simulator choice.** `execution.simulator` names one of the four supported
 families, or a named executable of one (above); the schema's pattern accepts
@@ -1647,10 +1659,20 @@ answers, so a page reads the steps its first reply read.
   the limit leaves no time for fails alone with the same code (stage
   `deadline`), naming the fix: ask for it in a call of its own. The recipes
   evaluated before it are answered. The check after the reads always runs
-  (at least 50 ms), so nothing read is published unchecked. A repeat of a
+  (at least 50 ms), so nothing read is published unchecked; a source it
+  cannot confirm in time loses its rows, with `analysis_deadline`. A signal
+  listing the bound ends fails with `analysis_deadline` at stage `signals`,
+  naming the sources it did not read, and `signals_available` lists only the
+  runs read. Publishing the artifacts of answered recipes is outside the
+  bound, with a deadline of its own per file (`analyze.PUBLISH_DEADLINE_S`,
+  120 s), so the bound never loses a finished recipe's file. A repeat of a
   request writes to the same artifact paths; an artifact already published
   there with the same bytes is kept as it is, never replaced or reopened for
-  writing, so a file held open by another program does not fail the repeat. The result set the call
+  writing, so a file held open by another program does not fail the repeat;
+  when the comparison cannot finish, the file is replaced. A publish's temp
+  that could not be removed (on Windows, a digest that ran out of time can
+  still hold it) is removed by `result_store.cleanup` once it is
+  `STALE_PENDING_S` (6 hours) old: at startup and before every result set. The result set the call
   records (its request and source digests) names the folder its CSV and plot
   artifacts are written to; its id is a digest of what it records, so the
   same request over the same files gives the same id and the same bytes. A

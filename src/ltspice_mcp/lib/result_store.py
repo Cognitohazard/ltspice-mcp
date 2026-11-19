@@ -19,7 +19,7 @@ import shutil
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import now, parse_iso_datetime
@@ -199,10 +199,34 @@ def _delete_artifacts(working_dir: Path, result_set_id: str) -> None:
         shutil.rmtree(Store(working_dir).result_artifacts(result_set_id))
 
 
+#: How old, in seconds, a publish's temp (``.pending``) is when no publish
+#: can still be writing it: longer than any call's bound
+#: (``[analysis] analysis_budget_s``, at most an hour) and its publish.
+STALE_PENDING_S: Final = 6 * 3600.0
+
+
+def _sweep_stale_pending(working_dir: Path) -> None:
+    """Remove the temps a publish left behind: on Windows a digest that ran
+    out of time can still hold its temp open, so the publish's own unlink is
+    refused; once that thread is done, this sweep removes it."""
+    oldest = now().timestamp() - STALE_PENDING_S
+    try:
+        temps = list((result_root(working_dir) / "artifacts").glob("*/.*.pending"))
+    except OSError:
+        return
+    for temp in temps:
+        with contextlib.suppress(OSError):
+            if temp.stat().st_mtime <= oldest:
+                temp.unlink()
+
+
 # The stored answers beside these sets (lib/presenter.py) are swept by
 # presenter.cleanup: they depend on no job, so they expire by time alone.
 def cleanup(working_dir: Path) -> int:
-    """Delete expired raw-only sets and sets whose persisted source job vanished."""
+    """Delete expired raw-only sets and sets whose persisted source job
+    vanished, and the temps a publish left behind (:data:`STALE_PENDING_S`).
+    Runs when the server starts and before every result set is recorded."""
+    _sweep_stale_pending(working_dir)
     root = result_root(working_dir)
     removed = 0
     try:

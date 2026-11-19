@@ -82,6 +82,12 @@ class ListCut:
     offset: int = 0
     next: str | None = None
 
+    @property
+    def left_out(self) -> bool:
+        """Whether entries come after the ones held: what a page's
+        ``truncated`` says, with or without a cursor to read them."""
+        return self.offset + self.returned < self.total
+
     def as_reply(self) -> dict[str, Any]:
         """The ``cut`` entry a reply carries, without the fields that say
         nothing: no ``offset`` on a first reply, no ``next`` on the last page."""
@@ -102,9 +108,14 @@ class StoredAnswer:
     tool: str
     snapshot: dict[str, Any]
     answer: dict[str, Any] = field(repr=False)
+    #: Why the answer could not be written to ``path``, when it could not:
+    #: no cursor then reads it, and its reply says so.
+    not_kept: str | None = None
 
     def as_reply(self) -> dict[str, Any]:
         """The ``stored_answer`` field a reply carries."""
+        if self.not_kept is not None:
+            return {"not_kept": not_kept_note(self.not_kept)}
         return {"id": self.id, "path": str(self.path), "snapshot": self.snapshot}
 
 
@@ -479,7 +490,9 @@ def _sweep_if_due(store: Store) -> None:
 
 def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
     """Write ``stored`` to its file, with its expiry as the file's
-    modification time, after a sweep when one is due."""
+    modification time, after a sweep when one is due. The time is set on
+    the temp before the rename, so the file is never at its path with a
+    time a sweep reads as expired."""
     _sweep_if_due(store)
     created = now()
     expires = created + timedelta(hours=ttl_hours)
@@ -496,9 +509,8 @@ def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
             snapshot=stored.snapshot,
             answer=stored.answer,
         ),
+        mtime=expires.timestamp(),
     )
-    stamp = expires.timestamp()
-    os.utime(stored.path, (stamp, stamp))
 
 
 #: The code of the note a cut reply carries when its answer was not kept.
@@ -523,9 +535,10 @@ def _cursor(answer_id: str, pointer: str, offset: int) -> str:
     return _encode_body({"answer": answer_id, "list": pointer, "offset": offset})
 
 
-def stored_cursor(stored: StoredAnswer, pointer: str, offset: int) -> str:
-    """The cursor that reads the list at ``pointer`` of ``stored`` from ``offset``."""
-    return _cursor(stored.id, pointer, offset)
+def stored_cursor(stored: StoredAnswer, pointer: str, offset: int) -> str | None:
+    """The cursor that reads the list at ``pointer`` of ``stored`` from
+    ``offset``; None when the answer was not kept, so nothing reads it."""
+    return None if stored.not_kept is not None else _cursor(stored.id, pointer, offset)
 
 
 def record_cursor(record: Record, offset: int) -> str:
@@ -583,8 +596,6 @@ class _Placed:
 
     answer: Answer
     stored: StoredAnswer | None = None
-    #: Why the stored copy could not be written, when it could not.
-    not_kept: str | None = None
     records: dict[str, Record] = field(default_factory=dict)
     caps: dict[str, int] = field(default_factory=dict)
     apart: dict[str, int] = field(default_factory=dict)
@@ -792,11 +803,11 @@ def _present_lists(
         part = owners[pointer]
         if pointer in part.records:
             return record_cursor(part.records[pointer], end)
-        if part.not_kept is not None:
+        assert part.stored is not None, f"{pointer} is cut and is neither stored nor a record"
+        if part.stored.not_kept is not None:
             # No copy to read on from: the entry says how many it holds, and
             # the answer's stored_answer says why there is no cursor.
             return None
-        assert part.stored is not None, f"{pointer} is cut and is neither stored nor a record"
         return _cursor(part.stored.id, _relative(pointer, part.answer.root), end)
 
     def cuts(keep: Mapping[str, int]) -> dict[str, ListCut]:
@@ -839,8 +850,6 @@ def _present_lists(
             node["cut"] = {pointer: entry.as_reply() for pointer, entry in mine.items()}
             if part.stored is not None:
                 node["stored_answer"] = part.stored.as_reply()
-            elif part.not_kept is not None:
-                node["stored_answer"] = {"not_kept": not_kept_note(part.not_kept)}
             if part.answer.annotate is not None:
                 part.answer.annotate(
                     node,
@@ -1009,7 +1018,7 @@ def present_many(
                 _store_answer(store, part.stored, ttl_hours)
             except OSError as exc:
                 logger.warning("stored answer %s not kept: %s", part.stored.id, exc)
-                part.stored, part.not_kept = None, f"{type(exc).__name__}: {exc}"
+                part.stored = replace(part.stored, not_kept=f"{type(exc).__name__}: {exc}")
                 redo = True
         else:
             # Every list of this answer that is not a record went out whole.

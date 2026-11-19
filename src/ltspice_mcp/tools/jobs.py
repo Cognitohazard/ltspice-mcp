@@ -826,7 +826,7 @@ def _say_which_groups(
     if entry is None:
         return
     reply["returned"] = entry.returned
-    reply["truncated"] = entry.next is not None
+    reply["truncated"] = entry.left_out
     reply["next_cursor"] = entry.next
     said = [
         f"Circuit groups {entry.offset + 1} to {entry.offset + entry.returned} of {entry.total}."
