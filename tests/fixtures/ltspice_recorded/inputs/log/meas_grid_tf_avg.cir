@@ -3,6 +3,6 @@ V1 in 0 1
 R1 in out 1k
 R2 out 0 4k
 .tf V(out) V1
-.meas tf avg_v AVG V(out) FROM 0 TO 1
-.meas tf avg_f AVG V(out) FROM 2 TO 3
+.meas tf avg_v AVG transfer_function FROM 0 TO 1
+.meas tf avg_f AVG transfer_function FROM 2 TO 3
 .end

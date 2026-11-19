@@ -13,6 +13,7 @@ only falls.
 from __future__ import annotations
 
 import functools
+import re
 
 import pytest
 
@@ -36,11 +37,13 @@ GRIDS = grids()
 #: the same change. A new coordinate with no recording raises it, with a line
 #: below saying why.
 #:
-#: printed-measurement: the decks of behaviour log-meas-grid fill every
-#: coordinate but the .fra margins on XVII (raw/fra_step is recorded on
-#: LTspice 26 only), and wait for a recording run on Windows.
+#: printed-measurement: every coordinate has a cell. The decks of behaviour
+#: log-meas-grid fill all but the .fra margins on XVII (raw/fra_step is
+#: recorded on LTspice 26 only), and wait for a recording run on Windows. A
+#: coordinate a build fills only by refusing the deck for another card is not
+#: recorded.
 UNRECORDED: dict[str, dict[str, int]] = {
-    "printed-measurement": {"ltspice26": 468, "ltspice17": 467},
+    "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
 }
 
 
@@ -80,6 +83,8 @@ class TestGridIndex:
                     allowed = (*grid.axes[axis].values, grid.axes[axis].default)
                     assert value in allowed, f"{cell.id}: {axis}={value!r}"
                 grid.expected(cell, build)
+            unknown = set(cell.extra) - grid.item_keys
+            assert not unknown, f"{cell.id}: {sorted(unknown)} is neither an axis nor an item key"
 
     def test_every_coordinate_has_a_cell_and_none_is_excluded(self, key: str):
         """Every coordinate the grid requires has a cell, recorded or waiting
@@ -226,6 +231,14 @@ def test_a_measurement_cell_is_a_card_of_its_deck_as_it_declares(cell: Cell):
         assert name == name.upper() != name.lower(), cell.id
     elif at["name"] == "punctuation":
         assert any(char in name for char in ".-"), cell.id
+    # A coordinate an axis does not apply to is left out on purpose, never by
+    # a slip: a WHEN names its level, an AC result its complex format.
+    assert (at["level"] != "") == (at["form"] == "when"), cell.id
+    assert (at["complex_format"] != "") == (at["analysis"] == "ac"), cell.id
+    # An outcome in one step names the steps, and only such an outcome does.
+    for build in rec.BUILDS:
+        one_step = cell.at(build)["outcome"] in ("step_fails", "step_zero")
+        assert bool(cell.extra.get("steps")) == one_step, (cell.id, build)
 
 
 def test_every_card_of_a_measurement_deck_is_a_cell():
@@ -248,10 +261,26 @@ def test_every_card_of_a_measurement_deck_is_a_cell():
     assert all(OUTSIDE_THE_GRID.values())
 
 
+#: Lines that print a measurement, read here without the reader under test: a
+#: stepped table's heading, a FAIL'ed line, a line with a point or an interval,
+#: and a TRIG/TARG's line with no colon. A line with no clause (a PARAM's) is
+#: not told from a warning such as ``Warning: Pd = 0 is less than W.`` this
+#: way, so those are found by ``printed_measurements``.
+_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
+_PRINTED_LINES = (
+    re.compile(r"^Measurement: (\S+)\s*$", re.M),
+    re.compile(r"^Measurement \"([^\"]+)\" FAIL'ed", re.M),
+    re.compile(rf"^(\S+?): \S.*=.* (?:AT|at) {_NUMBER}\s*$", re.M),
+    re.compile(rf"^(\S+?): \S.*=.* FROM {_NUMBER} TO {_NUMBER}\s*$", re.M),
+    re.compile(rf"^([^\s:=]+)=\S+ FROM {_NUMBER} TO {_NUMBER}\s*$", re.M),
+)
+
+
 def test_every_recorded_log_that_prints_a_measurement_is_indexed():
     """A recorded log of any behaviour that prints a measurement has each of
     them in the grid, so the grid's test reads every printed measurement the
-    recordings hold."""
+    recordings hold. The lines are found both by the reader and by the
+    patterns above, so a line the reader misses is still found."""
     from ltspice_mcp.lib.log_parser import printed_measurements, read_log_text
 
     indexed = {(cell.case, cell.item.lower()) for cell in MEASUREMENTS.cells}
@@ -264,7 +293,10 @@ def test_every_recorded_log_that_prints_a_measurement_is_indexed():
             path = rec.recorded(build, log)
             if not path.stat().st_size:
                 continue
-            for name in printed_measurements(read_log_text(path)):
+            text = read_log_text(path)
+            names = set(printed_measurements(text))
+            names |= {name.lower() for p in _PRINTED_LINES for name in p.findall(text)}
+            for name in sorted(names):
                 if (case_id, name) not in indexed:
                     missing.append(f"{build}/{case_id}:{name}")
     assert not missing, missing

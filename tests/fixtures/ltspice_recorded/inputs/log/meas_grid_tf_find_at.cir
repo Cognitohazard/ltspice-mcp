@@ -3,6 +3,6 @@ V1 in 0 1
 R1 in out 1k
 R2 out 0 4k
 .tf V(out) V1
-.meas tf find_at_v FIND V(out) AT 1
-.meas tf find_at_f FIND V(out) AT 5
+.meas tf find_at_v FIND transfer_function AT 1
+.meas tf find_at_f FIND transfer_function AT 5
 .end

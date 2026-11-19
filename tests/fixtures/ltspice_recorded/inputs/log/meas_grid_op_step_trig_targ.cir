@@ -1,11 +1,9 @@
 * TRIG TARG in an operating point, stepped: a deck of its own, since a build may refuse the form there
 V1 in 0 1
 R1 in out 1k
-R2 out 0 4k
+R2 out 0 {4k*s}
 .step param s list 1 2
 .op
 .meas op trig_targ_v TRIG V(out) VAL=0.8 TARG V(out) VAL=0.8
 .meas op trig_targ_f TRIG V(out) VAL=0.8 TARG V(out) VAL=99
-.meas op trig_targ_sf TRIG V(out) VAL=0.8 TARG V(out) VAL={0.8*s}
-.meas op trig_targ_sz TRIG V(out) VAL=0.8 TARG V(out) VAL={0.8*(2-s)}
 .end

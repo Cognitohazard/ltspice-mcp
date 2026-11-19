@@ -3,6 +3,6 @@ V1 in 0 1
 R1 in out 1k
 R2 out 0 4k
 .tf V(out) V1
-.meas tf deriv_at_v DERIV V(out) AT 1
-.meas tf deriv_at_f DERIV V(out) AT 5
+.meas tf deriv_at_v DERIV transfer_function AT 1
+.meas tf deriv_at_f DERIV transfer_function AT 5
 .end

@@ -297,6 +297,7 @@ class _Printed:
     value: str | None = None
     point: str | None = None
     rows: tuple[str, ...] = ()
+    columns: tuple[str, ...] = ()
 
 
 def _printed(text: str, name: str) -> _Printed | None:
@@ -314,8 +315,11 @@ def _printed(text: str, name: str) -> _Printed | None:
                 if not row.strip() or not cells[0].isdigit():
                     break
                 rows.append(cells[1])
-            assert re.match(r"\s*step\t", lines[index + 1]), lines[index + 1]
-            found.append(_Printed("table", rows=tuple(rows)))
+            heading = re.match(r"\s*step\t(.*)$", lines[index + 1].rstrip())
+            assert heading, lines[index + 1]
+            found.append(
+                _Printed("table", rows=tuple(rows), columns=tuple(heading[1].split("\t")))
+            )
         elif match := re.fullmatch(
             rf"{escaped}=(\S+) FROM {_NUMBER} TO {_NUMBER}", line, re.IGNORECASE
         ):
@@ -358,7 +362,10 @@ def _expected(cell: Cell, build: str, shown: _Printed) -> Answer:
 
 
 def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
-    """The log shows the outcome the cell declares on ``build``."""
+    """The log shows the outcome the cell declares on ``build``: a failure
+    printed FAIL'ed; a result or a failure in one step printed in a table
+    that has the steps the cell names; and a table of a form whose result is
+    a point (a WHEN) holds that point alone, under a heading of one column."""
     at = cell.at(build)
     outcome = at["outcome"]
     steps = [step - 1 for step in cell.extra.get("steps", ())]
@@ -370,6 +377,10 @@ def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
     if shown.printed != "table":
         assert outcome == "value", (cell.id, build)
         return
+    assert shown.rows, (cell.id, build, "a table with no rows")
+    assert all(step < len(shown.rows) for step in steps), (cell.id, build, steps, shown.rows)
+    if GRID.expected(cell, build) == "point":
+        assert len(shown.columns) == 1, (cell.id, build, shown.columns)
     for step, row in enumerate(shown.rows):
         zero = row != "failed" and _printed_number(row, at.get("complex_format", "")) == 0
         if step not in steps:

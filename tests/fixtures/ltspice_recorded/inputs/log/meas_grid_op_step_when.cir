@@ -1,12 +1,10 @@
 * WHEN in an operating point, stepped: a deck of its own, since a build may refuse the form there
 V1 in 0 1
 R1 in out 1k
-R2 out 0 4k
+R2 out 0 {4k*s}
 .step param s list 1 2
 .op
 .meas op when_v WHEN V(out)=0.8
 .meas op when_f WHEN V(out)=99
-.meas op when_sf WHEN V(out)={0.8*s}
 .meas op param_f PARAM when_f*2
-.meas op param_sf PARAM when_sf*2
 .end

@@ -3,6 +3,6 @@ V1 in 0 1
 R1 in out 1k
 R2 out 0 4k
 .tf V(out) V1
-.meas tf trig_targ_v TRIG V(out) VAL=0.8 TARG V(out) VAL=0.8
-.meas tf trig_targ_f TRIG V(out) VAL=0.8 TARG V(out) VAL=99
+.meas tf trig_targ_v TRIG transfer_function VAL=0.8 TARG transfer_function VAL=0.8
+.meas tf trig_targ_f TRIG transfer_function VAL=0.8 TARG transfer_function VAL=99
 .end

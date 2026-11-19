@@ -56,13 +56,17 @@ class Exclusion:
 class Cell:
     """One item of one case, with its coordinates. ``on`` gives, per build,
     coordinates that differ there; ``refused`` names the builds that do not
-    take the item at all, with the reason. ``extra`` holds the grid's own keys."""
+    take the item at all, with the reason, and ``refused_itself`` those of
+    them that refuse it for what the item is. A build that refuses the item
+    only because another card stopped the deck fills no coordinate with it.
+    ``extra`` holds the grid's own keys (``item_keys``)."""
 
     case: str
     item: str
     coordinates: Mapping[str, str]
     on: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     refused: Mapping[str, str] = field(default_factory=dict)
+    refused_itself: frozenset[str] = frozenset()
     extra: Mapping[str, Any] = field(default_factory=dict)
 
     def at(self, build: str) -> dict[str, str]:
@@ -83,6 +87,7 @@ class Grid:
     groups: tuple[tuple[str, ...], ...]
     exclusions: tuple[Exclusion, ...]
     expect: Mapping[str, Mapping[str, Any]]
+    item_keys: frozenset[str]
     cells: tuple[Cell, ...]
 
     def required(self) -> Iterator[tuple[int, tuple[str, ...]]]:
@@ -97,7 +102,10 @@ class Grid:
 
     def covered(self, cell: Cell, build: str) -> Iterator[tuple[int, tuple[str, ...]]]:
         """The coordinates ``cell`` fills on ``build``: one per group whose axes
-        all apply to it."""
+        all apply to it, none where the build refused the deck for another
+        card."""
+        if build in cell.refused and build not in cell.refused_itself:
+            return
         at = cell.at(build)
         for index, group in enumerate(self.groups):
             values = tuple(at[axis] for axis in group)
@@ -161,8 +169,10 @@ def _grid(key: str, data: Mapping[str, Any]) -> Grid:
                     coordinates[axis] = value
             extra = {k: v for k, v in values.items() if k not in axes}
             refused: dict[str, str] = {**block.get("refused", {}), **own.get("refused", {})}
+            itself = frozenset(own.get("refused", {}))
+            on = _merge_on(block, own)
             for case in block["cases"]:
-                cells.append(Cell(case, item, coordinates, _merge_on(block, own), refused, extra))
+                cells.append(Cell(case, item, coordinates, on, refused, itself, extra))
     return Grid(
         key=key,
         question=data["question"],
@@ -174,6 +184,7 @@ def _grid(key: str, data: Mapping[str, Any]) -> Grid:
             for rule in data.get("exclude", ())
         ),
         expect={axis: dict(values) for axis, values in data.get("expect", {}).items()},
+        item_keys=frozenset(data.get("item_keys", ())),
         cells=tuple(cells),
     )
 
