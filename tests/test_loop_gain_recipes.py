@@ -356,7 +356,7 @@ async def test_every_recipe_that_reads_an_ac_signal_reads_every_form(
 
 def test_the_reader_reads_each_form_and_refuses_the_rest():
     def parts(signal: str) -> tuple[str | None, str | None, bool]:
-        expression = metrics.read_signal(signal)
+        expression = metrics.signal_expression(signal)
         return expression.numerator, expression.denominator, expression.negated
 
     assert parts("V(out)") == ("V(out)", None, False)
@@ -367,41 +367,52 @@ def test_the_reader_reads_each_form_and_refuses_the_rest():
     assert parts("-1/gain_1") == (None, "gain_1", True)
     for bad in ("-", "--V(out)", "V(a)/V(b)/V(c)", "V(out)/", "/V(out)", "V(a)/-V(b)", "1/1"):
         with pytest.raises(ResultError, match=r"Signal|ratio"):
-            metrics.read_signal(bad)
+            metrics.signal_expression(bad)
 
 
-#: Calls that read an operator in a string: a leading ``-`` or a ``/``.
+#: Code that reads a leading ``-`` or a ``/`` in a string, whatever it names.
 _OPERATOR_TESTS = re.compile(
     r"""\.(?:startswith|lstrip|removeprefix)\(\s*['"]-['"]"""
-    r"""|\.(?:split|partition|rpartition)\(\s*['"]/['"]"""
-    r"""|['"][-/]['"]\s+(?:not\s+)?in\s+\w*signal"""
-    r"""|\w*signal\w*\[0\]\s*==\s*['"]-['"]""",
+    r"""|\.(?:split|partition|rpartition|rsplit)\(\s*['"]/['"]"""
+    r"""|['"][-/]['"]\s+(?:not\s+)?in\s"""
+    r"""|\[0\]\s*==\s*['"]-['"]""",
 )
+
+#: The scopes that read such an operator in something that is not a signal,
+#: each with what it reads.
+_NOT_A_SIGNAL = {
+    "lib/metrics.py:signal_expression": "the one reader of a signal's operators",
+    "lib/export_nets.py:named_by_export": "a hierarchical net name's path",
+    "lib/pdk_native.py:_relative_identity": "a relative file path",
+    "lib/presenter.py:_segments": "a JSON pointer",
+    "lib/recovery_records.py:_strict_fields": "a JSON Schema reference",
+    "lib/reply_cuts.py:schema_lists.walk": "a JSON Schema reference",
+    "lib/symbol_library.py:spellings": "a symbol's library path",
+    "tools/_schema.py:_referenced_defs": "a JSON Schema reference",
+}
+
+
+def _operator_readers() -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for name, tree in _source_scan.modules().items():
+        for scope, nodes in _source_scan.scopes(tree):
+            for node in nodes:
+                if isinstance(node, ast.Call | ast.Compare):
+                    text = ast.unparse(node)
+                    if _OPERATOR_TESTS.search(text):
+                        found.setdefault(f"{name}:{scope}", []).append(text)
+    return found
 
 
 def test_only_the_reader_looks_for_an_operator_in_a_signal():
-    """No code but ``read_signal`` tests a signal for a leading ``-`` or
-    splits one at ``/``: a second reader would let one recipe read a form
-    another refuses, or read it differently."""
-    found = []
-    for name, tree in _source_scan.modules().items():
-        for scope, nodes in _source_scan.scopes(tree):
-            if (name, scope) == ("lib/metrics.py", "read_signal"):
-                continue
-            for node in nodes:
-                if not isinstance(node, ast.Call | ast.Compare):
-                    continue
-                text = ast.unparse(node)
-                if "signal" in text.lower() and _OPERATOR_TESTS.search(text):
-                    found.append(f"{name}:{scope}: {text}")
-    assert found == []
-    assert any(
-        _OPERATOR_TESTS.search(ast.unparse(node))
-        for scope, nodes in _source_scan.scopes(_source_scan.modules()["lib/metrics.py"])
-        if scope == "read_signal"
-        for node in nodes
-        if isinstance(node, ast.Call)
-    ), "the scan no longer recognises the reader's own tests"
+    """No code but ``signal_expression`` tests a string for a leading ``-``
+    or splits one at ``/``, except where the string is not a signal: a second
+    reader would let one recipe read a form another refuses, or read it
+    differently. A scope that reads these in something else is listed with
+    what it reads."""
+    found = _operator_readers()
+    assert sorted(set(found) - set(_NOT_A_SIGNAL)) == []
+    assert "lib/metrics.py:signal_expression" in found, "the scan no longer sees the reader"
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +527,65 @@ async def test_stability_on_an_ac_sweep_compares_with_nothing(
     raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
     (_,), made = await _stability(_through_tool, state_no_sim, {"path": str(raw)}, "-V(out)")
     assert made == []
+
+
+@ROUTES
+async def test_tone_of_a_ratio_warns_of_a_denominator_with_little_of_the_tone(
+    read: Reader, state_no_sim: SessionState, work_dir: Path
+):
+    t = np.linspace(0.0, 4e-3, 4001)
+    raw = work_dir / "faint.raw"
+    faint = 2.0 + 1e-5 * np.sin(2 * np.pi * 1e3 * t)
+    _write_tran(raw, t, {"V(out)": np.sin(2 * np.pi * 1e3 * t), "V(dc)": faint})
+    data = await read(
+        state_no_sim,
+        {
+            "sources": [{"path": str(raw), "label": "dut"}],
+            "recipes": [
+                {"key": "g", "metric": "tone", "signal": "V(out)/V(dc)", "frequency_hz": "1k"}
+            ],
+        },
+    )
+    (row,) = _rows(data, "g")
+    assert row["value"]["amplitude"] == pytest.approx(1e5, rel=1e-3)
+    assert any("little of it is at that frequency" in w for w in data["results"]["g"]["warnings"])
+
+
+def test_the_printed_margins_are_read_with_their_digits(tmp_path: Path):
+    """LTspice 26 prints an unstepped run's margin on one line and a stepped
+    run's in a table; each is read with the last digit it was printed to."""
+    plain = rec.decode_log("ltspice26", "raw/fra", tmp_path / "plain").value("fra_margins")
+    stepped = rec.decode_log("ltspice26", "raw/fra_step", tmp_path / "step").value("fra_margins")
+    assert plain == [
+        {
+            "analyzer": "@1",
+            "step": 0,
+            "crossover_hz": 15900.0,
+            "crossover_digit_hz": 1.0,
+            "phase_margin_deg": 90.6,
+            "phase_margin_digit_deg": pytest.approx(0.1),
+        }
+    ]
+    assert [(m["step"], m["crossover_hz"], m["phase_margin_deg"]) for m in stepped] == [
+        (0, 15900.4, 90.6295),
+        (1, 8007.62, 90.1991),
+    ]
+    assert [m["phase_margin_digit_deg"] for m in stepped] == pytest.approx([1e-4, 1e-4])
+    assert [m["crossover_digit_hz"] for m in stepped] == pytest.approx([0.1, 0.01])
+
+
+async def test_a_fit_description_stays_in_the_value(state_no_sim: SessionState, work_dir: Path):
+    """Only an observation that says whether a row answers what was asked is
+    lifted to the reply: ac_structure's description of its fit is not."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _through_tool(
+        state_no_sim,
+        {
+            "sources": [{"path": str(raw)}],
+            "recipes": [{"key": "s", "metric": "ac_structure", "signal": "V(out)"}],
+        },
+    )
+    assert all(item.get("kind") for item in data.get("observations", []))
+    assert not [
+        item for item in data.get("observations", []) if item.get("evidence", {}).get("recipe")
+    ]

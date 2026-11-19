@@ -34,7 +34,7 @@ from ltspice_mcp.lib.metrics import (
     parse_freq as _parse_freq,
 )
 from ltspice_mcp.lib.metrics import (
-    read_signal as _read_signal,
+    signal_expression as _read_signal,
 )
 from ltspice_mcp.lib.recipes import (
     AcStructureRecipe,

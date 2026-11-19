@@ -1723,6 +1723,13 @@ _RE_FRA_RESULT = re.compile(
     r"^FRA Instance (?P<analyzer>@\S+): F\(0dB\) = (?P<crossover>\d+(?:\.\d*)?) "
     r"(?P<prefix>[kMG]?)Hz, Phase Margin = (?P<margin>-?\d+(?:\.\d*)?) degrees"
 )
+#: A stepped run prints a table per analyzer instead (the recorded
+#: raw/fra_step): ``Measurement: PhaseMargin_1``, a ``step PhaseMargin at``
+#: heading, then one row a step, ``     1<TAB>90.6295°<TAB>15900.4``.
+_RE_FRA_TABLE = re.compile(r"^Measurement: PhaseMargin_(?P<analyzer>\S+)$")
+_RE_FRA_ROW = re.compile(
+    r"^(?P<step>\d+)\t(?P<margin>-?\d+(?:\.\d*)?)°\t(?P<crossover>\d+(?:\.\d*)?)$"
+)
 _SI_PREFIX = {"": 1.0, "k": 1e3, "M": 1e6, "G": 1e9}
 
 
@@ -1732,31 +1739,58 @@ def _last_digit(printed: str) -> float:
     return 10.0 ** -len(fraction) if dot else 1.0
 
 
-def printed_fra_margins(text: str) -> list[dict[str, Any]]:
-    """The crossover and phase margin LTspice printed for each analyzer of an
-    unstepped frequency response analysis, with the size of the last digit it
-    printed each to (``crossover_digit_hz``, ``phase_margin_digit_deg``).
+def _fra_margin(analyzer: str, step: int, crossover: str, scale: float, margin: str) -> dict:
+    return {
+        "analyzer": analyzer,
+        "step": step,
+        "crossover_hz": float(crossover) * scale,
+        "crossover_digit_hz": _last_digit(crossover) * scale,
+        "phase_margin_deg": float(margin),
+        "phase_margin_digit_deg": _last_digit(margin),
+    }
 
-    A stepped run prints its margins as measurement tables instead
-    (``PhaseMargin_<analyzer>``), which the measurements section holds. A line
-    in another form than the recorded one is not read, so its analyzer has no
-    entry and a comparison with it says it was not made.
+
+def printed_fra_margins(text: str) -> list[dict[str, Any]]:
+    """The crossover and phase margin LTspice printed for each analyzer and
+    step of a frequency response analysis, as printed: each with the size of
+    the last digit it was printed to (``crossover_digit_hz``,
+    ``phase_margin_digit_deg``), which is how far a value that agrees with it
+    can differ.
+
+    An unstepped run prints one line per analyzer (step 0); a stepped one a
+    ``PhaseMargin_<analyzer>`` table with a row a step, its ``at`` column the
+    crossover. A step whose margin is printed in another form (not a finite
+    number of degrees) has no entry, and neither has a line in another form
+    than the recorded one, so a comparison with it says it was not made.
     """
     found = []
-    for line in io.StringIO(text):
-        match = _RE_FRA_RESULT.match(line.strip())
-        if match is None:
+    table: str | None = None
+    for raw_line in io.StringIO(text):
+        line = raw_line.strip()
+        if (match := _RE_FRA_RESULT.match(line)) is not None:
+            found.append(
+                _fra_margin(
+                    match["analyzer"],
+                    0,
+                    match["crossover"],
+                    _SI_PREFIX[match["prefix"]],
+                    match["margin"],
+                )
+            )
             continue
-        scale = _SI_PREFIX[match["prefix"]]
-        found.append(
-            {
-                "analyzer": match["analyzer"],
-                "crossover_hz": float(match["crossover"]) * scale,
-                "crossover_digit_hz": _last_digit(match["crossover"]) * scale,
-                "phase_margin_deg": float(match["margin"]),
-                "phase_margin_digit_deg": _last_digit(match["margin"]),
-            }
-        )
+        if (match := _RE_FRA_TABLE.match(line)) is not None:
+            table = "@" + match["analyzer"]
+            continue
+        if table is None or not line or line.startswith("step\t"):
+            if not line:
+                table = None
+            continue
+        if (match := _RE_FRA_ROW.match(line)) is not None:
+            found.append(
+                _fra_margin(
+                    table, int(match["step"]) - 1, match["crossover"], 1.0, match["margin"]
+                )
+            )
     return found
 
 

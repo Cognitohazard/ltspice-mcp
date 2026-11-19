@@ -1799,18 +1799,25 @@ def _log_precision_observations(records: list[Record]) -> list[Observation]:
     ]
 
 
+#: The kinds of a value's observation that the reply carries at its top level.
+_LIFTED_KINDS = frozenset({"reconciliation", "coverage"})
+
+
 def _value_observations(key: str, records: list[Record]) -> list[Observation]:
-    """The observations a recipe's metric made of its rows' values (a
-    stability margin that is not the one LTspice printed, a structure fit),
-    each once, naming the recipe and every row it was made of.
+    """The observations a recipe's metric made of its rows' values that say
+    whether a row answers what was asked: a ``reconciliation`` (the answer is
+    not of the quantity asked about, such as a stability margin that is not
+    the one LTspice printed) or a ``coverage`` (a check that did not run). Each
+    is given once, naming the recipe and every row it was made of.
 
     A lean row leaves the lists of its value out, so this is where they reach
-    the reply.
+    the reply. A value's other observations (a fit's description, a relayed
+    log line the reply already relays) stay in the value.
     """
     grouped: dict[tuple[str, str, str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     for record in records:
         for item in record.value.get("observations") or []:
-            if not isinstance(item, Mapping):
+            if not isinstance(item, Mapping) or item.get("kind") not in _LIFTED_KINDS:
                 continue
             evidence = dict(item.get("evidence") or {})
             group = (

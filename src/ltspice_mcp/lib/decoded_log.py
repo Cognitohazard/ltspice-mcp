@@ -79,6 +79,7 @@ class _Fourier(_Record):
 
 class _FraMargin(_Record):
     analyzer: str
+    step: int = Field(ge=0)
     crossover_hz: float
     crossover_digit_hz: float
     phase_margin_deg: float

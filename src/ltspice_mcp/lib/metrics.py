@@ -533,7 +533,7 @@ class SignalExpression:
         ]
 
 
-def read_signal(signal: str) -> SignalExpression:
+def signal_expression(signal: str) -> SignalExpression:
     """Read a recipe's ``signal``: ``A``, ``A/B`` or ``1/A``, each optionally
     under one leading ``-`` that negates the whole expression. ``A`` and ``B``
     are signals as the raw names them (``V(out)``, ``V(inp,inn)``,
@@ -598,7 +598,7 @@ async def load_ac_signal(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load ``(freqs, H)`` for an AC signal. Rejects transient data.
 
-    ``signal`` is read by :func:`read_signal`: a single trace (``V(out)``), a
+    ``signal`` is read by :func:`signal_expression`: a single trace (``V(out)``), a
     transfer-function ratio of two traces (``V(out)/V(mid)``), whose two
     complex AC waves are divided element-wise, or a reciprocal (``1/V(out)``).
     A ratio is the way to express an inter-stage gain, loop gain or PSRR that
@@ -608,7 +608,7 @@ async def load_ac_signal(
     an inverting sense reads in its natural convention without a behavioral
     inverter node in the deck.
     """
-    expression = read_signal(signal)
+    expression = signal_expression(signal)
     raw = await services.load_raw(source, state)
     if not is_ac_analysis(raw):
         # show_hint=False: precise redirect; the generic hint would misdirect.
@@ -1903,6 +1903,11 @@ async def tone_frequency(
     )
 
 
+#: Below this share of its peak, a ratio's denominator carries little of the
+#: frequency read, and the reply says so.
+_SMALL_DENOMINATOR = 1e-3
+
+
 def _tone_phasor(value: Mapping[str, Any]) -> complex:
     """A tone as the complex amplitude of ``amplitude*sin(2*pi*f*t + phase)``:
     ``sin_component + j*cos_component``."""
@@ -1917,12 +1922,12 @@ async def tone(
 ) -> MetricValue:
     """Amplitude and phase of one frequency over the window's whole periods.
 
-    A ratio (``A/B``, ``1/A``, read by :func:`read_signal`) is the phasor of
+    A ratio (``A/B``, ``1/A``, read by :func:`signal_expression`) is the phasor of
     ``A`` divided by that of ``B``, both taken over the same whole periods of
     the same samples: the gain and phase shift from ``B`` to ``A`` at that
     frequency, with no ``dc``.
     """
-    expression = read_signal(recipe.signal)
+    expression = signal_expression(recipe.signal)
     frequency = await tone_frequency(source, recipe, step, state)
     t_start, t_end = window_bounds(recipe.window)
 
@@ -1963,6 +1968,14 @@ async def tone(
         if found is not None
         for warning in found.get("warnings", [])
     ]
+    if abs(den_phasor) < _SMALL_DENOMINATOR * den_peak:
+        warnings.append(
+            f"The denominator {expression.denominator} has an amplitude of "
+            f"{abs(den_phasor):.3g} at {frequency:g} Hz, {abs(den_phasor) / den_peak:.2g} of "
+            "its peak: little of it is at that frequency, so the ratio is that of a small "
+            "component and solver noise in it is magnified. Check that the run injects "
+            "this frequency into it."
+        )
     data = {
         "frequency_hz": den["frequency_hz"],
         "amplitude": abs(ratio),
@@ -1991,8 +2004,8 @@ def _wrapped_degrees(degrees: float) -> float:
 async def _ratio_unit(
     source: services.AnalysisSource, expression: SignalExpression, state: SessionState
 ) -> str | None:
-    """The unit of a ratio of two signals: none when both share one, else
-    ``num/den`` (``1/den`` for a reciprocal)."""
+    """The unit of a ratio of two signals: none when both share one or either
+    is not known, else ``num/den`` (``1/den`` for a reciprocal)."""
     units = []
     for operand in (expression.numerator, expression.denominator):
         found: MetricValue = {}
@@ -2000,10 +2013,10 @@ async def _ratio_unit(
             await _label_unit(source, operand, found, state)
         units.append(found.get("unit"))
     numerator_unit, denominator_unit = units
-    if expression.numerator is not None and numerator_unit == denominator_unit:
+    if denominator_unit is None or (expression.numerator is not None and numerator_unit is None):
+        return None  # an operand's unit is not known, so neither is the ratio's
+    if numerator_unit == denominator_unit:
         return None
-    if denominator_unit is None:
-        return numerator_unit
     return f"{numerator_unit or '1'}/{denominator_unit}"
 
 
@@ -2254,7 +2267,7 @@ async def stability(
     if raw.descriptor.analysis == "fra":
         check = await _fra_margin_check(
             source,
-            read_signal(recipe.signal),
+            signal_expression(recipe.signal),
             data,
             (freqs, h),
             step,
@@ -2269,16 +2282,6 @@ async def stability(
 #: An analyzer's gain trace in a frequency response analysis's results:
 #: ``gain_1`` for the analyzer ``@1`` (the recorded raw/fra).
 _FRA_GAIN_TRACE = re.compile(r"gain_(?P<analyzer>\S+)", re.IGNORECASE)
-#: How many significant digits LTspice 26 prints in a stepped run's margin
-#: table (``90.6295°`` at ``15900.4``, the recorded raw/fra_step).
-_FRA_TABLE_DIGITS = 6
-
-
-def _table_digit(value: float) -> float:
-    """One unit in the last digit of ``value`` printed to the table's digits."""
-    if value == 0 or not math.isfinite(value):
-        return 0.0
-    return 10.0 ** (math.floor(math.log10(abs(value))) - (_FRA_TABLE_DIGITS - 1))
 
 
 async def printed_fra_margin(
@@ -2286,55 +2289,34 @@ async def printed_fra_margin(
 ) -> tuple[dict[str, Any] | None, str]:
     """The crossover and phase margin LTspice printed for ``analyzer`` (``@1``)
     at ``step`` of a frequency response analysis, with the last printed digit
-    of each, or None and why there is none.
-
-    An unstepped run prints a line per analyzer (``printed_fra_margins``); a
-    stepped one a ``PhaseMargin_<n>`` measurement table whose ``at`` column is
-    the crossover. ``analyzer`` None takes the run's one analyzer, if it has
-    only one.
+    of each (``log_parser.printed_fra_margins``), or None and why there is
+    none. ``analyzer`` None takes the run's one analyzer, if it has only one.
     """
     try:
         logs = await services.load_logs(source, state)
-        lines = logs.value("fra_margins") or []
-        measured = (logs.value("measurements") or {}).get("measurements") or {}
+        printed = logs.value("fra_margins") or []
     except LTSpiceMCPError as e:
         return None, f"its log could not be read: {e}"
-    tables = {
-        "@" + name[len("phasemargin_") :]: entry
-        for name, entry in measured.items()
-        if name.lower().startswith("phasemargin_")
-    }
-    printed = {line["analyzer"].lower() for line in lines} | {name.lower() for name in tables}
+    analyzers = {entry["analyzer"].lower() for entry in printed}
     if analyzer is None:
-        if len(printed) != 1:
+        if len(analyzers) != 1:
             return None, "the signal names no analyzer's gain_N"
-        (wanted,) = printed
+        (wanted,) = analyzers
     else:
         wanted = analyzer.lower()
-    for line in lines:
-        if line["analyzer"].lower() == wanted and step == 0:
-            return line, ""
-    for name, entry in tables.items():
-        if name.lower() != wanted:
-            continue
-        values, at = entry.get("values") or [], entry.get("at")
-        crossover = at[step] if isinstance(at, list) and step < len(at) else None
-        margin = values[step] if step < len(values) else None
-        if crossover is None or margin is None:
-            return None, f"its log's PhaseMargin table holds no finite value for step {step}"
-        return {
-            "analyzer": name,
-            "crossover_hz": crossover,
-            "crossover_digit_hz": _table_digit(crossover),
-            "phase_margin_deg": margin,
-            "phase_margin_digit_deg": _table_digit(margin),
-        }, ""
+    for entry in printed:
+        if entry["analyzer"].lower() == wanted and entry["step"] == step:
+            return entry, ""
+    if wanted in analyzers:
+        return None, f"its log holds no finite margin printed for step {step}"
     return None, f"its log holds no margin printed for analyzer {analyzer or wanted}"
 
 
 def _agrees(stability: Mapping[str, Any], printed: Mapping[str, Any]) -> tuple[Any, Any, bool]:
     """The recipe's crossover and phase margin nearest the printed crossover,
-    and whether both are within half a printed digit of LTspice's."""
+    and whether both are within half a printed digit of LTspice's. The margins
+    are compared as angles, so one printed a turn away from the recipe's still
+    agrees."""
     margins = stability.get("phase_margins") or []
     if not margins:
         return None, None, False
@@ -2345,55 +2327,23 @@ def _agrees(stability: Mapping[str, Any], printed: Mapping[str, Any]) -> tuple[A
     # representation of a decimal that sits on the boundary.
     agrees = (
         abs(crossover - target) <= 0.505 * printed["crossover_digit_hz"]
-        and abs(margin - printed["phase_margin_deg"]) <= 0.505 * printed["phase_margin_digit_deg"]
+        and abs(math.remainder(margin - printed["phase_margin_deg"], 360.0))
+        <= 0.505 * printed["phase_margin_digit_deg"]
     )
     return crossover, margin, agrees
 
 
-async def _fra_margin_check(
-    source: services.AnalysisSource,
+def _agreeing_forms(
     expression: SignalExpression,
-    data: MetricValue,
     response: tuple[np.ndarray, np.ndarray],
-    step: int,
-    state: SessionState,
-    *,
+    printed: Mapping[str, Any],
     min_separation_decades: float,
-) -> dict[str, Any] | None:
-    """Whether ``stability`` read the loop gain LTspice measured.
-
-    An analyzer's ``gain_N`` is the loop gain, its negative, its reciprocal or
-    its negative reciprocal depending on which way the analyzer faces, and
-    which way it faces is not established from the results. LTspice prints its
-    own crossover and phase margin at the end of the log; a recipe margin that
-    differs from it beyond the printed digits is of another quantity, and the
-    observation says so, gives both and names the forms whose margin agrees.
-    None when the margins agree.
-    """
-    analyzers = {
-        f"@{match['analyzer']}"
-        for operand in expression.operands
-        if (match := _FRA_GAIN_TRACE.fullmatch(operand)) is not None
-    }
-    analyzer = next(iter(analyzers)) if len(analyzers) == 1 else None
-    printed, why = await printed_fra_margin(source, analyzer, step, state)
-    if printed is None:
-        return {
-            "code": "fra_margin_not_checked",
-            "kind": "coverage",
-            "detail": (
-                f"Not checked against LTspice: {why}, so whether {expression.text} is "
-                "the loop gain LTspice measured is not checked. Which of gain_N, "
-                "-gain_N, 1/gain_N and -1/gain_N is the loop gain depends on which way "
-                "the analyzer faces, which is not established from the results."
-            ),
-        }
-    crossover, margin, agrees = _agrees(data, printed)
-    if agrees:
-        return None
+) -> list[str]:
+    """The other three forms of ``expression`` (its negative, reciprocal and
+    negative reciprocal), computed from the response already read, whose
+    margin agrees with the printed one."""
     freqs, h = response
     agreeing = []
-    # The other three forms of the same expression, from the response read.
     for form, transform in zip(
         expression.forms()[1:], (lambda x: -x, lambda x: 1 / x, lambda x: -1 / x), strict=True
     ):
@@ -2409,6 +2359,52 @@ async def _fra_margin_check(
             continue
         if _agrees(other_data, printed)[2]:
             agreeing.append(form.text)
+    return agreeing
+
+
+async def _fra_margin_check(
+    source: services.AnalysisSource,
+    expression: SignalExpression,
+    data: MetricValue,
+    response: tuple[np.ndarray, np.ndarray],
+    step: int,
+    state: SessionState,
+    *,
+    min_separation_decades: float,
+) -> dict[str, Any] | None:
+    """Whether ``stability`` read the quantity whose margin LTspice printed.
+
+    Which form of ``gain_N`` is the loop gain the recipe takes is recorded for
+    one way of placing the analyzer only (raw/fra: ``-gain_1``), so it is not
+    established from the results. LTspice prints its own crossover and phase
+    margin in the log; a recipe margin that differs from it beyond the printed
+    digits is of another quantity, and the observation says so, gives both and
+    names the forms whose margin agrees. None when the margins agree.
+    """
+    analyzers = {
+        f"@{match['analyzer']}"
+        for operand in expression.operands
+        if (match := _FRA_GAIN_TRACE.fullmatch(operand)) is not None
+    }
+    analyzer = next(iter(analyzers)) if len(analyzers) == 1 else None
+    printed, why = await printed_fra_margin(source, analyzer, step, state)
+    if printed is None:
+        return {
+            "code": "fra_margin_not_checked",
+            "kind": "coverage",
+            "detail": (
+                f"Not checked against LTspice: {why}, so whether {expression.text} is "
+                "the quantity whose margin LTspice prints is not checked. Which form "
+                "of gain_N that is depends on how the analyzer is placed, which is not "
+                "established from the results."
+            ),
+        }
+    crossover, margin, agrees = _agrees(data, printed)
+    if agrees:
+        return None
+    agreeing = await asyncio.to_thread(
+        _agreeing_forms, expression, response, printed, min_separation_decades
+    )
     shown = {key: printed[key] for key in ("analyzer", "crossover_hz", "phase_margin_deg")}
     said = (
         f"LTspice printed a crossover of {printed['crossover_hz']:g} Hz and a phase margin "
@@ -2430,9 +2426,9 @@ async def _fra_margin_check(
         "kind": "reconciliation",
         "detail": (
             f"stability on {expression.text} gives {got}, but {said}. They differ beyond "
-            f"the printed digits, so {expression.text} is not the loop gain LTspice "
-            f"measured. {try_next} Which way the analyzer faces is not established "
-            "from the results; this comparison is the check."
+            f"the printed digits, so {expression.text} is not the quantity whose margin "
+            f"LTspice printed. {try_next} Which form of gain_N is the loop gain is not "
+            "established from the results; this comparison is the check."
         ),
         "evidence": {
             "found": {"crossover_hz": crossover, "phase_margin_deg": margin},

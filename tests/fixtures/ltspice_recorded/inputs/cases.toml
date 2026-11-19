@@ -703,8 +703,8 @@ model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
-summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "tools/analyze.py"]
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, the crossover and phase margin an unstepped run prints on one line per analyzer (FRA Instance @1: ...), and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py", "tools/analyze.py"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
 # frequencies an octave apart and a short settling time keep the run, and the
