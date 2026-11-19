@@ -163,11 +163,13 @@ from ltspice_mcp.lib.stored_values import (
     SHEET_UNREAD,
     SUMMARIES_SCHEMA,
     OtherReading,
+    SessionBuilds,
     StoredDeck,
     read_stored_deck,
     readings_of_sheet,
     readings_of_sites,
     summaries,
+    value_readings,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -1395,6 +1397,7 @@ def _value_suffix_findings(
     *,
     cp1252_reader: str | None,
     exported: bool = False,
+    builds: SessionBuilds | None = None,
 ) -> list[dict[str, Any]]:
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
@@ -1427,37 +1430,32 @@ def _value_suffix_findings(
     writer = export_writer(text)
     if cp1252_reader is None and writer and is_cp1252_ltspice_build(writer):
         cp1252_reader = writer
-    # Which micro signs the cp1252 reader reads otherwise is stored_values'
-    # answer, from the recordings of LTspice XVII.
-    misread = (
-        {}
-        if cp1252_reader is None
-        else {
-            (reading.line, reading.offset): reading
-            for reading in readings_of_sites(
-                [site for site in sites if site.micro], encoding, file=path
-            )
-            if reading.build == CP1252_BUILD
-        }
-    )
+    # Which builds read each micro sign otherwise is stored_values' answer,
+    # from the recordings; each value's finding gives its reading by every
+    # build the session may run (``builds``), and a value the cp1252 reader
+    # reads otherwise is a warning, as before.
+    by_site: dict[tuple[int, int], list[OtherReading]] = {}
+    for reading in readings_of_sites([site for site in sites if site.micro], encoding, file=path):
+        by_site.setdefault((reading.line, reading.offset), []).append(reading)
+    session = dict(builds or {})
     findings: list[dict[str, Any]] = []
     micro: list[ValueSuffixSite] = []
     for site in sites:
-        reading = misread.get((site.line, site.offset)) if site.micro else None
-        if site.micro and reading is None:
+        readings = by_site.get((site.line, site.offset), []) if site.micro else []
+        misread = cp1252_reader is not None and any(
+            reading.build == CP1252_BUILD for reading in readings
+        )
+        if site.micro and not misread:
             micro.append(site)
             continue
         evidence = value_suffix_evidence(site, generated_by=generated_by)
         evidence["card"] = site.card.body
         evidence["encoding"] = encoding
-        if reading is not None:
+        if misread:
             evidence["reader"] = cp1252_reader
-            evidence["read_otherwise"] = {
-                **reading.example(),
-                "build": reading.build,
-                "reading": "established" if reading.established else "not_established",
-                "evidence": list(reading.evidence),
-            }
+            evidence["read_otherwise"] = value_readings(
+                readings, {CP1252_BUILD: None, **session}
+            )
             rule_id, severity = "value_suffix_micro_sign", "warning"
         elif site.mojibake:
             rule_id, severity = "value_suffix_mojibake", rule_severity("value-suffix-mojibake")
@@ -1473,7 +1471,13 @@ def _value_suffix_findings(
             )
         )
     if micro and not exported:
-        findings.append(_micro_sign_observation(micro, path, encoding, generated_by))
+        observation = _micro_sign_observation(micro, path, encoding, generated_by)
+        stated = value_readings(
+            (r for site in micro for r in by_site.get((site.line, site.offset), [])), session
+        )
+        if stated:
+            observation["evidence"]["read_otherwise"] = stated
+        findings.append(observation)
     return findings
 
 
@@ -1486,6 +1490,7 @@ def _syntax_findings(
     cp1252_reader: str | None,
     family: str,
     definitions: DefinitionRule,
+    builds: SessionBuilds | None = None,
 ) -> list[dict[str, Any]]:
     """Directive, unreadable-card, element-arity, value-suffix, .meas angle
     and subcircuit-defined-twice findings in a netlist.
@@ -1543,7 +1548,9 @@ def _syntax_findings(
         for issue in validate_netlist_arity(deck.cards, simulator=simulator)
     )
     findings.extend(
-        _value_suffix_findings(deck.cards, path, text, encoding, cp1252_reader=cp1252_reader)
+        _value_suffix_findings(
+            deck.cards, path, text, encoding, cp1252_reader=cp1252_reader, builds=builds
+        )
     )
     if simulator == "LTspice":
         findings.extend(_meas_angle_findings(deck.cards, path))
@@ -2947,6 +2954,7 @@ async def evaluate_verify_circuit(
                 cp1252_reader=cp1252_reader,
                 family=family,
                 definitions=reader.subckt_rule,
+                builds=await asyncio.to_thread(session_ltspice_builds, state),
             )
         )
         checks_run.append("syntax")

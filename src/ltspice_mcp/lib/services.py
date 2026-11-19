@@ -1282,28 +1282,40 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     return found.evidence if found is not None and found.before_24 else None
 
 
-def session_ltspice_builds(state: SessionState) -> frozenset[str]:
-    """The recorded LTspice builds this session's LTspice executables stand
-    for, by the name ``stored_values`` gives them: its detected LTspice and
-    each named executable of the LTspice family. One that reads decks as
-    cp1252 (``cp1252_ltspice``) is read as LTspice XVII; any other as
-    LTspice 26, the recorded build of 24 and later. A session with no LTspice
-    runs none, so a reply states no build's reading to it.
+def session_ltspice_builds(state: SessionState) -> dict[str, str | None]:
+    """The recorded LTspice builds this session may run, by the name
+    ``stored_values`` gives them, each with the note a statement about it
+    carries: its detected LTspice and each named executable of the LTspice
+    family, identified as ``cp1252_ltspice`` identifies one
+    (``simulator_build.which_ltspice``, from the executable and the build its
+    latest run reported). One before 24 is LTspice XVII and a later one
+    LTspice 26, each with no note. One whose build nothing shows is not known
+    to read alike: it stands for every recorded build, with the note
+    ``stored_values.UNIDENTIFIED``. A session with no LTspice may run none, so
+    a reply states no build's reading to it.
 
     Blocking: identifying an executable may read its program file."""
-    builds: set[str] = set()
+    identified: set[str] = set()
+    unidentified = False
     # Keyed by family, and a named executable by its selector (ltspice:xvii),
     # as every other reader of the session's LTspice keys them.
     for selector, simulator in state.offered_simulators.items():
         if selector.partition(":")[0] != "ltspice":
             continue
         executable = executable_identity(simulator)
-        builds.add(
-            stored_values.CP1252_BUILD
-            if cp1252_ltspice(state, executable) is not None
-            else "LTspice 26"
-        )
-    return frozenset(builds)
+        program = executable.path if executable is not None else None
+        found = which_ltspice(program, None)
+        if found is None or not found.before_24:
+            found = which_ltspice(program, reported_build_of(state, executable)) or found
+        if found is None:
+            unidentified = True
+        else:
+            identified.add(stored_values.CP1252_BUILD if found.before_24 else "LTspice 26")
+    builds: dict[str, str | None] = dict.fromkeys(sorted(identified))
+    if unidentified:
+        for build in stored_values.BUILDS:
+            builds.setdefault(build, stored_values.UNIDENTIFIED)
+    return builds
 
 
 def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:

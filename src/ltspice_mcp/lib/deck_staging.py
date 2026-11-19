@@ -42,6 +42,7 @@ from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
     SHEET_UNREAD,
     OtherReading,
+    SessionBuilds,
     readings_of_cards,
     readings_of_sheet,
     summaries,
@@ -175,11 +176,11 @@ def _micro_fold_observation(
 
 
 def _read_otherwise_observations(
-    readings: Sequence[OtherReading], builds: Collection[str]
+    readings: Sequence[OtherReading], builds: SessionBuilds | None
 ) -> list[dict[str, Any]]:
     """The values of the run's source files that an LTspice build the session
     runs reads as another number than the run uses (``stored_values``): one
-    observation per file, build and kind of reading. The run reads each value
+    observation per build and kind of reading, over every staged file. The run reads each value
     as the server does, whatever the simulator, but the file opened in that
     build is another circuit, and a number drawn or checked from it here (a
     Monte Carlo nominal, a device's size) is not the one that build reads."""
@@ -192,7 +193,7 @@ def _read_otherwise_observations(
                 key: value for key, value in summary.items() if key not in ("code", "detail")
             },
         }
-        for summary in summaries(readings, builds)
+        for summary in summaries(readings, builds or {})
     ]
 
 
@@ -262,7 +263,7 @@ def stage_deck(
     simulator_roots: Sequence[Path] = (),
     compact_digests: Collection[str] = (),
     cp1252_reader: str | None = None,
-    stated_builds: Collection[str] = (),
+    stated_builds: SessionBuilds | None = None,
 ) -> StagedDeck:
     """Copy a primary deck, its include/lib closure and the data files it
     reads into ``staging_root``.
@@ -377,6 +378,8 @@ def stage_deck(
     processed_depths: dict[Path, int] = {}
     processing: set[Path] = set()
     observations: list[dict[str, Any]] = []
+    # The values of the staged files another build reads otherwise.
+    stated: list[OtherReading] = []
     # The data files read in place, each reported once.
     live_data: set[Path] = set()
     # The data references rewritten to an absolute path, for the LTspice note.
@@ -610,9 +613,9 @@ def stage_deck(
                 if of_sheet is None:
                     observations.append(_sheet_unread_observation(authored))
                 else:
-                    observations.extend(_read_otherwise_observations(of_sheet, stated_builds))
+                    stated.extend(of_sheet)
             else:
-                observations.extend(_read_otherwise_observations(readings, stated_builds))
+                stated.extend(readings)
             folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True
@@ -741,6 +744,9 @@ def stage_deck(
         return source_digests[resolved]
 
     staged_primary = snapshot_file(source, primary_destination, 0)
+    # Every staged file's readings, stated together: one observation per build
+    # and kind of reading, whatever the number of files and values.
+    observations.extend(_read_otherwise_observations(stated, stated_builds))
     primary_sha = next(
         entry.sha256 for entry in manifest if entry.path == source and entry.section is None
     )

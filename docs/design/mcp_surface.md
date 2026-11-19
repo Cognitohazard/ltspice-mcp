@@ -2285,8 +2285,8 @@ says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
 In either mode `values_read_otherwise` summarizes the values of each side's
-files that an LTspice build the session runs reads as another number than
-the comparison does, one summary per file and build (see
+files that an LTspice build the session may run reads as another number than
+the comparison does, one summary per build and kind of reading (see
 `inspect(kind="hierarchy")`). A reference given as text has no stored bytes
 and is summarized by nothing; a sheet is summarized by its own bytes.
 `structural_diff` reads no included file, and its `not_compared` says so.
@@ -3339,42 +3339,51 @@ reader's rules were established against ngspice for `hsa`, `kiltpsa` and the
 empty string (native SPICE mode).
 
 `data.values_read_otherwise` says which values of the files read an LTspice
-build this session runs reads as another number than the reply gives
+build this session may run reads as another number than the reply gives
 (`lib/stored_values.py`). The server reads a micro sign or a Greek mu at a
 value's suffix as micro, as a run through it does (staging spells it `u`).
 LTspice XVII decodes a deck stored as UTF-8, with or without a byte order
 mark, as 8-bit text, so it reads such a sign as two letters that are no scale
 and takes the bare number (`deck/micro_utf8`, `deck/micro_utf8_bom`,
-`deck/greek_mu_utf8`). The builds a session runs are its LTspice executables,
-the detected one and each named one (`services.session_ltspice_builds`): an
-executable that reads decks as cp1252 stands for LTspice XVII, any other for
-LTspice 26. A session with no LTspice is told nothing.
+`deck/greek_mu_utf8`). The builds a session may run are its LTspice
+executables, the detected one and each named one
+(`services.session_ltspice_builds`): one identified as before 24 is LTspice
+XVII, a later one LTspice 26, and one whose build nothing shows stands for
+every recorded build, each summary about it carrying the `note` that the
+session's build was not identified. A session with no LTspice is told
+nothing.
 
-The list holds one summary per file, build and kind of reading, whatever the
-number of values (code `value_read_otherwise`): the file, the codec the
-server decoded it as, the build, `reading` (`established`, or
-`not_established` where no recording shows the number that build takes),
-`count`, at most three `examples` (value, line, the server's number, the
-text the build reads, the number it takes), the recordings that show it, and
-`listed_by`, the call that lists every value (`verify_circuit` with the
-syntax check on a deck, `inspect(kind="components")` on a sheet). The number
-is established only for a two-terminal part's own value; a sign in braces, an
-instance parameter, a source function, a transistor's area or a directive,
-and a sign in an encoding no recording shows for that build (a Greek mu in
-UTF-16, UTF-16 big-endian, UTF-32), is `not_established`. The list is
-deck-level and is carried on every page, as `profile` and `inputs` are. The
-same list rides on `verify_circuit`'s and `edit_schematic`'s `comparison`,
-and on a run's receipt as one `value_read_otherwise` observation per summary.
+The list holds one summary per build and kind of reading (code
+`value_read_otherwise`), at most four whatever the number of files and
+values. A summary states its values completely by a `rule`, with no list:
+every value of the files read whose scale suffix is a micro sign, as a
+two-terminal part's own value (`reading: established`, where the recordings
+show the number the build takes), or in any other position or an encoding no
+recording shows for the build (`reading: not_established`). It gives the
+totals (`count` values in `files` files), at most three files in `by_file`,
+each with its codec, its count and at most three `examples` (value, line, the
+server's number, the text the build reads, the number it takes), and
+`files_not_listed`. A file's `listed_by` names the call that lists each of its
+values with the build's reading, `verify_circuit` with the syntax check, and
+is present only for a netlist that call checks: an included library or a
+sheet has none. The syntax check's micro-sign finding gives each value its
+reading by every build the session may run; its presence and severity are
+unchanged. The list is deck-level and is carried on every page, as `profile`
+and `inputs` are. The same list rides on `verify_circuit`'s and
+`edit_schematic`'s `comparison`, and on a run's receipt as one
+`value_read_otherwise` observation per summary, over every staged file.
 
 A sheet read as the server's export of it is stated by the sheet's own bytes,
 not the export's: the export is the server's file, and LTspice 26 writes a
 part's `u` as a micro sign there whatever the sheet says. A value counts where
-the server read the export's sign as micro and the sheet itself holds it with
-the sign. Both builds read a UTF-8 sheet byte by byte (`export/micro_utf8`,
-`export/greek_mu_utf8`) and a cp1252 or UTF-16 sheet's sign as micro
-(`export/micro_cp1252`, `export/micro_utf16le`). A sheet that cannot be read
-is listed under `values_read_otherwise_not_checked`, since an absent summary
-reads as checked.
+the server read the export's sign as micro and the sheet's own text for it,
+read by the sheet parser (the part's value attribute, or the directive; a
+comment is never a value), holds that value with the sign; it is stated at
+that text's line. Both builds read a UTF-8 sheet byte by byte
+(`export/micro_utf8`, `export/greek_mu_utf8`) and a cp1252 or UTF-16 sheet's
+sign as micro (`export/micro_cp1252`, `export/micro_utf16le`). A sheet that
+cannot be read is listed under `values_read_otherwise_not_checked`, since an
+absent summary reads as checked.
 
 When an ngspice executable is available, `data.ngspice_check` reports how the
 values discovery resolved compare with the ones ngspice reads
