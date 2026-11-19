@@ -898,21 +898,25 @@ class TestComputeMeasurementStats:
         assert entry["min_step_index"] == 2  # min at index 2
         assert entry["max_step_index"] == 1  # max at index 1
 
-    def test_with_failures(self):
+    def test_with_nulls_no_reason_comes_with(self):
+        """A null with no reason is not a failure: it is counted under
+        ``reason_not_given``."""
         meas = {"fc": [1000.0, None, 900.0, None, 1100.0]}
         result = compute_measurement_stats(meas)
         entry = result["fc"]
         assert entry["valid_count"] == 3
-        assert entry["failure_count"] == 2
+        assert entry["failure_count"] == 0
+        assert entry["no_number"] == {"reason_not_given": 2}
         assert entry["min_step_index"] == 2
         assert entry["max_step_index"] == 4
 
-    def test_all_failures(self):
+    def test_all_printed_failed(self):
         meas = {"fc": [None, None, None]}
-        result = compute_measurement_stats(meas)
+        result = compute_measurement_stats(meas, reasons={"fc": ["failed_measurements"] * 3})
         entry = result["fc"]
         assert entry["valid_count"] == 0
         assert entry["failure_count"] == 3
+        assert entry["no_number"] == {}
         assert entry["min"] is None
         assert entry["histogram"] == []
 

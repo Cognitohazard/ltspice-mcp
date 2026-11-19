@@ -168,7 +168,11 @@ from the log, parsed and with SI units. Each case's row contains it as
 `value.measured.vout_dc`. A null there is named by why:
 `value.failed_measurements` if LTspice printed the `.meas` failed, and
 `value.unreadable` if it printed something other than a finite number, which
-its reason quotes (`infdB`). On ngspice, measure the trace with a
+its reason quotes (`infdB`). A stepped run's row gives each name's
+statistics in `value.stats`: `failure_count` counts only the steps LTspice
+printed failed, and `no_number` counts each other step with no number under
+its reason, so a `not_established` count there makes `failure_count` a lower
+bound. On ngspice, measure the trace with a
 recipe instead (guide section 'ngspice'). An `assign` target must exist in the
 deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in

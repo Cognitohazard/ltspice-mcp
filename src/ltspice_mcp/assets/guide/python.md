@@ -266,7 +266,10 @@ Import these from `ltspice_mcp.api`. They take arrays and return dicts.
   `time_weighted_quantiles`, `analyze_edge`, `analyze_pulse_response`,
   `analyze_disturbance_response`, `analyze_timing_between`,
   `analyze_periodic`, `analyze_thd`, `analyze_tone`,
-  `compute_measurement_stats`.
+  `compute_measurement_stats`. Over the table `api.measurements()` returns,
+  give it `{name: result_numbers(entry)}` and `reasons={name:
+  no_number_reasons(table, name)}`, as the `measurements` recipe does; a
+  null given no reason is counted as `reason_not_given`, not as a failure.
 - AC: `prepare_ac_arrays`, `gain_at_frequencies`, `detect_crossings`,
   `find_crossings_any_quantity`, `compute_filter_metrics`,
   `compute_stability_metrics`, `compute_roll_off`, `compute_resonances`,
