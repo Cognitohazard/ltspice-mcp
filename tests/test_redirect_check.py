@@ -14,19 +14,24 @@ must still answer from what is on disk.
 from __future__ import annotations
 
 import ast
+import os
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.experiment_types import ExperimentJob
+    from ltspice_mcp.lib.pdk_native import ArtifactDigest
+
 import pytest
 
-from ltspice_mcp.lib.redirect import redirect_below, same_location
+from ltspice_mcp.lib.redirect import canonical, redirect_below, same_location, without_added_prefix
 from ltspice_mcp.lib.store import Store, parser_file_in
 from tests._source_scan import modules, scopes
-from tests.conftest import LIVENESS_S, symlink_or_skip
+from tests.conftest import LIVENESS_S, needs_controlled_startup, symlink_or_skip
 
 windows_only = pytest.mark.skipif(
     sys.platform != "win32",
@@ -41,40 +46,54 @@ def _between_lookups(
     *,
     found: bool,
     change: Callable[[], None],
+    on: Sequence[tuple[object, str]] = (),
+    must_make: bool = True,
 ) -> Iterator[None]:
-    """Run ``change`` on another thread right after the system's first final-path
-    lookup of a path named ``name`` that fails (``found=False``) or succeeds
-    (``found=True``), and hold that lookup until ``change`` is done.
+    """Run ``change`` on another thread right after the first lookup of a path
+    named ``name`` that fails (``found=False``) or succeeds (``found=True``),
+    and hold that lookup until ``change`` is done.
 
-    Every lookup still goes to the system; only the moment another thread acts
-    is chosen. When the code under test never makes such a lookup, ``change``
-    does not run: the code answered without asking the system the question
-    whose answer the window changes.
+    The lookups watched are the functions ``on`` names: by default the
+    system's final-path lookup that ``Path.resolve`` makes on Windows (the old
+    window), and ``os.stat`` and ``os.lstat`` for the lookups the redirect
+    checks make now. Every lookup still goes to the system; only the moment
+    another thread acts is chosen. When the code under test never makes such
+    a lookup, ``change`` does not run: the code answered without asking the
+    system the question whose answer the window changes. A window watched on
+    ``os.stat`` and ``os.lstat`` must be made, unless ``must_make`` is false:
+    the test fails otherwise.
     """
     import ntpath
 
-    real = ntpath._getfinalpathname  # pyright: ignore[reportAttributeAccessIssue]
+    watched = list(on) or [(ntpath, "_getfinalpathname")]
     asked = threading.Event()
     done = threading.Event()
     closing = threading.Event()
     failures: list[BaseException] = []
+    made: list[str] = []
 
-    def hold(path: str) -> None:
-        if asked.is_set() or ntpath.basename(path) != name:
+    def hold(path: object) -> None:
+        if asked.is_set() or not isinstance(path, (str, os.PathLike)):
+            return
+        if os.path.basename(os.fspath(path)) != name:
             return
         asked.set()
+        made.append(name)
         assert done.wait(LIVENESS_S), "the other thread never changed the folder"
 
-    def lookup(path: str) -> str:
-        try:
-            result = real(path)
-        except OSError:
-            if not found:
+    def watching(real: Callable[..., object]) -> Callable[..., object]:
+        def lookup(path: object, *args: object, **kwargs: object) -> object:
+            try:
+                result = real(path, *args, **kwargs)
+            except OSError:
+                if not found:
+                    hold(path)
+                raise
+            if found:
                 hold(path)
-            raise
-        if found:
-            hold(path)
-        return result
+            return result
+
+        return lookup
 
     def other() -> None:
         try:
@@ -85,7 +104,8 @@ def _between_lookups(
         finally:
             done.set()
 
-    monkeypatch.setattr(ntpath, "_getfinalpathname", lookup)
+    for owner, attribute in watched:
+        monkeypatch.setattr(owner, attribute, watching(getattr(owner, attribute)))
     thread = threading.Thread(target=other, name="folder-changer")
     thread.start()
     try:
@@ -97,6 +117,17 @@ def _between_lookups(
     assert not thread.is_alive()
     if failures:
         raise failures[0]
+    # The lookups a check makes now are watched to make the window on them, so
+    # a test that never made it would prove nothing about the race.
+    assert made or not on or not must_make, (
+        f"no lookup of {name!r} happened, so no window was made"
+    )
+
+
+#: The lookups the redirect checks make now: ``same_location`` follows links
+#: (``os.stat``), ``redirect_below`` looks at each part as it is (``os.lstat``).
+STAT = ((os, "stat"), (os, "lstat"))
+FOLLOWED = ((os, "stat"),)
 
 
 @windows_only
@@ -214,6 +245,253 @@ def test_ltspice_attempt_whose_folder_appears_between_the_two_lookups(
         controlled_ltspice.prepare_attempt_ini(template, path, tmp_path)
 
     assert path.is_file()
+
+
+# -- the checks as they are now, with the folder changed while they look ----
+#
+# The same windows, made on the lookups the checks make now (``os.stat`` and
+# ``os.lstat``), on every platform.
+
+
+def test_same_location_while_the_folder_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    symlink_or_skip(link, target, target_is_directory=True)
+    folder = target / "exp_a"
+
+    with _between_lookups(monkeypatch, "exp_a", found=False, change=folder.mkdir, on=STAT):
+        assert same_location(link / "exp_a", target / "exp_a")
+    assert same_location(folder, folder)
+
+
+def test_same_location_while_the_folder_vanishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    target = tmp_path / "target"
+    folder = target / "exp_a"
+    folder.mkdir(parents=True)
+    link = tmp_path / "link"
+    symlink_or_skip(link, target, target_is_directory=True)
+
+    with _between_lookups(monkeypatch, "exp_a", found=True, change=folder.rmdir, on=STAT):
+        assert same_location(link / "exp_a", target / "exp_a")
+
+
+def test_redirect_below_while_a_folder_appears_or_vanishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "root"
+    root.mkdir()
+    sub = root / "sub"
+
+    with _between_lookups(monkeypatch, "sub", found=False, change=sub.mkdir, on=STAT):
+        assert redirect_below(sub / "file", root) is None
+    assert sub.is_dir()
+    with _between_lookups(monkeypatch, "sub", found=True, change=sub.rmdir, on=STAT):
+        assert redirect_below(sub / "file", root) is None
+
+
+def test_parser_dir_while_its_folder_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    store = Store(tmp_path)
+    store.root.mkdir(parents=True)
+    parsing = store.root / "parsing"
+
+    with _between_lookups(monkeypatch, "parsing", found=False, change=parsing.mkdir, on=STAT):
+        directory = store.parser_dir("probe")
+
+    assert directory == canonical(store.root) / "parsing" / "probe"
+
+
+def test_parser_record_while_it_is_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    store = Store(tmp_path)
+    directory = store.parser_dir("records")
+    directory.mkdir(parents=True)
+    record = directory / "result.json"
+    record.write_bytes(b"{}")
+
+    with _between_lookups(monkeypatch, "result.json", found=True, change=record.unlink, on=STAT):
+        assert parser_file_in(directory, "result.json") == record
+
+
+def _job(tmp_path: Path, job_id: str) -> tuple[Path, ExperimentJob]:
+    from ltspice_mcp.lib import experiment_store
+    from tests.conftest import persist_experiment_record
+
+    circuit = tmp_path / "deck.cir"
+    circuit.write_text("* deck\n.end\n", encoding="utf-8")
+    path = persist_experiment_record(tmp_path, circuit, job_id)
+    job = experiment_store.load_job_from_path(path, tmp_path)
+    assert job is not None
+    return path, job
+
+
+def test_job_record_saved_while_it_is_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from ltspice_mcp.lib import experiment_store
+
+    path, job = _job(tmp_path, "exp_race")
+
+    with _between_lookups(monkeypatch, path.name, found=True, change=path.unlink, on=STAT):
+        saved = experiment_store.save_job(job)
+
+    assert saved.samefile(path)
+
+
+@pytest.mark.parametrize(
+    ("on", "must_make"),
+    [(STAT, True), (FOLLOWED, False)],
+    ids=["any-lookup", "followed-lookup"],
+)
+def test_job_record_read_while_its_folder_appears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    on: Sequence[tuple[object, str]],
+    must_make: bool,
+):
+    """A fresh store: a peer creates ``experiments`` while a job is looked up.
+    The window is made on the first lookup of the folder, and then on the
+    first lookup that follows links, which is where an answer that compared
+    which folders existed went wrong; one that compares the two spellings
+    first makes none."""
+    from ltspice_mcp.lib import experiment_store
+
+    store = Store(tmp_path)
+    store.root.mkdir(parents=True)
+    record = store.job_record("exp_zz")
+    folder = store.root / "experiments"
+
+    with _between_lookups(
+        monkeypatch, "experiments", found=False, change=folder.mkdir, on=on, must_make=must_make
+    ):
+        assert experiment_store.load_job_from_path(record, tmp_path) is None
+
+
+@pytest.mark.parametrize("found", [False, True], ids=["appears", "vanishes"])
+def test_lineage_dir_while_it_appears_or_vanishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, found: bool
+):
+    """The runs folder kept behind a link, so the recorded lineage folder is
+    spelled through the link and the expected one through its target."""
+    store = Store(tmp_path)
+    target = tmp_path / "canonical-runs"
+    target.mkdir()
+    runs = store.runs_root()
+    runs.parent.mkdir(parents=True)
+    symlink_or_skip(runs, target, target_is_directory=True)
+    recorded = store.run_dir("exp_race")
+    lineage = target / "exp_race"
+    if found:
+        lineage.mkdir()
+
+    change = lineage.rmdir if found else lineage.mkdir
+    with _between_lookups(monkeypatch, "exp_race", found=found, change=change, on=FOLLOWED):
+        assert store.lineage_run_dir("exp_race", recorded) == canonical(target) / "exp_race"
+
+
+def _attempt_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ArtifactDigest:
+    """A frozen LTspice settings template under ``tmp_path``, read as
+    ``test_controlled_ltspice`` reads it off Windows: the profile reader is
+    the Windows API, so the template's values are given there."""
+    from ltspice_mcp.lib import controlled_ltspice
+    from tests.test_controlled_ltspice import _QUERY, _template
+
+    template = _template(tmp_path)
+    monkeypatch.setattr("ltspice_mcp.lib.controlled_ltspice.time.time", lambda: _QUERY)
+    if sys.platform != "win32":
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            controlled_ltspice,
+            "_read_profile",
+            lambda path: {
+                ("options", "uuid"): "12345678901234567890",
+                ("options", "captureanalytics"): "false",
+                ("options", "lastwebupdatequery"): str(_QUERY),
+            },
+        )
+    return template
+
+
+def test_ltspice_attempt_while_its_folder_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from ltspice_mcp.lib import controlled_ltspice
+
+    template = _attempt_template(tmp_path, monkeypatch)
+    path = tmp_path / "startup" / "attempt-1" / "LTspice.ini"
+
+    with _between_lookups(
+        monkeypatch, "attempt-1", found=False, change=path.parent.mkdir, on=STAT
+    ):
+        controlled_ltspice.prepare_attempt_ini(template, path, tmp_path)
+
+    assert path.is_file()
+
+
+@needs_controlled_startup
+def test_ngspice_startup_while_its_folder_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from ltspice_mcp.lib.experiment_inputs import prepare_startup
+
+    store = Store(tmp_path)
+    store.run_dir("exp_root").mkdir(parents=True)
+    startup = store.run_dir("exp_root") / "startup"
+
+    with _between_lookups(monkeypatch, "startup", found=False, change=startup.mkdir, on=STAT):
+        prepare_startup(store, "exp_root")
+
+    assert store.recovery_spinit("exp_root").is_file()
+
+
+def test_a_store_spelled_with_parent_parts_after_a_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``..`` after a link is folded as the system folds it, for the parser
+    folder as for every other store path: the store is the one beside the
+    link's target."""
+    deep = tmp_path / "real" / "deep" / "w"
+    deep.mkdir(parents=True)
+    working = tmp_path / "w"
+    symlink_or_skip(working, deep, target_is_directory=True)
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", "../stores")
+    store = Store(working)
+
+    directory = store.parser_dir("p")
+
+    assert directory.parent == store.experiments_dir.parent / "parsing"
+    assert canonical(tmp_path / "real" / "deep" / "stores") in directory.parents
+
+
+def test_a_link_between_a_path_and_its_root_is_seen(tmp_path: Path):
+    """A link below the root that leads back above it: the root is met again
+    below the link, and the link is still what redirects."""
+    root = tmp_path / "root"
+    root.mkdir()
+    symlink_or_skip(root / "a", tmp_path, target_is_directory=True)
+
+    assert redirect_below(root / "a" / "root" / "x", root) == root / "a"
+
+
+@pytest.mark.parametrize(
+    ("spelled", "resolved", "expected"),
+    [
+        ("C:\\w\\x", "\\\\?\\C:\\w\\x", "C:\\w\\x"),
+        ("\\\\server\\share\\x", "\\\\?\\UNC\\server\\share\\x", "\\\\server\\share\\x"),
+        ("\\\\?\\C:\\w", "\\\\?\\C:\\w", "\\\\?\\C:\\w"),
+        ("C:\\w", "\\\\?\\Volume{1}\\w", "\\\\?\\Volume{1}\\w"),
+        ("/w/x", "/w/x", "/w/x"),
+    ],
+)
+def test_a_resolved_spelling_carries_no_prefix_the_input_did_not(
+    spelled: str, resolved: str, expected: str
+):
+    assert without_added_prefix(spelled, resolved) == expected
+
+
+@windows_only
+def test_canonical_while_a_folder_appears_between_the_two_lookups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    parent = tmp_path / "parsing"
+
+    with _between_lookups(monkeypatch, "probe", found=False, change=parent.mkdir):
+        spelled = canonical(parent / "probe")
+
+    assert spelled == canonical(tmp_path) / "parsing" / "probe"
 
 
 # -- a path that does redirect is still refused ------------------------------
@@ -369,6 +647,8 @@ def test_every_check_refuses_a_link_in_its_path(tmp_path: Path, kind: str):
     _LINKS[kind](path, elsewhere)
     with pytest.raises(ValueError, match="not contained"):
         experiment_store.save_job(job)
+    with pytest.raises(ValueError, match="outside the working store"):
+        experiment_store.load_job_from_path(path, tmp_path)
 
 
 @pytest.mark.parametrize("kind", sorted(_LINKS))
@@ -406,87 +686,153 @@ def test_an_ltspice_attempt_through_a_link_is_refused(
 
 # -- the guard ---------------------------------------------------------------
 
-#: Every comparison in the package with a ``resolve()`` result on one side,
-#: with why it is not a redirect check. A new one fails the test below: ask
-#: ``redirect.redirect_below`` whether a path redirects, and
-#: ``redirect.same_location`` whether two paths are one place.
-_RESOLVED_COMPARISONS_ALLOWED = {
-    # Whether a relative include already reaches its staged file, so its text
-    # can stay as written. A false "no" rewrites it to a path that reaches the
-    # same file, so a wrong answer costs a rewrite, never a wrong file.
-    ("lib/deck_staging.py", "expected != actual_destination.resolve()"),
-    # Two spellings of a staged source and its recorded edit, both files that
-    # exist and that no other thread changes: which file an edit belongs to.
+# Why each comparison of a resolved path below is not a redirect check.
+_SOURCE_KEYS = (
+    "keys files that exist and that this call reads, by their resolved name, to "
+    "tell one from another (a visited set, a digest by file, the staged copy of "
+    "a source); a missed match costs a duplicate entry or a rewrite of a path "
+    "that reaches the same file, never a redirect let through"
+)
+_EXISTING_CONTAINMENT = (
+    "follows links on purpose to check that a file that must exist lands in its "
+    "folder; the read that follows fails anyway if the file is removed at that "
+    "moment"
+)
+_NOT_A_PATH = "a name bound to a resolved path in the same function, compared as something else"
+_SANDBOX = "the sandbox: where a caller's path lands, links followed on purpose"
+
+#: Every comparison in the package with a resolved path on one side, with why
+#: it is not a redirect check. A new one fails the test below: ask
+#: ``redirect.redirect_below`` whether a path redirects,
+#: ``redirect.same_location`` whether two paths are one place, and spell a
+#: store folder with ``redirect.canonical``.
+_RESOLVED_COMPARISONS_ALLOWED: dict[tuple[str, str], str] = {
+    (
+        "lib/controlled_ngspice.py",
+        "driver.path.resolve(strict=True).is_relative_to(root.resolve(strict=True))",
+    ): _EXISTING_CONTAINMENT,
+    ("lib/experiment_inputs.py", "resolved.is_relative_to(resolved_root)"): _EXISTING_CONTAINMENT,
+    ("lib/experiment_runner.py", "copied.is_relative_to(root)"): _EXISTING_CONTAINMENT,
+    ("lib/pdk_native.py", "path.is_relative_to(cwd)"): _EXISTING_CONTAINMENT,
+    ("lib/pathutil.py", "resolved.is_relative_to(allowed_dir.resolve())"): _SANDBOX,
+    ("lib/deck_staging.py", "entry.path == source"): _SOURCE_KEYS,
+    ("lib/deck_staging.py", "expected != actual_destination.resolve()"): _SOURCE_KEYS,
+    ("lib/deck_staging.py", "owner != resolved"): _SOURCE_KEYS,
+    ("lib/deck_staging.py", "path != source"): _SOURCE_KEYS,
+    ("lib/deck_staging.py", "resolved == source"): _SOURCE_KEYS,
+    ("lib/deck_staging.py", "resolved in processing"): _SOURCE_KEYS,
+    ("lib/deck_staging.py", "source != authored"): _SOURCE_KEYS,
+    ("lib/experiment_inputs.py", "path.resolve() in data"): _SOURCE_KEYS,
+    ("lib/experiment_inputs.py", "resolved in spice"): _SOURCE_KEYS,
+    ("lib/experiment_inputs.py", "resolved not in by_digest"): _SOURCE_KEYS,
+    ("lib/experiment_inputs.py", "target not in inventory"): _SOURCE_KEYS,
+    ("lib/experiment_store.py", "circuit in seen"): _SOURCE_KEYS,
+    ("lib/instance_targeting.py", "candidate in by_path"): _SOURCE_KEYS,
+    ("lib/instance_targeting.py", "candidate.resolve() in by_path"): _SOURCE_KEYS,
+    ("lib/instance_targeting.py", "p.resolve() in self.original"): _SOURCE_KEYS,
+    ("lib/instance_targeting.py", "target not in self.original"): _SOURCE_KEYS,
+    ("lib/job_registry.py", "resolved in self._loaded_circuits"): _SOURCE_KEYS,
+    ("lib/lint_rules.py", "(resolved, reference.section) in visited"): _SOURCE_KEYS,
+    ("lib/lint_rules.py", "resolved in snapshot"): _SOURCE_KEYS,
     (
         "lib/native_inputs.py",
         "Path(origin.path).resolve() != files[edit.file_index].resolve()",
-    ),
-    ("lib/native_inputs.py", "item.path == variant.path.resolve()"),
-    # A lookup by a resolved key, compared with a digest, not with a path.
-    ("lib/native_inputs.py", "expected.get(variant.path.resolve()) != variant.sha256"),
-    # Deck staging names each source by its strict resolve (a file that
-    # exists and that staging reads, never one being created or removed), and
-    # these ask whether two such names are one source: whether the deck was
-    # exported from another, which source a staged copy came from, and
-    # whether two sources would land on one staged name.
-    ("lib/deck_staging.py", "source != authored"),
-    ("lib/deck_staging.py", "owner != resolved"),
-    ("lib/deck_staging.py", "resolved == source"),
-    ("lib/deck_staging.py", "entry.path == source"),
-    ("lib/deck_staging.py", "path != source"),
-    # Native inputs: which original capture a staged file came from, and
-    # whether a dependency is the root deck: keys of resolved names and
-    # identity digests, of files that exist, not a redirect check.
-    ("lib/native_inputs.py", "previous != original"),
-    ("lib/native_inputs.py", "identity == root_identity"),
-    # Whether two staged dependencies are one file: a count, not a location.
-    ("lib/pdk_native.py", "len(set(dependency_paths)) != len(dependency_paths)"),
-    # The recent-circuits list, keyed by a circuit's resolved name; a
-    # mismatch keeps a duplicate entry, never a wrong file.
-    ("lib/recent.py", "e.get('path') != resolved"),
-    # Whether a path lies on a WSL drive mount: the form of a path.
-    ("lib/wsl.py", "parts[0] == '/'"),
-    ("lib/wsl.py", "parts[1] == 'mnt'"),
-    ("lib/wsl.py", "len(parts[2]) == 1"),
-    # Which of a circuit's jobs ran it: both sides name a circuit file that
-    # exists, so neither is being created or removed by the server meanwhile.
+    ): _SOURCE_KEYS,
+    (
+        "lib/native_inputs.py",
+        "expected.get(variant.path.resolve()) != variant.sha256",
+    ): _SOURCE_KEYS,
+    ("lib/native_inputs.py", "identity == root_identity"): _SOURCE_KEYS,
+    ("lib/native_inputs.py", "item.path == variant.path.resolve()"): _SOURCE_KEYS,
+    ("lib/native_inputs.py", "path not in self.cards"): _SOURCE_KEYS,
+    ("lib/native_inputs.py", "previous != original"): _SOURCE_KEYS,
+    ("lib/pdk_native.py", "len(set(dependency_paths)) != len(dependency_paths)"): _SOURCE_KEYS,
+    ("lib/recent.py", "e.get('path') != resolved"): _SOURCE_KEYS,
+    ("lib/runner_base.py", "(key, selected) in seen"): _SOURCE_KEYS,
+    ("lib/simulator.py", "resolved not in found"): _SOURCE_KEYS,
+    ("lib/variations.py", "source in written"): _SOURCE_KEYS,
+    ("lib/variations.py", "case.circuit_id != circuit.circuit_id"): _NOT_A_PATH,
+    ("lib/variations.py", "circuit.path.suffix.lower() in RUN_DECK_SUFFIXES"): _NOT_A_PATH,
+    ("lib/wsl.py", "len(parts[2]) == 1"): _NOT_A_PATH,
+    ("lib/wsl.py", "parts[0] == '/'"): _NOT_A_PATH,
+    ("lib/wsl.py", "parts[1] == 'mnt'"): _NOT_A_PATH,
     (
         "tools/jobs.py",
         "(source.path.resolve() if source.path.exists() else source.path) == resolved_circuit",
-    ),
+    ): _SOURCE_KEYS,
+    ("tools/jobs.py", "key in seen"): _SOURCE_KEYS,
 }
+
+#: Calls whose result is a resolved path.
+_RESOLVING_METHODS = {"resolve", "realpath"}
+_RESOLVING_FUNCTIONS = {"realpath", "canonical", "_resolved"}
 
 
 def _resolves(node: ast.AST, names: set[str]) -> bool:
-    """Whether ``node`` holds a ``resolve()`` call, or a name bound to one."""
-    return any(
-        (
-            isinstance(inner, ast.Call)
-            and isinstance(inner.func, ast.Attribute)
-            and inner.func.attr == "resolve"
-        )
-        or (isinstance(inner, ast.Name) and inner.id in names)
-        for inner in ast.walk(node)
-    )
+    """Whether ``node`` holds a call that resolves a path, or a name bound to one."""
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Call):
+            func = inner.func
+            if isinstance(func, ast.Attribute) and func.attr in _RESOLVING_METHODS:
+                return True
+            if isinstance(func, ast.Name) and func.id in _RESOLVING_FUNCTIONS:
+                return True
+        if isinstance(inner, ast.Name) and inner.id in names:
+            return True
+    return False
 
 
-def test_no_check_compares_the_text_of_a_resolved_path():
-    """Every ``==`` or ``!=`` with a ``resolve()`` result on one side, called
-    there or bound to a name earlier in the same function."""
+def _bound(target: ast.AST) -> list[str]:
+    return [node.id for node in ast.walk(target) if isinstance(node, ast.Name)]
+
+
+def _resolved_comparisons() -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for module, tree in modules().items():
+        if module == "lib/redirect.py":
+            continue
         for _scope, nodes in scopes(tree):
             names: set[str] = set()
             for node in nodes:
-                if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    if _resolves(node.value, set()):
-                        names.update(t.id for t in targets if isinstance(t, ast.Name))
-            for node in nodes:
-                if (
-                    isinstance(node, ast.Compare)
-                    and all(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops)
-                    and any(_resolves(side, names) for side in [node.left, *node.comparators])
+                if isinstance(node, ast.Assign) and _resolves(node.value, set()):
+                    for target in node.targets:
+                        names.update(_bound(target))
+                elif (
+                    isinstance(node, (ast.AnnAssign, ast.NamedExpr))
+                    and node.value is not None
+                    and _resolves(node.value, set())
                 ):
+                    names.update(_bound(node.target))
+            for node in nodes:
+                if isinstance(node, ast.Compare) and all(
+                    isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)) for op in node.ops
+                ):
+                    hit = any(_resolves(side, names) for side in [node.left, *node.comparators])
+                elif (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "is_relative_to"
+                ):
+                    hit = _resolves(node.func.value, names) or any(
+                        _resolves(arg, names) for arg in node.args
+                    )
+                else:
+                    hit = False
+                if hit:
                     found.add((module, ast.unparse(node)))
-    assert found == _RESOLVED_COMPARISONS_ALLOWED
+    return found
+
+
+def test_no_check_compares_the_text_of_a_resolved_path():
+    """Every ``==``, ``!=``, ``in``, ``not in`` and ``is_relative_to`` with a
+    resolved path on one side: a call to ``resolve``, ``realpath``,
+    ``canonical`` or ``_resolved`` there, or a name bound to one earlier in
+    the same function (by an assignment, a tuple unpacking or ``:=``).
+
+    A scan cannot see a resolved value that reaches the comparison through a
+    function's result, an attribute or a property. Those are kept safe by
+    taking every store folder's spelling from ``redirect.canonical``, which
+    gives one spelling whatever a peer creates or removes meanwhile, and by
+    asking ``redirect_below`` and ``same_location`` instead of comparing.
+    ``redirect.py`` itself is not scanned: it is where these answers live."""
+    assert _resolved_comparisons() == set(_RESOLVED_COMPARISONS_ALLOWED)

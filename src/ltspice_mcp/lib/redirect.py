@@ -116,3 +116,36 @@ def same_location(first: Path, second: Path) -> bool:
     if first_info is None or second_info is None or first_info.st_ino == 0:
         return first == second
     return first_tail == second_tail and os.path.samestat(first_info, second_info)
+
+
+_PREFIX = "\\\\?\\"
+_UNC_PREFIX = "\\\\?\\UNC\\"
+
+
+def without_added_prefix(spelled: str, resolved: str) -> str:
+    """``resolved`` without a ``\\\\?\\`` prefix that ``spelled`` did not carry,
+    as ``ntpath.realpath`` returns it when no other thread changes the path
+    while it asks: a drive path loses the prefix, a UNC path takes ``\\\\``
+    back, and a volume GUID path, which has no other spelling, keeps it."""
+    if spelled.startswith(_PREFIX) or not resolved.startswith(_PREFIX):
+        return resolved
+    if resolved.startswith(_UNC_PREFIX):
+        return "\\\\" + resolved[len(_UNC_PREFIX) :]
+    rest = resolved[len(_PREFIX) :]
+    if rest[1:3] == ":\\":
+        return rest
+    return resolved
+
+
+def canonical(path: Path) -> Path:
+    """The one spelling of ``path``: absolute, with links followed and ``..``
+    parts folded after them as the system folds them, and on Windows short
+    names expanded for the folders that exist. Made the same way whether or
+    not another thread creates, removes or replaces a part of it meanwhile:
+    it never carries a ``\\\\?\\`` prefix the input did not have. A path that
+    cannot be resolved (a link loop) is made absolute by its spelling."""
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return Path(os.path.abspath(path))
+    return Path(without_added_prefix(os.fspath(path), os.fspath(resolved)))
