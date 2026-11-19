@@ -6,9 +6,9 @@ index matches it.
 
 Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 `api.guide("<name>")` in Python. A pointer elsewhere such as
-"guide section 'signals'" names one of them; one that adds "heading '<text>'"
-names one part of it, which `"heading"` (`api.guide(name, heading=...)`)
-returns alone.
+"guide section 'signals'" names one of them, and "heading '<text>'" one part,
+which `"heading"` (`api.guide(name, heading=...)`) returns alone; an unknown
+heading is refused, listing the section's headings.
 
 ## How to work
 
