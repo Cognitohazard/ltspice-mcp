@@ -1079,7 +1079,7 @@ async def summary(
                 cards=cards,
                 # Whether the log's measurements can be read is the run
                 # row's answer, so the summary gives the same reason.
-                measurements_unread=services.source_measurements_unread(source, logs),
+                measurements_unread=services.source_measurements_unread(source, logs, producer),
             ),
         )
     except ResultError:

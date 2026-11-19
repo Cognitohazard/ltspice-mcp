@@ -286,10 +286,15 @@ def measurements_unread(logs: DecodedLog | None, family: str | None) -> str | No
     return None
 
 
-def source_measurements_unread(source: AnalysisSource, logs: DecodedLog | None) -> str | None:
+def source_measurements_unread(
+    source: AnalysisSource, logs: DecodedLog | None, producer: Producer | None = None
+) -> str | None:
     """:func:`measurements_unread` for a read of ``source``: its family is
-    the dialect the caller named, else the one the source was read in."""
-    return measurements_unread(logs, source.explicit_dialect or source.dialect)
+    the dialect the caller named, else the one the source was read in, else
+    the family of who wrote it (``producer``, as a raw read by its path names
+    it), so a run read by path and by job give one answer."""
+    family = source.explicit_dialect or source.dialect or (producer and producer.family)
+    return measurements_unread(logs, family)
 
 
 def _unread_detail(source: AnalysisSource, logs: DecodedLog, unread: str) -> str:
@@ -304,17 +309,27 @@ def _unread_detail(source: AnalysisSource, logs: DecodedLog, unread: str) -> str
     return f". {error['message']}" if isinstance(error, Mapping) else ""
 
 
-def read_measurements(source: AnalysisSource, logs: DecodedLog) -> MeasurementsOutput:
-    """The decoded measurements section of ``source``'s log, refused with why
-    it says nothing that can be trusted (:func:`measurements_unread`): the one
-    read of a log's measurements every reader of their values makes, so each
-    gives the run row's reason."""
-    unread = source_measurements_unread(source, logs)
+def require_measurements_read(
+    source: AnalysisSource, logs: DecodedLog, producer: Producer | None = None
+) -> None:
+    """Refuse a read of ``source``'s measurements with why they say nothing
+    that can be trusted (:func:`measurements_unread`), the run row's reason;
+    for a reader that shows the section whole, such as ``inspect``'s results
+    page, as :func:`read_measurements` does for one that reads its values."""
+    unread = source_measurements_unread(source, logs, producer)
     if unread is not None:
         raise ResultError(
             f"The run's measurements were not read ({unread}): "
             f"{MEASUREMENTS_UNREAD[unread]}{_unread_detail(source, logs, unread)}"
         )
+
+
+def read_measurements(source: AnalysisSource, logs: DecodedLog) -> MeasurementsOutput:
+    """The decoded measurements section of ``source``'s log, refused with why
+    it says nothing that can be trusted (:func:`measurements_unread`): the one
+    read of a log's measurements every reader of their values makes, so each
+    gives the run row's reason."""
+    require_measurements_read(source, logs)
     decoded = logs.value("measurements")
     if decoded is None:
         raise ResultError("source has no log artifact for .MEAS results")

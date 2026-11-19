@@ -91,7 +91,12 @@ def require_instance_parameter(instance: ResolvedInstance, simulator: str, param
             "established",
         )
     levels = sorted({model.level for model in instance.model_family}, key=lambda v: v or 0)
-    known = {level: LTSPICE_INSTANCE_PARAMETERS.get((parameter, level or 1)) for level in levels}
+    # A level written as an expression reads as None, never as level 1: what
+    # it evaluates to is not read here, so it is not established.
+    known = {
+        level: None if level is None else LTSPICE_INSTANCE_PARAMETERS.get((parameter, level))
+        for level in levels
+    }
     instead = (
         f"A random mismatch rule with instance {list(instance.instance)} gives the device "
         "its own copy of its model with vth_param or k_param changed instead."
@@ -100,7 +105,7 @@ def require_instance_parameter(instance: ResolvedInstance, simulator: str, param
     if refused:
         raise MismatchPlanError(
             "instance_parameter_not_taken",
-            f"{path}: LTspice does not take {parameter} on a level {refused[0] or 1:g} model: "
+            f"{path}: LTspice does not take {parameter} on a level {refused[0]:g} model: "
             "LTspice 26 stops on 'Unknown parameter', and LTspice XVII says so and runs as "
             f"if it were not written, so every case would run the same device (recorded: "
             f"deck/mos_{parameter}_bsim3, deck/mos_{parameter}_bsim4). {instead}",
@@ -112,9 +117,10 @@ def require_instance_parameter(instance: ResolvedInstance, simulator: str, param
             for (name, level), _ in LTSPICE_INSTANCE_PARAMETERS.items()
             if name == parameter
         )
+        level = "an unread" if unknown[0] is None else f"a level {unknown[0]:g}"
         raise MismatchPlanError(
             "instance_parameter_unestablished",
-            f"{path}: whether LTspice applies {parameter} on a level {unknown[0] or 1:g} "
+            f"{path}: whether LTspice applies {parameter} on {level} "
             f"model is not established: the recordings deck/mos_{parameter}_bsim3 and "
             f"deck/mos_{parameter}_bsim4 cover levels {recorded} only. A recording of "
             f"deck/mos_{parameter}_<model> on this level, under the mos-instance-mismatch "

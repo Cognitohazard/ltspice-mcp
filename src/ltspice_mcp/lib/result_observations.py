@@ -591,8 +591,8 @@ READ_BY_JOB = frozenset(
 )
 
 #: Every other code a run's case can carry, and why a read of the run by job
-#: does not repeat it. The job's receipt (``run_experiments``, ``jobs``)
-#: states each of these; ``tests/test_replies_name_what_they_left_out.py``
+#: does not repeat it. A case's observations are on the job's receipt
+#: (``run_experiments``, ``jobs``); ``tests/test_replies_name_what_they_left_out.py``
 #: fails a code a case can carry that is on neither list.
 NOT_READ_BY_JOB: Mapping[str, str] = {
     # What the run did, which its receipt says and no read of the raw changes.
@@ -604,8 +604,8 @@ NOT_READ_BY_JOB: Mapping[str, str] = {
     "run_progress": "how far a running case has got, said only while it runs",
     # What the run's log says; a read of the raw does not read the log.
     "logopinfo_withheld": (
-        "the log's device table, not the raw; a read of that table by job does not repeat "
-        "it (listed as not fixed)"
+        "the log's device table, not the raw. A read of that table by job "
+        "(operating_point, api.device_op_points) needs it, and does not repeat it yet"
     ),
     "native_log_output": "a run that wrote no raw, so no read of a raw by job is made",
     "missing_required_raw": "a run that wrote no raw, so no read of a raw by job is made",
@@ -844,18 +844,26 @@ def measurements_failed_in_every_run(
     )
 
 
-def measurements_not_read_observation(reason: str, requested: Sequence[str]) -> Observation:
-    """Say that the ``.meas`` a deck requests have no value here because the
-    run's measurements were not read, and why (``reason``, from
-    ``services.measurements_unread``, the run row's ``measurements_coverage``)."""
+def measurements_not_read_observation(
+    reason: str, requested: Sequence[str] | None
+) -> Observation:
+    """Say that the run's measurements have no value here because they were
+    not read, and why (``reason``, from ``services.measurements_unread``, the
+    run row's ``measurements_coverage``); ``requested`` is the ``.meas`` the
+    deck requests, None where the deck was not read."""
+    asked = (
+        f"The deck requests {len(requested)} .meas, and none is reported"
+        if requested is not None
+        else "No .meas result of this run is reported"
+    )
+    evidence: dict[str, Any] = {"reason": reason}
+    if requested is not None:
+        evidence["requested"] = list(requested)
     return {
         "code": "measurements_not_read",
         "kind": "coverage",
-        "detail": (
-            f"The deck requests {len(requested)} .meas, and none is reported: "
-            f"{MEASUREMENTS_UNREAD[reason]} ({reason})."
-        ),
-        "evidence": {"reason": reason, "requested": list(requested)},
+        "detail": f"{asked}: {MEASUREMENTS_UNREAD[reason]} ({reason}).",
+        "evidence": evidence,
     }
 
 
@@ -1109,9 +1117,18 @@ def surface_observations(
     """
     obs: list[Observation] = []
     obs.extend(relay_observations(summary))
-    if requested and measurements_unread is not None and requested.get("meas"):
-        obs.append(measurements_not_read_observation(measurements_unread, requested["meas"]))
-        requested = {**requested, "meas": []}
+    if measurements_unread is not None and (
+        requested.get("meas")
+        if requested is not None
+        # A summary of a raw by path has no deck to say what it requests: it
+        # still says a simulator's measurements are not read. A log that was
+        # not read is said by the summary's diagnostics_coverage.
+        else measurements_unread == "simulator_unsupported"
+    ):
+        asked = None if requested is None else requested["meas"]
+        obs.append(measurements_not_read_observation(measurements_unread, asked))
+        if requested is not None:
+            requested = {**requested, "meas": []}
     if requested:
         obs.extend(reconciliation_observations(summary, requested))
         abort = meas_batch_abort_observation(obs)

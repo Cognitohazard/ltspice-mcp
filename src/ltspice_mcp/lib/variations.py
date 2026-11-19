@@ -1066,6 +1066,7 @@ def materialize_variants(
             as_written = editor.hierarchy
             structured.extend(_legacy_instance_edits(editor.hierarchy, aliases))
             _validate_write_sets(closure, ordinary, structured, editor.hierarchy, rules, origins)
+            _require_instance_parameters(editor.hierarchy, structured)
             editor.apply(structured)
             final_files = editor.result()
             if mismatch_rules:
@@ -1076,6 +1077,7 @@ def materialize_variants(
                 mismatch, draws = _nested_mismatch_edits(
                     final_editor.hierarchy, mismatch_rules, sampler, final_editor
                 )
+                _require_instance_parameters(final_editor.hierarchy, mismatch)
                 final_editor.apply(mismatch)
                 final_files = final_editor.result()
                 editor = final_editor
@@ -2397,11 +2399,11 @@ def _rule_devices(devices: TopLevelMosfets, rule: MismatchRule) -> list[Instance
         raise VariationError(
             "mismatch_geometry_unresolved",
             f"Mismatch prefix {rule.prefix!r} reaches {len(unsized)} top-level "
-            f"device{'s' if len(unsized) != 1 else ''} whose gate area the server cannot "
-            f"read ({named}). On this simulator the server evaluates no "
-            "expression in a device's size, so a draw for the other devices alone would "
-            "report a spread for fewer devices than the rule names. Write W, L and m on "
-            "those cards as literal numbers, or narrow the prefix to leave them out.",
+            f"device{'s' if len(unsized) != 1 else ''} the server cannot size for a draw "
+            f"({named}). On this simulator the server evaluates no expression in a "
+            "device's card, so a draw for the other devices alone would report a spread "
+            "for fewer devices than the rule names. Give those cards a model and W, L and "
+            "m as literal numbers, or narrow the prefix to leave them out.",
         )
     return [item for item in devices.sized if matches_prefix(item.ref, rule.prefix)]
 
@@ -2633,26 +2635,29 @@ def _legacy_instance_edits(
             row = children[0]
         if row.element != "M":
             raise VariationError("ambiguous_target", "mismatch alias must select a MOS")
-        assert edit.instance_param is not None
-        result.append(
-            _instance_parameter_edit(
-                row, edit.instance_param, edit.value, hierarchy.profile.simulator
-            )
-        )
+        result.append(InstanceEdit(row.instance, "parameter", edit.value, edit.instance_param))
     return result
 
 
-def _instance_parameter_edit(
-    row: ResolvedInstance, parameter: str, value: Any, simulator: str
-) -> InstanceEdit:
-    """The edit that writes ``parameter`` (``delvto`` or ``mulu0``) on
-    ``row``'s card, refused where ``simulator`` is known not to apply it to
-    the device's model, or is not known to
-    (``subckt_mismatch.require_instance_parameter``): the one writer of either,
-    so no draw is run that changes nothing and no run is started that the
-    simulator stops on."""
-    require_instance_parameter(row, simulator, parameter)
-    return InstanceEdit(row.instance, "parameter", value, parameter)
+def _require_instance_parameters(hierarchy: Hierarchy, edits: Sequence[InstanceEdit]) -> None:
+    """Refuse every edit of ``edits`` that writes ``delvto`` or ``mulu0`` on a
+    device's card where the simulator that reads ``hierarchy`` is known not to
+    apply it to the device's model, or is not known to
+    (``subckt_mismatch.require_instance_parameter``). Asked of every edit
+    before an editor applies it, whichever spelling made it (a structured
+    ``instances`` target, the ``X1:delvto`` alias, a mismatch draw), so no
+    draw is run that changes nothing and no run is started that the simulator
+    stops on."""
+    rows = {tuple(s.casefold() for s in row.instance): row for row in hierarchy.instances}
+    for edit in edits:
+        parameter = (edit.parameter or "").casefold()
+        if edit.attribute != "parameter" or parameter not in (VTH_PARAM, MOBILITY_PARAM):
+            continue
+        row = rows.get(tuple(s.casefold() for s in edit.instance))
+        if row is None:
+            # The editor refuses an instance its hierarchy does not hold.
+            continue
+        require_instance_parameter(row, hierarchy.profile.simulator, parameter)
 
 
 @dataclass(frozen=True)
@@ -2944,6 +2949,10 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
 def _nested_mismatch_edits(
     hierarchy: Hierarchy, rules: Sequence[MismatchRule], sampler: MCSampler, editor: TargetEditor
 ) -> tuple[list[InstanceEdit], dict[str, float]]:
+    # Sizes each device by the hierarchy reader, which evaluates its W, L and
+    # m as the simulator does; a deck with no profile evaluates none and
+    # refuses a device it cannot size (``_rule_devices``). Both refuse, never
+    # skip, a device whose size is not read.
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()
@@ -3037,7 +3046,7 @@ def _nested_mismatch_edits(
                     (MOBILITY_PARAM, 1 + delta["dk_over_k"], rule.AK > 0),
                 ):
                     if enabled:
-                        edit = _instance_parameter_edit(row, parameter, value, simulator)
+                        edit = InstanceEdit(row.instance, "parameter", value, parameter)
                         edits.append(edit)
                         draws[edit.target] = value
     return edits, draws

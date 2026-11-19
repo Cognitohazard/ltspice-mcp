@@ -335,7 +335,9 @@ Sweeps and Monte Carlo are set in the `variations` argument of
   transistor inside a subcircuit, and `X1:delvto`, run on LTspice and ngspice
   only: on QSPICE and Xyce they are refused, because the server does not model
   how those simulators read a subcircuit body. On LTspice `X1:delvto` runs
-  only on a BSIM4 (level 54) model, the one its recordings show it taken on.
+  only on a level 54 (BSIM4) model, the one level its recordings show it taken
+  on, and `X1:mulu0` is refused, as LTspice does not take it; use a `mismatch`
+  rule with an `instance` list instead.
 
 Variations do not set the temperature. Set it in the deck with `.temp`,
 `.step temp` or `.options temp=`. A `.param TEMP` is rejected, because SPICE

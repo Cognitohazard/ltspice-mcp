@@ -69,7 +69,9 @@ def _both_routes(
     that started it, and a run started on the API's throwaway loop would
     outlive it."""
     _, by_tool = asyncio.run(submit_experiment(session(), {**payload, "request_id": "by-tool"}))
-    if not refused:
+    if not refused or ("error" not in by_tool and not by_tool.get("failures")):
+        # A run that was not refused would outlive the API's loop: the tool's
+        # reply alone answers, and fails a test that expects a refusal.
         return {"tool": by_tool}
     state = session()
     state.guide_read = True
@@ -192,6 +194,7 @@ _LTSPICE_INSTANCE_PARAMETER = {
 }
 
 
+@pytest.mark.parametrize("spelling", ["alias", "instances"])
 @pytest.mark.parametrize(("level", "parameter"), sorted(_LTSPICE_INSTANCE_PARAMETER))
 def test_an_ltspice_instance_parameter_runs_only_where_the_recordings_show_it_taken(
     config: ServerConfig,
@@ -199,9 +202,10 @@ def test_an_ltspice_instance_parameter_runs_only_where_the_recordings_show_it_ta
     monkeypatch: pytest.MonkeyPatch,
     level: int,
     parameter: str,
+    spelling: str,
 ):
-    """``XN1:<parameter>`` on LTspice, through ``run_experiments`` and the
-    Python API: refused before any case runs where LTspice is recorded to
+    """``XN1:<parameter>``, or the same edit as an ``instances`` target, on
+    LTspice, through ``run_experiments`` and the Python API: refused before any case runs where LTspice is recorded to
     refuse or ignore it, refused as not established where no recording shows
     it, and run where the recordings show it taken."""
     launcher = type("LTspice", (FakeSim,), {})
@@ -219,7 +223,21 @@ def test_an_ltspice_instance_parameter_runs_only_where_the_recordings_show_it_ta
     deck.write_text(_WRAPPED.format(level=level))
     payload = {
         "circuits": [{"path": str(deck), "id": "dut"}],
-        "variations": [{"kind": "assign", "assign": {f"XN1:{parameter}": [0.9, 1.1]}}],
+        "variations": [
+            {"kind": "assign", "assign": {f"XN1:{parameter}": [0.9, 1.1]}}
+            if spelling == "alias"
+            else {
+                "kind": "assign",
+                "instances": [
+                    {
+                        "instance": ["XN1", "m0"],
+                        "attribute": "parameter",
+                        "parameter": parameter,
+                        "values": [0.9, 1.1],
+                    }
+                ],
+            }
+        ],
         "execution": {"wait_s": LIVENESS_S},
         "lint": "off",
     }
@@ -300,7 +318,8 @@ async def _run(state: SessionState, deck: Path, request_id: str) -> dict[str, An
 async def _every_reason(state: SessionState, receipt: dict[str, Any]) -> dict[str, Any]:
     """Why each reader of the run's measurements says it holds none: the run
     row, the ``summary`` recipe and the ``measurements`` recipe by MCP and by
-    the Python API, and the Python API's ``measurements``."""
+    the Python API, ``inspect``'s results page of them by MCP and by the
+    Python API, and the Python API's ``measurements``."""
     job_id = receipt["job_id"]
     api = SyncApi(state)
     job = [{"job_id": job_id}]
@@ -329,6 +348,9 @@ async def _every_reason(state: SessionState, receipt: dict[str, Any]) -> dict[st
         assert "measurements" not in row["value"], route
         data = await read(sources=job, recipes=[measurements])
         found[f"{route} measurements"] = data
+    query = [{"kind": "results", "view": "measurements", "job_id": job_id}]
+    found["inspect results"] = await dispatched(state, "inspect", queries=query)
+    found["api inspect results"] = await asyncio.to_thread(lambda: api.inspect(queries=query))
     try:
         await asyncio.to_thread(lambda: api.measurements(job_id=job_id))
         found["api measurements()"] = None
@@ -617,31 +639,43 @@ def _calls(names: set[str]) -> dict[tuple[str, str], set[str]]:
     return found
 
 
-def test_one_function_writes_an_instance_delvto_or_mulu0():
-    """Every edit that writes ``delvto`` or ``mulu0`` on a device's card is
-    made by ``variations._instance_parameter_edit``, which asks
-    ``require_instance_parameter`` first: no second writer can skip the
-    question whether the simulator applies it to the model."""
+def test_every_edit_an_editor_applies_is_asked_whether_the_simulator_takes_it():
+    """Every ``TargetEditor.apply`` in the variations is preceded, in its own
+    scope, by ``_require_instance_parameters`` over the same edits, which asks
+    ``require_instance_parameter`` of each ``delvto`` or ``mulu0`` one:
+    whichever spelling made an edit (a structured ``instances`` target, the
+    ``X1:delvto`` alias, a mismatch draw), none reaches a card unasked."""
     import ast
 
     from tests._source_scan import modules, scopes
 
-    writers = set()
+    applied = []
     for path, tree in modules().items():
         for scope, nodes in scopes(tree):
             for node in nodes:
                 if (
                     isinstance(node, ast.Call)
-                    and getattr(node.func, "id", getattr(node.func, "attr", None))
-                    == "InstanceEdit"
-                    and any(
-                        isinstance(arg, ast.Constant) and arg.value == "parameter"
-                        for arg in node.args
-                    )
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "apply"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id.endswith("editor")
                 ):
-                    writers.add((path, scope))
-    assert writers == {("lib/variations.py", "_instance_parameter_edit")}
-    assert ("lib/variations.py", "_instance_parameter_edit") in _calls(
+                    applied.append((path, scope, node.func.value.id, ast.unparse(node.args[0])))
+    assert applied, "no editor applies an edit"
+    asked = {
+        (where, ast.unparse(call.args[1]), ast.unparse(call.args[0]))
+        for where, tree in [
+            ((path, scope), nodes)
+            for path, module in modules().items()
+            for scope, nodes in scopes(module)
+        ]
+        for call in tree
+        if isinstance(call, ast.Call)
+        and getattr(call.func, "id", None) == "_require_instance_parameters"
+    }
+    for path, scope, editor, edits in applied:
+        assert ((path, scope), edits, f"{editor}.hierarchy") in asked, (path, scope, edits)
+    assert ("lib/variations.py", "_require_instance_parameters") in _calls(
         {"require_instance_parameter"}
     )
 
@@ -656,8 +690,11 @@ def _ltspice_refused(build: str, parameter: str, model: str) -> bool:
 
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_the_ltspice_instance_parameter_table_is_what_the_recordings_show(build: str):
-    """Each entry of ``LTSPICE_INSTANCE_PARAMETERS`` is the recordings'
-    answer, on both builds: level 8 is the BSIM3 deck, level 54 the BSIM4."""
+    """Each entry of ``LTSPICE_INSTANCE_PARAMETERS`` agrees with whether
+    each build's log for its recording names the parameter unknown: level 8
+    is the BSIM3 deck, level 54 the BSIM4. That a parameter LTspice takes
+    shifts the device as the model copy does is pinned on the recordings in
+    ``test_recorded_ltspice_decks.py``."""
     from ltspice_mcp.lib.subckt_mismatch import LTSPICE_INSTANCE_PARAMETERS
 
     models = {8: "bsim3", 54: "bsim4"}
@@ -711,6 +748,9 @@ _MEASUREMENT_READERS = {
     ("lib/experiment_runner.py", "ExperimentRunner._read_measurements"),
     ("tools/analyze.py", "_measurements_failed_everywhere"),
     ("lib/raw_parser.py", "build_simulation_summary"),
+    ("tools/inspect_tools.py", "_log_results_page"),
+    # Reads other sections by name; the measurements through read_measurements.
+    ("api/_primitives.py", "load_log_section"),
 }
 
 
@@ -725,18 +765,33 @@ def test_every_read_of_a_logs_measurements_asks_why_they_may_not_be_read():
     readers = set()
     for path, tree in modules().items():
         for scope, nodes in scopes(tree):
+            # A section named by a variable counts where the scope names the
+            # measurements section anywhere (``section_name = "measurements"``).
+            names_it = any(
+                isinstance(node, ast.Constant) and node.value == "measurements" for node in nodes
+            )
             for node in nodes:
-                if (
+                if not (
                     isinstance(node, ast.Call)
                     and getattr(node.func, "attr", getattr(node.func, "id", None))
                     in {"value", "section", "section_value"}
                     and node.args
-                    and isinstance(node.args[0], ast.Constant)
-                    and node.args[0].value == "measurements"
+                ):
+                    continue
+                first = node.args[0]
+                if (isinstance(first, ast.Constant) and first.value == "measurements") or (
+                    isinstance(first, ast.Name) and names_it
                 ):
                     readers.add((path, scope))
     assert readers == _MEASUREMENT_READERS
-    asked = _calls({"measurements_unread", "source_measurements_unread"})
+    asked = _calls(
+        {
+            "measurements_unread",
+            "source_measurements_unread",
+            "read_measurements",
+            "require_measurements_read",
+        }
+    )
     for reader in readers - {
         ("lib/services.py", "measurements_unread"),
         # Called only by read_measurements, once it has the reason.
@@ -1101,3 +1156,27 @@ async def test_the_summary_says_what_the_run_row_says_the_simulator_said(
         for item in _observations(data):
             if item.get("kind") == "relay" and "severity" in item:
                 assert item["severity"] in severities, (route, item)
+
+
+@pytest.mark.parametrize("family", ["qspice", "xyce"])
+async def test_a_run_read_by_path_says_its_measurements_were_not_read(
+    family: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The raw of a QSPICE or Xyce run, read by its path with its log beside
+    it, names its writer only in its own header: the summary says the run's
+    measurements were not read, as a read of the same run by job does, and
+    reports none of the values its log holds."""
+    from ltspice_mcp.lib.simulator import SIMULATORS
+
+    state = SessionState.create(
+        config, available={family: type(SIMULATORS[family].__name__, (FakeSim,), {})}
+    )
+    raw = work_dir / "run.raw"
+    raw.write_bytes(_qspice_ac_qraw() if family == "qspice" else _XYCE_TRAN_RAW)
+    shutil.copyfile(rec.recorded("ltspice26", "log/meas_failed.log"), work_dir / "run.log")
+    sources = [{"path": str(raw), "dialect": family}] if family == "xyce" else [{"path": str(raw)}]
+    data = await dispatched(
+        state, "analyze_results", sources=sources, recipes=[{"key": "s", "metric": "summary"}]
+    )
+    unread = [o for o in data.get("observations", []) if o["code"] == "measurements_not_read"]
+    assert [o["evidence"]["reason"] for o in unread] == ["simulator_unsupported"], data
