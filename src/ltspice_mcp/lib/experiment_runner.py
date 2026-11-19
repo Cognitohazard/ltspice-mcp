@@ -13,7 +13,7 @@ import logging
 import secrets
 import shutil
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
@@ -2709,8 +2709,12 @@ def _progress_fact(
     }
 
 
-async def live_run_progress(job: ExperimentJob) -> dict[str, dict[str, Any]]:
-    """A ``run_progress`` observation for each case of ``job`` still running.
+async def live_run_progress(
+    job: ExperimentJob, *, case_ids: Collection[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    """A ``run_progress`` observation for each case of ``job`` still running,
+    or with ``case_ids``, for each of those cases still running (the refusal of
+    a read of one, ``services.case_refusal``).
 
     Keyed by case id, for a receipt to attach to the cases that are still
     running when it is built. Read when someone asks for the job, never on a
@@ -2731,7 +2735,7 @@ async def live_run_progress(job: ExperimentJob) -> dict[str, dict[str, Any]]:
             (moment - case.submitted_at).total_seconds() if case.submitted_at else None,
         )
         for case in job.cases
-        if case.status in ACTIVE_CASE_STATUSES
+        if case.status in ACTIVE_CASE_STATUSES and (case_ids is None or case.case_id in case_ids)
     ]
     if not targets:
         return {}

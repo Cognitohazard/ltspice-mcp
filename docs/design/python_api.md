@@ -726,8 +726,8 @@ cannot detect). Under `include.provenance`, each source reports
 `producing_dialect`, the simulator the records show produced the files.
 In a whole-log row, the dialect of the producing simulator can be absent.
 A log alone does not show that a simulator solve completed or that a case was
-produced; reads by job still check that the job is terminal and the case was
-produced.
+produced; a read by job still checks that the case's own run has finished
+and produced (`services.case_unreadable`), whatever the job's status.
 
 `ltspice_mcp.api` exports the AC and transient metric functions listed below.
 They take arrays and return dict- or TypedDict-shaped mappings; AC

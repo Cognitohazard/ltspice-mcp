@@ -1232,7 +1232,7 @@ class TestStoppedCaseRecord:
         assert progress["evidence"]["raw_kept"] is True
         assert "reads of this case take it" in progress["detail"]
 
-        context = services.experiment_run_context(job, state_no_sim, case_id=case.case_id)
+        context = await services.experiment_run_context(job, state_no_sim, case_id=case.case_id)
         assert context.raw == raw
         [read] = context.observations
         assert read["code"] == "partial_raw"
@@ -1257,7 +1257,7 @@ class TestStoppedCaseRecord:
         assert case.raw_file is None
         assert "partial_raw" not in (case.failure_evidence or {})
         with pytest.raises(ResultError, match="did not produce a raw result"):
-            services.experiment_run_context(job, state_no_sim, case_id=case.case_id)
+            await services.experiment_run_context(job, state_no_sim, case_id=case.case_id)
 
     async def test_a_raw_with_no_whole_point_is_not_kept(
         self,
