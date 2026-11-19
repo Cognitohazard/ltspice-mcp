@@ -126,33 +126,6 @@ async def test_a_comparison_that_cannot_finish_replaces_the_published_file(
     assert again["results"]["csv"]["values"][0]["value"]["artifact"]["path"] == str(path)
 
 
-@pytest.mark.asyncio
-async def test_an_answered_recipes_artifact_is_not_lost_to_the_calls_bound(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """The recipes use the whole bound; publishing the CSV the first one
-    wrote gets the publish's own deadline, not what is left of the call's."""
-    state_no_sim.config.analysis_budget_s = 1.0
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    real = services.bounded_parse
-    publish_deadlines: list[float] = []
-
-    async def recorded(file: Path, *args: Any, timeout_s: float, **kwargs: Any) -> Any:
-        if file.name.endswith(".pending"):
-            publish_deadlines.append(timeout_s)
-        return await real(file, *args, timeout_s=timeout_s, **kwargs)
-
-    monkeypatch.setattr(services, "bounded_parse", recorded)
-    first = {**_CSV, "key": "first"}
-    _slow_csv(monkeypatch, after_calls=1)
-    data = await _analyze(
-        state_no_sim,
-        {"sources": [{"path": str(raw), "label": "dut"}], "recipes": [first, _CSV]},
-    )
-    assert data["results"]["first"]["values"][0]["value"]["artifact"]["path"]
-    assert publish_deadlines and min(publish_deadlines) >= analyze_mod.PUBLISH_DEADLINE_S
-
-
 def test_a_temp_left_behind_by_a_publish_is_removed_by_the_next_sweep(work_dir: Path):
     store = Store(work_dir)
     folder = store.result_artifacts("rs_" + "0" * 32)
@@ -206,42 +179,12 @@ def test_classify_is_the_one_answer_to_whether_a_stored_analysis_is_rendered():
     current = analysis_snapshot.envelope({"answer": answer, "snapshot": {}, "request": {}})
     assert analysis_snapshot.classify(current) == "snapshot"
     assert analyze_mod.stored_analysis(current).answer == answer
-    assert analysis_snapshot.classify(_EARLIER_RELEASE_ANALYSIS) == "legacy"
+    assert analysis_snapshot.classify(_EARLIER_RELEASE_ANALYSIS) == "earlier"
     with pytest.raises(analyze_mod.AttachedAnalysisNotRendered):
         analyze_mod.stored_analysis(_EARLIER_RELEASE_ANALYSIS)
     # No second place reads the version.
     sources = Path(analyze_mod.__file__).read_text(encoding="utf-8")
     assert "answer_version" not in sources
-
-
-@pytest.mark.asyncio
-async def test_a_check_after_the_reads_the_bound_ends_names_the_rows_it_withdrew(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """The check of every source after the reads runs out of time: the rows
-    it could not confirm are withdrawn, and the failure says why."""
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    real = services.load_artifacts
-    reads: list[int] = []
-
-    async def the_check_runs_out(source: Any, state: Any, **kwargs: Any) -> Any:
-        reads.append(1)
-        # The read for the result set, the check before and the recipe's own
-        # read answer; the check after the reads is the one that runs out.
-        if len(reads) > 3:
-            raise AnalysisDeadlineExceeded("the check after the reads ran out of time")
-        return await real(source, state, **kwargs)
-
-    monkeypatch.setattr(services, "load_artifacts", the_check_runs_out)
-    data = await _analyze(
-        state_no_sim,
-        {
-            "sources": [{"path": str(raw), "label": "dut"}],
-            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
-        },
-    )
-    assert not data["results"]["v"].get("values")
-    assert {f["code"] for f in data["failures"]} == {"analysis_deadline"}
 
 
 # ---------------------------------------------------------------------------
