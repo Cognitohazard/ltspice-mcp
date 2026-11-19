@@ -122,19 +122,29 @@ async def test_a_held_record_write_does_not_keep_another_launch_from_the_gate(
     job, request = _recoverable_job(
         state_no_sim, job_id="exp_gate_0001", request_id="request-gate-1", cases=2
     )
-    second = asyncio.Event()
+    # Every case that reaches its record step, in the order it does: either
+    # launch may get there first, and before or after the first write is held.
+    recording_cases: list[str] = []
+    reached = asyncio.Event()
     record = ExperimentRunner._record_launch_intent
 
     def recording(self, execution, case, copied: Path) -> None:
-        if held.case_id is not None and case.case_id != held.case_id:
-            loop.call_soon_threadsafe(second.set)
+        recording_cases.append(case.case_id)
+        loop.call_soon_threadsafe(reached.set)
         record(self, execution, case, copied)
+
+    async def the_other_reached_its_record() -> None:
+        while not any(case_id != held.case_id for case_id in recording_cases):
+            reached.clear()
+            if any(case_id != held.case_id for case_id in recording_cases):
+                return
+            await reached.wait()
 
     monkeypatch.setattr(ExperimentRunner, "_record_launch_intent", recording)
     try:
         await _begin(_runner(state_no_sim, 2), request, job)
         await asyncio.wait_for(held.held.wait(), LIVENESS_S)
-        await asyncio.wait_for(second.wait(), LIVENESS_S)
+        await asyncio.wait_for(the_other_reached_its_record(), LIVENESS_S)
         other = next(case for case in job.cases if case.case_id != held.case_id)
         assert other.status == "submitted"
         assert other.submitted_at is not None
