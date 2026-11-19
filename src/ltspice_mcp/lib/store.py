@@ -250,6 +250,14 @@ def _resolved(path: Path) -> Path:
         return path.absolute()
 
 
+def file_key(path: Path) -> str:
+    """One file as it is named whatever its spelling: the resolved path,
+    case-folded, so two spellings of one file on a case-insensitive filesystem
+    are one key (:meth:`Store.circuit_lock`, :meth:`Store.results_file_lock`).
+    Filesystem work."""
+    return str(_resolved(path)).casefold()
+
+
 @functools.lru_cache(maxsize=64)
 def relocated_store_root(store_dir: Path, working_dir: Path) -> Path:
     """One working directory's store, kept under ``store_dir`` instead of inside it.
@@ -942,8 +950,20 @@ class Store:
         "locked, retry" error, never a missed exclusion. Resolving is filesystem
         work, so an event-loop caller runs this off-loop.
         """
-        resolved = _resolved(circuit_path)
-        return user_home() / "locks" / "circuits" / path_digest(str(resolved).casefold())
+        return user_home() / "locks" / "circuits" / path_digest(file_key(circuit_path))
+
+    @staticmethod
+    def results_file_lock(results_path: Path) -> Path:
+        """Anchor for the cross-process lock on one results file beside a circuit
+        (``file_lock`` appends .lock), taken inside the circuit's own lock.
+
+        Two circuits whose runs go to one results file (``foo.asc`` and
+        ``foo.net``, both ``foo.raw``) hold different circuit locks, so a copy
+        there also takes this one. Keyed as :meth:`circuit_lock` is, by the
+        digest of the resolved path, case-folded; resolving is filesystem
+        work, so an event-loop caller runs this off-loop.
+        """
+        return user_home() / "locks" / "results" / path_digest(file_key(results_path))
 
     @staticmethod
     def renders_dir() -> Path:

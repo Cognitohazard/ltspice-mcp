@@ -86,10 +86,11 @@ async def _answers(job: ExperimentJob, state: SessionState) -> dict[str, bool]:
     placed = _assert_jobs_schema(
         await handle_jobs(_args("place_beside_sheet", job_id=job.job_id, case_id=case_id), state)
     )
-    # A case it may read goes on to be refused as a netlist's run, which a
-    # sheet's would not be; one it may not read is refused before that.
-    assert placed["error"]["code"] in {"job_not_terminal", "not_a_sheet"}, placed["error"]
-    answers["place_beside_sheet"] = placed["error"]["code"] == "not_a_sheet"
+    # A case it may read goes on to be refused as a run of a simulator whose
+    # results are not put beside a circuit, which an LTspice run's would not
+    # be; one it may not read is refused before that.
+    assert placed["error"]["code"] in {"job_not_terminal", "not_ltspice"}, placed["error"]
+    answers["place_beside_sheet"] = placed["error"]["code"] == "not_ltspice"
     _, timed_out = await state.job_registry.wait(job, 0, wait_for="runs")
     answers["jobs_wait_runs"] = not timed_out
     return answers

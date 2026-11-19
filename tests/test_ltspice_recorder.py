@@ -307,7 +307,10 @@ class TestCaseList:
         unexplained = [
             key
             for key, behaviour in CASES.behaviours.items()
-            if not CASES.of(key) and not behaviour.evidence and not behaviour.unrecordable
+            if not CASES.of(key)
+            and not behaviour.evidence
+            and not behaviour.unrecordable
+            and not behaviour.pending
         ]
         assert not unexplained, (
             "every LTspice behaviour the server models needs a recording, or a written "
@@ -315,9 +318,14 @@ class TestCaseList:
         )
 
     def test_a_pending_behaviour_has_the_inputs_it_waits_to_record(self):
+        """Or, for one only a window shows, names the recorder that asks a
+        window (which has no inputs here): a file that is there."""
+        repo = Path(__file__).resolve().parent.parent
         for key, behaviour in CASES.behaviours.items():
-            if behaviour.pending:
-                assert CASES.of(key), f"{key} is pending but names no input to record"
+            if behaviour.pending and not CASES.of(key):
+                named = re.findall(r"tests/\w+\.py", behaviour.pending)
+                assert named, f"{key} is pending but names no input or recorder"
+                assert all((repo / name).is_file() for name in named), named
 
     def test_a_source_deck_names_the_case_folder_where_it_writes_dir(self, tmp_path: Path):
         """A deck can name a file of its own case by an absolute path; the

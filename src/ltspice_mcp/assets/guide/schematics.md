@@ -80,16 +80,23 @@ sheet's run leaves nothing beside the sheet; its receipt says so
 (`results_not_beside_sheet`). When the user wants a run as the sheet's own
 results, to open it in LTspice themselves, `jobs(action="place_beside_sheet",
 job_id=..., case_id=...)` copies that case's results beside the sheet under
-its name, replacing any there, without opening anything. It refuses a case
-whose sheet has changed since the run, since the results would not match it,
-and, like every read of a job's runs, a case of a job whose runs have not all
-finished (`job_not_terminal`; `jobs(action="wait", wait_for="runs")` first).
+its name, replacing any there, without opening anything. It does the same for
+a netlist, beside which LTspice also writes a netlist's results; what
+LTspice's window does with results put there has not been checked, and the
+reply's `not_checked` says so, so tell the user. It refuses a case whose
+circuit has changed since the run, since the results would not match it; a
+netlist with a sheet of its name beside it (`results_belong_to_sheet`),
+since LTspice shows that file as the sheet's run: run the sheet, or copy the
+netlist under another name; and, like every read of a job's runs, a case of
+a job whose runs have not all finished (`job_not_terminal`;
+`jobs(action="wait", wait_for="runs")` first).
 When the user wants that before the run starts, pass
 `execution={"results_beside_sheet": true}` to `run_experiments` instead: each
 sheet's results are copied beside it as the runs finish, and the receipt's
 `results_placed_beside_sheet` or `results_not_placed` says what happened. It
-takes LTspice runs of sheets with one case each, so for a sweep, copy the
-chosen case afterwards with the action.
+takes LTspice runs of sheets and netlists with one case per results file
+(`foo.asc` and `foo.net` share `foo.raw`), so for a sweep, copy the chosen
+case afterwards with the action.
 A case with variations shows values the sheet does not; the reply's
 `assignments` lists them, so tell the user. A plot with no sampled axis (a
 stepped `.op`, say) has no chart, and `plot_waveform(..., in_ltspice=true)`
