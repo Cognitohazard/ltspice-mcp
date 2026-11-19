@@ -182,6 +182,23 @@ class LogCondition(TypedDict):
     first_text: str
     channel: Literal["log", "console"]
     severity: NotRequired[str]
+    #: Each distinct occurrence that carries a word, with its word, in order,
+    #: at most ``log_conditions.WRITTEN_KEPT``; ``written_left_out`` counts the
+    #: rest. Kept on the decoded log for the summary, never on a run row
+    #: (``log_conditions.run_diagnostics``).
+    written: NotRequired[list[WrittenLine]]
+    written_left_out: NotRequired[int]
+
+
+class WrittenLine(TypedDict):
+    """One distinct occurrence of a condition that is an error or a warning:
+    its text as written, the simulator's word on it, and the line classifier's
+    reading where the simulator's wording has no recordings
+    (``LogCondition.written``)."""
+
+    text: str
+    severity: NotRequired[str]
+    read_as: NotRequired[str]
 
 
 class LogDiagnostics(TypedDict):

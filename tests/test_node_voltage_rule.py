@@ -23,7 +23,7 @@ from ltspice_mcp.lib.result_observations import parse_source_amplitudes
 from tests import _ltspice_recorded as rec
 from tests._source_scan import PACKAGE, parsed
 from tests.conftest import FIXTURES_DIR
-from tests.test_summary_log_facts import captured_log_facts
+from tests.test_summary_log_facts import _with_error_rung, captured_log_facts
 
 #: ngspice-42 runs of the decks beside them, as the server runs ngspice
 #: (``-D ngbehavior=kiltpsa``).
@@ -61,11 +61,9 @@ def test_a_device_parameter_named_v_is_no_node_voltage_to_any_reader(tmp_path: P
     summary = build_simulation_summary(
         raw, log, value_scan=True, source_amplitudes=parse_source_amplitudes(deck)
     )
-    assert summary["errors"] == [
-        "Warning: Dynamic gmin stepping failed",
-        "Warning: True gmin stepping failed",
-        "Warning: source stepping failed",
-    ]
+    # ngspice opens its stepping rungs with a Note: no error word, so none of
+    # them is an error (log_conditions.said_as).
+    assert "errors" not in summary
     assert not any("finite node data" in w for w in summary.get("warnings", []))
     assert not any(o["code"] == "extreme_value" for o in summary["observations"])
     assert raw_parser.node_voltages(raw) == []
@@ -101,9 +99,10 @@ def test_a_dc_sweeps_own_variable_is_no_node_voltage_to_any_reader(tmp_path: Pat
     assert op["other"] == {"v(v-sweep)": 10.0}
     assert op["currents"] == {"i(v1)": pytest.approx(-5e-3)}
 
-    log = captured_log_facts(tmp_path, text="Circuit: test\ngmin stepping failed\n")
-    summary = build_simulation_summary(raw, log)
-    assert summary["errors"] == ["gmin stepping failed"]
+    # A rung the simulator called an error stays one: the sweep variable is no
+    # node voltage, so it vouches for no bias point.
+    summary = build_simulation_summary(raw, _with_error_rung(tmp_path))
+    assert summary["errors"] == ["Error: gmin stepping failed"]
     assert raw_parser.node_voltages(raw) == []
 
 

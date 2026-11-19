@@ -222,7 +222,9 @@ class TestAcStructureObservationShape:
         relayed = [o for o in data["observations"] if o.get("kind") == "relay"]
         assert relayed, "expected a relayed solve-failure observation"
         r = relayed[0]
-        assert r["severity"] == "error"
+        # A solve-failure line is relayed without its condition, so it carries
+        # no severity: none the simulator did not write.
+        assert "severity" not in r
         assert "evidence" in r
         assert set(r) <= {"code", "kind", "detail", "severity", "evidence"}
 
