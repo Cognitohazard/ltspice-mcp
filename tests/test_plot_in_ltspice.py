@@ -23,6 +23,8 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib import ltspice_window, plot_settings
+from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.lib.plot_settings import (
@@ -506,8 +508,15 @@ def a_job_of(state: SessionState, sheet: Path, work_dir: Path) -> Path:
     kept.mkdir(parents=True)
     raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
     job = make_experiment_job(state, job_id="shown", raw=raw)
-    job.cases[0].circuit_path = sheet
+    ran(job, sheet)
     return raw
+
+
+def ran(job: ExperimentJob, sheet: Path) -> None:
+    """Make ``job``'s one case a run of ``sheet`` as it is now."""
+    job.cases[0].circuit_path = sheet
+    job.sources[0].path = sheet
+    job.sources[0].sha256 = sha256_file(sheet)
 
 
 async def plot_the_job(state: SessionState) -> dict[str, Any]:
@@ -1208,7 +1217,7 @@ async def test_a_sheets_stepped_operating_point_is_opened_from_the_sheet_without
     sheet = a_sheet(work_dir)
     raw = rec.stage_run(build, "raw/step_op", work_dir / "runs" / "stepped")
     job = make_experiment_job(state_no_sim, job_id="stepped", raw=raw)
-    job.cases[0].circuit_path = sheet
+    ran(job, sheet)
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
