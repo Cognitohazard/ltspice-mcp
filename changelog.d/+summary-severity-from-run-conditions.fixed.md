@@ -1,0 +1,1 @@
+The `summary` recipe's `errors`, `warnings` and `meas_errors`, and the severity of each line it relays, now come from the run's classified diagnostics, the same source as the run row's `diagnostics`, so the two no longer disagree about what the simulator said or how severe it called it.
