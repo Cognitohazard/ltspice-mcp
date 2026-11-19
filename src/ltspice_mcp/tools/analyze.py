@@ -4984,7 +4984,7 @@ async def capture_attached_analysis(
         "frequency), noise_integral, signal_stats (RMS, "
         "ripple, peak-to-peak, percentiles), edges (rise/fall time), timing "
         "(propagation delay), periodic (duty cycle), transient_response (overshoot, settling, "
-        "load step), operating_point (bias point, gm/gds/vth), measurements "
+        "load step), time_steps (smallest time step, where), operating_point (bias point, gm/gds/vth), measurements "
         "(.meas), value (one trace at one axis point), summary, waveform "
         "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
         "searches these by plain words and returns a recipe's fields. A signal is "

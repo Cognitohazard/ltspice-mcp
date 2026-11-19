@@ -1,0 +1,7 @@
+* an RC charge with a sharp corner at 2 ms, with waveform compression off
+V1 in 0 PWL(0 0 2m 0 2.000001m 1m)
+R1 in out 1k
+C1 out 0 1u
+.options plotwinsize=0
+.tran 5m
+.end

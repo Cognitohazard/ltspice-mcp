@@ -179,6 +179,13 @@ _SUMMARIES: dict[tuple[str, str], str] = {
         "A ratio A/B is the quotient of the two phasors; frequency_param reads "
         "each run at its own value of a parameter."
     ),
+    ("analyze_results", "time_steps"): (
+        "The steps between a transient run's stored points: their count, the "
+        "smallest and where it starts, the largest and the median, and with "
+        "threshold_s how many are shorter and where the first and last start. "
+        "Reads the time axis, so it takes no signal. stored says whether the "
+        "file holds every point the solver accepted."
+    ),
     ("analyze_results", "bode_filter"): (
         "Filter characteristics of an .AC sweep: passband gain and ripple, cutoff "
         "frequencies, bandwidth, stopband rejection, roll-off slope and order."
@@ -326,6 +333,14 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "transfer function from a transient",
         "injected loop gain",
         "frequency per case",
+    ),
+    ("analyze_results", "time_steps"): (
+        "time step",
+        "timestep too small",
+        "time step collapse",
+        "smallest step",
+        "convergence trouble",
+        "solver step size",
     ),
     ("analyze_results", "bode_filter"): (
         "cutoff frequency",
