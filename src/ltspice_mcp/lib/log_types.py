@@ -191,11 +191,14 @@ class LogCondition(TypedDict):
 
 
 class WrittenLine(TypedDict):
-    """One distinct occurrence of a condition that carries a word: its text as
-    written and the word (``LogCondition.written``)."""
+    """One distinct occurrence of a condition that is an error or a warning:
+    its text as written, the simulator's word on it, and the line classifier's
+    reading where the simulator's wording has no recordings
+    (``LogCondition.written``)."""
 
     text: str
-    severity: str
+    severity: NotRequired[str]
+    read_as: NotRequired[str]
 
 
 class LogDiagnostics(TypedDict):

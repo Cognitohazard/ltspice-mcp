@@ -630,7 +630,10 @@ def relay_observations(summary: dict, said: Sequence[Mapping[str, Any]] = ()) ->
     made up.
     """
     severity = {
-        line["text"]: line["severity"] for c in said for line in said_lines(c)
+        line["text"]: line["severity"]
+        for c in said
+        for line in said_lines(c)
+        if isinstance(line.get("severity"), str)
     }
 
     def with_severity(item: Observation, text: str) -> Observation:

@@ -12,6 +12,7 @@ is in neither list (it is in ``diagnostics``). Each case runs through
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shutil
 from pathlib import Path
@@ -117,10 +118,12 @@ def _word(line: str) -> str | None:
 
 
 def _worded_lines(text: str) -> list[tuple[str, str]]:
-    """Each line of a log that carries an error or a warning word, with it."""
-    return [
-        (line.strip(), word) for line in text.splitlines() if (word := _word(line)) is not None
-    ]
+    """Each line of a log that carries an error or a warning word, with it,
+    the log split as the server splits it (``log_lines``, which parts a line
+    LTspice XVII glued to its progress output)."""
+    from ltspice_mcp.lib.log_conditions import log_lines
+
+    return [(line.strip(), word) for line in log_lines(text) if (word := _word(line)) is not None]
 
 
 def _entry_words(entry: str) -> set[str]:
@@ -357,6 +360,53 @@ def test_lines_past_a_conditions_bound_are_counted(tmp_path: Path):
     assert summary["lines_left_out"] == {"simulator_error": extra}
 
 
+def test_lines_that_are_neither_take_no_place_and_are_not_counted(tmp_path: Path):
+    """``Note:`` lines are neither errors nor warnings: past the bound they
+    are not counted as left out, and they do not push a warning past it."""
+    from ltspice_mcp.lib.log_conditions import WRITTEN_KEPT
+    from ltspice_mcp.lib.simulator_build import Producer
+
+    notes = "".join(f"Note: v{n}: has no value, DC 0 assumed\n" for n in range(WRITTEN_KEPT + 5))
+    text = notes + "Warning: v9: has no value, DC 0 assumed\n"
+    summary = _summary_of_log(text, Producer("ngspice", None, None), tmp_path)
+    assert "lines_left_out" not in summary, summary.get("lines_left_out")
+    assert "Warning: v9: has no value, DC 0 assumed" in summary.get("warnings", []), summary
+
+
+def test_lines_left_out_on_both_channels_are_added(tmp_path: Path):
+    """A code with conditions on the log and the console counts the lines each
+    left out."""
+    import numpy as np
+
+    from ltspice_mcp.lib.log_conditions import WRITTEN_KEPT
+    from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
+    from ltspice_mcp.lib.parser_worker import parse_request
+    from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from ltspice_mcp.lib.simulator_build import Producer
+    from tests._ltspice_recorded import RAW_LIMITS, parser_request
+    from tests.conftest import make_raw_mock
+
+    log = tmp_path / "run.log"
+    log.write_text("".join(f"Error: log {n}\n" for n in range(WRITTEN_KEPT + 2)), encoding="utf-8")
+    console = tmp_path / "run.console"
+    console.write_text(
+        "".join(f"Error: console {n}\n" for n in range(WRITTEN_KEPT + 3)), encoding="utf-8"
+    )
+    request = parser_request(None, log, producing="ngspice")
+    request["sources"]["console"] = str(console)
+    decoded = tmp_path / "decoded"
+    decoded.mkdir()
+    parse_request(request, decoded)
+    metadata = json.loads((decoded / "result.json").read_bytes())
+    logs = read_parsed_artifacts(
+        metadata, decoded, limits=RAW_LIMITS, require_raw=False, request=request
+    ).logs
+    axis = np.linspace(0.0, 1e-3, 5)
+    raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})
+    summary = build_simulation_summary(raw, logs, producer=Producer("ngspice", None, None))
+    assert summary["lines_left_out"] == {"simulator_error": 5}
+
+
 def _line_classifier_examples() -> list[str]:
     """One line for every pattern the line classifier
     (``log_parser.classify_line``) reads an error or a warning by, taken from
@@ -425,6 +475,15 @@ async def test_a_simulator_with_no_recordings_keeps_the_lines_the_line_classifie
     )
     row, found = await _row_and_summaries(state, deck, raw, log, monkeypatch)
     assert row.get("diagnostics_coverage") == "unverified", row
+    # A severity is only ever the simulator's own word: a line read by the
+    # classifier's patterns carries none on the row, and no relay gets one.
+    words = {"Fatal Error", "Error", "ERROR", "Warning", "WARNING", "Note"}
+    assert {d["severity"] for d in row["diagnostics"] if "severity" in d} <= words, row
+    for route, (_value, observations) in found.items():
+        relayed = {
+            o["severity"] for o in observations if o.get("kind") == "relay" and "severity" in o
+        }
+        assert relayed <= words, (route, relayed)
     for example in examples:
         first = example.splitlines()[0]
         listed = [name for name in ("errors", "warnings") if any(first in e for e in before[name])]

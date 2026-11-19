@@ -27,12 +27,13 @@ captured bytes. A reader picks the set for its producer
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib.format import cap_note
-from ltspice_mcp.lib.log_types import LogCondition
+from ltspice_mcp.lib.log_types import LogCondition, WrittenLine
 
 if TYPE_CHECKING:
     # Only named here, for annotations: the readers construct it.
@@ -618,12 +619,23 @@ class _RuleSet:
         return None
 
 
+_READINGS = threading.local()
+
+
 def _line_reading(lines: Sequence[str], index: int) -> Any:
-    """The line classifier's reading at ``index`` (``log_parser.classify_line``)."""
+    """The line classifier's reading at ``index`` (``log_parser.classify_line``),
+    worked out once per line of the log being read: both rule heads and the
+    follow ask it of the same line."""
     # Imported here: the log parser imports this module.
     from ltspice_mcp.lib.log_parser import classify_line
 
-    return classify_line(lines, index)
+    if getattr(_READINGS, "lines", None) is not lines:
+        _READINGS.lines = lines
+        _READINGS.found = {}
+    found: dict[int, Any] = _READINGS.found
+    if index not in found:
+        found[index] = classify_line(lines, index)
+    return found[index]
 
 
 def _read_as(kind: str) -> tuple[_Head, _Follow]:
@@ -637,9 +649,11 @@ def _read_as(kind: str) -> tuple[_Head, _Follow]:
 
 
 #: The codes of a line the line classifier reads as an error or a warning, for a
-#: simulator with no recorded wording, and the word each is counted with: there
-#: is no word of the simulator's own to prefer, so the reading the server gave
-#: before it had recordings stands until a recording replaces it.
+#: simulator with no recorded wording, and that reading: there is no word of the
+#: simulator's own to prefer, so the reading the server gave before it had
+#: recordings lists the line until a recording replaces it. It is kept as the
+#: line's ``read_as``, never as its ``severity``, which is only ever the
+#: simulator's own word.
 READ_AS: dict[str, str] = {"read_as_error": "error", "read_as_warning": "warning"}
 
 #: The ``unverified`` set: only the line classifier's two readings, so no line
@@ -737,10 +751,11 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
     entry per code and channel, in the order each first appears, log before
     console. ``severity`` is the strongest word the simulator wrote on any line
     of any occurrence (of ``unclassified``, whose lines are unrelated, the first
-    one's), as it spelled it (for a line read with :data:`READ_AS`, that word).
+    one's), as it spelled it: never a word the server chose.
 
-    ``written`` holds each distinct occurrence that carries a word, with the
-    strongest word on it, up to :data:`WRITTEN_KEPT`, and ``written_left_out``
+    ``written`` holds each distinct occurrence that is an error or a warning
+    (:func:`said_as`), with the strongest word on it and, under :data:`READ_AS`,
+    the line classifier's reading, up to :data:`WRITTEN_KEPT`, and ``written_left_out``
     how many more there were: every line the simulator gave a word reaches a
     reader that lists them (:func:`said_lines`), or is counted."""
     rules = _CLASSIFIERS[rules_name]
@@ -750,8 +765,6 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
     for channel in ("log", "console"):
         for code, block in _occurrences(channels.get(channel) or "", rules):
             words = [m[1] for line in block if (m := _SEVERITY.match(line.strip())) is not None]
-            if code in READ_AS:
-                words.append(READ_AS[code])
             strongest = max(words, key=_SEVERITY_RANK.__getitem__, default=None)
             text = _held("\n".join(block))
             entry = entries.get((code, channel))
@@ -767,13 +780,18 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
             ):
                 entry["severity"] = strongest
             entry["count"] += 1
-            if strongest is None:
+            line: WrittenLine = {"text": text}
+            if strongest is not None:
+                line["severity"] = strongest
+            if code in READ_AS:
+                line["read_as"] = READ_AS[code]
+            if said_as(line) is None:
                 continue
             kept = entry.setdefault("written", [])
-            if any(line["text"] == text for line in kept):
+            if any(seen["text"] == text for seen in kept):
                 continue
             if len(kept) < WRITTEN_KEPT:
-                kept.append({"text": text, "severity": strongest})
+                kept.append(line)
             else:
                 left_out.setdefault((code, channel), set()).add(text)
     for key, texts in left_out.items():
@@ -881,12 +899,17 @@ _SAID_AS: dict[str, Literal["error", "warning"]] = {
 
 
 def said_as(condition: Mapping[str, Any]) -> Literal["error", "warning"] | None:
-    """Whether the simulator called ``condition`` (a :class:`LogCondition`)
-    an error or a warning, by the word it wrote on its line; None where it
-    wrote neither. Every reader that lists a run's errors or warnings asks
-    this, so none decides it otherwise."""
+    """Whether ``condition`` (a :class:`LogCondition`, or one of its
+    :func:`said_lines`) is an error or a warning: by the word the simulator
+    wrote on it, else, for a simulator with no recorded wording, by the line
+    classifier's reading (``read_as``); None for neither. Every reader that
+    lists a run's errors or warnings asks this, so none decides it otherwise."""
     severity = condition.get("severity")
-    return _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
+    said = _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
+    if said is not None:
+        return said
+    read_as = condition.get("read_as")
+    return read_as if read_as in ("error", "warning") else None
 
 
 #: The keys of a condition that hold its worded lines, kept off a run row.
@@ -898,13 +921,15 @@ def said_lines(condition: Mapping[str, Any]) -> list[dict[str, str]]:
     carries a word, with that word (``{"text", "severity"}``), in order: the one
     answer to which lines of a condition the simulator called what. A reader
     that lists a run's errors or warnings lists these, and says the
-    condition's ``written_left_out`` beside them. A condition decoded before
-    lines were kept gives its first text with its severity."""
+    condition's ``written_left_out`` beside them. ``severity`` is the
+    simulator's own word and is absent where it wrote none; ``read_as`` is the
+    line classifier's reading for a simulator with no recorded wording. A
+    condition decoded before lines were kept gives its first text with its
+    severity."""
     if "written" in condition:
         return [dict(line) for line in condition["written"]]
-    severity = condition.get("severity")
-    if isinstance(severity, str):
-        return [{"text": str(condition["first_text"]), "severity": severity}]
+    if said_as(condition) is not None:
+        return [{"text": str(condition["first_text"]), "severity": condition["severity"]}]
     return []
 
 

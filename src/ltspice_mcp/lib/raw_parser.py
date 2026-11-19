@@ -963,9 +963,11 @@ def build_simulation_summary(
             ]
             if meas_errors:
                 summary["meas_errors"] = meas_errors
-            left_out = {
-                str(c["code"]): int(c["written_left_out"]) for c in said if c.get("written_left_out")
-            }
+            left_out: dict[str, int] = {}
+            for c in said:
+                if c.get("written_left_out"):
+                    code = str(c["code"])
+                    left_out[code] = left_out.get(code, 0) + int(c["written_left_out"])
             if left_out:
                 summary["lines_left_out"] = left_out
 

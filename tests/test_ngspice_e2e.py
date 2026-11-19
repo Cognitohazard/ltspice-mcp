@@ -1020,11 +1020,27 @@ async def test_a_four_in_batch_mode_is_reported_skipped_where_ngspice_says_so(
         },
     )
     assert receipt["completeness"]["produced"] == 1, receipt
-    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [{"key": "sum", "metric": "summary"}],
+        include={"provenance": True},
+    )
     (value,) = [v["value"] for v in data["results"]["sum"]["values"]]
     assert not value.get("fourier"), value
     (row,) = receipt["runs"]["items"]
     noticed = any(d["code"] == "fourier_skipped_batch" for d in row.get("diagnostics", []))
+    # Whatever a version writes, a line it starts with ".fourier" is the
+    # notice and must be read as one.
+    (hashes,) = data["source_hashes"]
+    log = Path(hashes["log_path"])
+    written = "".join(
+        p.read_text(errors="replace")
+        for p in (log, log.with_suffix(".exe.log"))
+        if p.exists()
+    )
+    if any(line.strip().startswith(".fourier") for line in written.splitlines()):
+        assert noticed, (written, row)
     reasons = [
         o["evidence"]["reason"]
         for o in data.get("observations", [])

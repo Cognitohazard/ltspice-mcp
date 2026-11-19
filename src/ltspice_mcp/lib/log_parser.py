@@ -695,7 +695,7 @@ def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] 
     return "execution_failed", None
 
 
-def _op_block_recovered(lines: list[str], idx: int) -> bool:
+def _op_block_recovered(lines: Sequence[str], idx: int) -> bool:
     """Whether the OP-solve block holding a stepping-failure at ``idx`` converged.
 
     LTspice escalates within one solve (Direct Newton -> Gmin -> Source stepping
@@ -778,7 +778,7 @@ def classify_line(lines: Sequence[str], i: int) -> LineReading:
     # LTspice — drop it when THIS solve block later converged; keep it as an
     # error otherwise (ngspice no-data run, or a step that never converged).
     if is_op_stepping_failure(stripped):
-        recovered = _op_block_recovered(list(lines), i)
+        recovered = _op_block_recovered(lines, i)
         return LineReading(None if recovered else "error", stripped, 1)
     if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
         return LineReading("error", stripped, 1)
@@ -891,6 +891,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     i = 0
     while i < len(lines):
         reading = classify_line(lines, i)
+        head = lines[i]
         i += reading.taken
         if reading.kind == "warning":
             warnings.append(reading.text)
@@ -900,7 +901,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             # directive is a meas_error, with a suggestion when the failure
             # matches a known pattern (the source line is the block's second).
             block = reading.text.split("\n")
-            if _RE_FILE_ERROR.match(block[0]) and len(block) >= 2:
+            if _RE_FILE_ERROR.match(head) and len(block) >= 2:
                 source_line = block[1].lstrip()
                 if source_line.lower().startswith(".meas"):
                     val_err = validate_directive(source_line, simulator="LTspice")
