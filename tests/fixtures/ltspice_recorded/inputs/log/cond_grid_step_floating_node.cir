@@ -1,0 +1,6 @@
+* a node with no DC path to ground, over two steps
+I1 0 a {i}
+C1 a 0 1n
+.step param i list 1 2
+.op
+.end

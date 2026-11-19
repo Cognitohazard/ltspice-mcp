@@ -1,0 +1,7 @@
+* an include file that is not there, over two steps
+.include nosuchfile.lib
+V1 a 0 1
+R1 a 0 {r}
+.step param r list 1k 2k
+.op
+.end
