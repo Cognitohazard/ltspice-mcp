@@ -1859,10 +1859,16 @@ async def time_steps(
         axis, parse_time(t_start, "window.start"), parse_time(t_end, "window.end")
     )
     times = axis[lo:hi]
+    if not np.all(np.isfinite(times)):
+        raise ResultError(
+            "time_steps found a stored time that is not a finite number in this run; read it "
+            "with the waveform recipe to see its time axis.",
+            show_hint=False,
+        )
     if times.size < 2:
         raise ResultError(
             f"time_steps needs two stored points in the window to take a step between; "
-            f"it holds {max(times.size, 0)}. Widen the window or drop it.",
+            f"it holds {times.size}. Widen the window or drop it.",
             show_hint=False,
         )
     steps = np.diff(times)

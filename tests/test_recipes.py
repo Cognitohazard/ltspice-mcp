@@ -57,6 +57,7 @@ VALID_RECIPES = {
     "transient_response": {"signal": "V(out)", "mode": "step"},
     "thd": {"signal": "V(out)"},
     "tone": {"signal": "V(out)", "frequency_hz": "1k"},
+    "time_steps": {},
     "bode_filter": {"signal": "V(out)"},
     "bode_point": {"signal": "V(out)", "at_hz": "1k"},
     "bode_crossing": {"signal": "V(out)", "level_db": -3.0},
@@ -81,6 +82,7 @@ MULTI_FIELDS = {
     "stability": "phase_margin_deg",
     "return_loss": "return_loss_db",
     "tone": "phase_deg",
+    "time_steps": "min_step",
 }
 
 

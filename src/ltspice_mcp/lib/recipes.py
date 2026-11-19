@@ -630,6 +630,14 @@ class TimeStepsRecipe(MultiRecipe):
     )
     window: Window | None = None
 
+    @field_validator("threshold_s")
+    @classmethod
+    def _positive_threshold(cls, value: float | str | None) -> float | str | None:
+        number = step_number(value)
+        if value is not None and (number is None or not number > 0):
+            raise ValueError(f"threshold_s must be a positive time in seconds; got {value!r}")
+        return value
+
     def reducible_fields(self) -> tuple[str, ...]:
         fields = super().reducible_fields()
         if self.threshold_s is None:

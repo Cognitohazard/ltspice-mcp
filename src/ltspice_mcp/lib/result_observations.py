@@ -62,6 +62,7 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import (
+    DEFAULT_INCLUDE_DEPTH,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -70,7 +71,14 @@ from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, sp
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
-from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head, lex_deck
+from ltspice_mcp.lib.ngspice_driver import interp_option, read_option_cards
+from ltspice_mcp.lib.spice_lex import (
+    EditCards,
+    SpiceLexError,
+    directive_head,
+    lex_deck,
+    lex_for_edit,
+)
 from ltspice_mcp.lib.spice_lex_views import directive_args, read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 from ltspice_mcp.lib.trace_names import is_node_voltage
@@ -359,69 +367,60 @@ def tran_max_step(netlist_text: str) -> float | None:
     return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
 
 
-#: How deep ``ngspice_interp`` follows ``.include`` cards before it stops and
-#: says the rest was not read.
-_INTERP_INCLUDE_DEPTH = 16
-
-
 def deck_ngspice_interp(netlist: Path) -> tuple[bool | None, str | None]:
-    """Whether the deck at ``netlist`` sets ngspice's ``interp`` option, which
-    makes a batch run store its transient interpolated onto the print step
-    instead of at the time points its solver accepted (measured on ngspice-42:
-    ``tests/test_time_steps_recipe.py``).
+    """Whether the deck at ``netlist`` sets ngspice's ``interp`` option
+    (``ngspice_driver.interp_option``) on a card ngspice reads
+    (``ngspice_driver.read_option_cards``), in the deck or a file it
+    ``.include``s.
 
-    ``(True, None)`` when an ``.option``/``.options``/``.opt`` card of the deck
-    or of a file it ``.include``s names it; ``(False, None)`` when every card
-    ngspice reads was read and none does; ``(None, why)`` when a card it may
-    read was not: a ``.lib`` card (which part of the file ngspice reads turns
-    on its mode), a ``.control`` block, which can set the option as a command,
-    or a file that could not be read."""
-    pending: list[tuple[Path, int]] = [(netlist, 0)]
-    seen: set[Path] = set()
+    ``(True, None)`` when one does; ``(False, None)`` when every file the deck
+    reads was read and no card it reads does; ``(None, why)`` otherwise: an
+    option card setting it in a file read through ``.lib``, which part of such
+    a file ngspice reads turning on its mode (a section, or the whole file);
+    a ``.control`` block, which can set it as a command; a file that could not
+    be read or lies deeper than ``deck_staging.DEFAULT_INCLUDE_DEPTH``."""
+    files: list[EditCards] = []
+    through_lib: list[bool] = []
     unread: str | None = None
+    pending: list[tuple[Path, int, bool]] = [(netlist, 0, False)]
+    seen: set[Path] = set()
     while pending:
-        path, depth = pending.pop()
+        path, depth, lib = pending.pop()
         if path in seen:
             continue
         seen.add(path)
         try:
-            cards = lex_deck(read_spice_text(path), title=depth == 0).cards
+            lexed = lex_for_edit(read_spice_text(path), deck=depth == 0)
+            references = scan_include_references(lexed.read, path, family="ngspice", depth=depth)
         except (OSError, SpiceLexError):
             unread = unread or f"the file {path.name} could not be read"
             continue
-        for card in cards:
-            if card.kind == "control":
-                unread = unread or "a .control block can set it as a command, and is not read here"
-                continue
-            if card.kind != "directive":
-                continue
-            if directive_head(card) in {".option", ".options", ".opt"}:
-                try:
-                    words = directive_args(card)
-                except SpiceLexError:
-                    unread = (
-                        unread or f"an option card ({card.body.strip()[:40]}) could not be read"
-                    )
-                    continue
-                if any(word.split("=", 1)[0].strip().casefold() == "interp" for word in words):
-                    return True, None
-        try:
-            references = scan_include_references(cards, path, family="ngspice", depth=depth)
-        except SpiceLexError:
-            unread = unread or "a card that names a file could not be read"
-            continue
+        files.append(lexed)
+        through_lib.append(lib)
+        if any(card.kind == "control" for card in lexed.read):
+            unread = unread or "a .control block can set it as a command, and is not read here"
         for reference in references:
-            if reference.head != ".include" and reference.head != ".inc":
-                unread = (
-                    unread
-                    or f"the {reference.head} card naming {reference.raw_path} is not read here"
-                )
-                continue
             target = resolve_existing(resolve_reference(path.parent, reference.raw_path))
-            if target is None or depth + 1 > _INTERP_INCLUDE_DEPTH:
-                unread = unread or f"the file {reference.raw_path} it includes could not be read"
-                continue
-            pending.append((target, depth + 1))
+            if target is None:
+                unread = unread or f"the file {reference.raw_path} the deck reads was not found"
+            elif depth + 1 > DEFAULT_INCLUDE_DEPTH:
+                unread = unread or (
+                    f"the file {reference.raw_path} is more than {DEFAULT_INCLUDE_DEPTH} "
+                    "includes deep, and is not read here"
+                )
+            else:
+                pending.append((target, depth + 1, lib or reference.head == ".lib"))
+    for index, card in read_option_cards(files):
+        sets = interp_option(card)
+        if sets is None:
+            unread = unread or "an option card could not be read"
+        elif sets and through_lib[index]:
+            unread = unread or (
+                "an option card in a file the deck reads through .lib sets it, and "
+                "whether ngspice reads that card turns on the section and the mode"
+            )
+        elif sets:
+            return True, None
     return (None, unread) if unread else (False, None)
 
 

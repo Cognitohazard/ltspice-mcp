@@ -332,23 +332,54 @@ _XVII_REDUCED = (
 )
 
 
+def _saved_from(raw: DecodedRaw) -> float | None:
+    """The time a transient's first step starts storing at, when it is after
+    zero: a ``.tran`` start time leaves out every point before it. None when
+    the run stores from zero, or its axis cannot be read."""
+    try:
+        axis = np.asarray(raw.get_axis(0))
+    except (ResultError, ValueError, IndexError):
+        return None
+    if axis.size == 0 or not np.isfinite(axis[0]):
+        return None
+    first = float(np.real(axis[0]))
+    return first if first > 0 else None
+
+
 def stored_time_points(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
     """Which of its solver's time points the transient ``raw`` from ``source``
-    holds. The one answer every reader of a transient's steps asks; no answer
-    holds a step the solver tried and rejected, which no file stores.
+    holds. The one answer every reader of a transient's steps asks.
 
+    - A run that stores from a start time after zero holds none of the points
+      before it, so no answer but ``reduced`` is given as complete for it.
     - LTspice: XVII with waveform compression on stores fewer than it accepted
       (:func:`compression_drops_points`). XVII with it off stores as many as
-      its log counts as accepted (``raw/compress_1mv_off``, ``raw/tran_uncompressed``).
-      LTspice 26 writes no count to compare with, and a build not shown is not
-      claimed: both are not checked.
-    - ngspice: every accepted time point, or under ``.options interp`` points on
-      the print step (measured on ngspice-42, ``tests/test_time_steps_recipe.py``),
-      read from the run's deck (``result_observations.deck_ngspice_interp``);
-      not checked without a deck, or where the deck holds a card not read.
+      its log counts as accepted (``raw/compress_1mv_off``,
+      ``raw/tran_uncompressed``). LTspice 26 logs no count to compare with, and
+      a build not shown is not claimed: both are not checked.
+    - ngspice: every accepted time point, and none it rejected (measured on
+      ngspice-42 with ``.options acct``), or under ``.options interp`` points on
+      the print step, read from the run's deck
+      (``result_observations.deck_ngspice_interp``); not checked without a
+      deck, or where the deck holds a card that answer does not read.
     - Any other simulator: not checked.
 
     Blocking: it may read the run's deck, log and raw headers."""
+    found = _stored_points_by_simulator(source, raw)
+    start = None if found.stored == "reduced" else _saved_from(raw)
+    if start is None:
+        return found
+    return TimePointsStored(
+        "not_checked",
+        f"This run stores its results from t = {start:.6g} s, the start time its .tran "
+        "names, so the points its solver accepted before then are not in the file, and "
+        "whether it holds every accepted point after it is not checked. Steps before that "
+        "time are not read.",
+    )
+
+
+def _stored_points_by_simulator(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
+    """:func:`stored_time_points` for a run that stores from zero."""
     producer = source.producer or source_producer(
         source, read_dialect=raw.dialect, reported=reported_build(source.log, source.raw)
     )
@@ -359,17 +390,23 @@ def stored_time_points(source: AnalysisSource, raw: DecodedRaw) -> TimePointsSto
         found = which_ltspice(producer.program, producer.build)
         if found is not None and found.generation == "xvii" and not compressed_transient(raw):
             return TimePointsStored("accepted")
-        build = (
-            "the build that wrote it is not known"
-            if found is None
-            else f"this build ({found.evidence}) logs no count of the steps its solver accepted"
-        )
+        if found is None:
+            why = (
+                "the build that wrote it is not known, so neither whether waveform "
+                "compression dropped points nor the solver's count is known. LTspice XVII "
+                "stores fewer points than it accepts with compression on, and "
+                "'.options plotwinsize=0' turns it off"
+            )
+        elif found.generation == "xvii":
+            why = "this LTspice XVII run's points could not be compared with its solver's"
+        else:
+            why = (
+                f"this build ({found.evidence}) logs no count of the steps its solver "
+                "accepted, so the stored points cannot be compared with one"
+            )
         return TimePointsStored(
             "not_checked",
-            f"Whether this file holds every step LTspice's solver accepted is not checked: "
-            f"{build}, so the stored points cannot be compared with one. LTspice XVII "
-            "stores fewer than it accepted with waveform compression on; "
-            "'.options plotwinsize=0' turns it off.",
+            f"Whether this file holds every step LTspice's solver accepted is not checked: {why}.",
         )
     if family == "ngspice":
         if source.netlist is None:

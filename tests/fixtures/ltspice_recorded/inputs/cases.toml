@@ -1180,8 +1180,8 @@ model = ["lib/log_conditions.py", "lib/log_parser.py"]
 inputs = ["log/timestep_collapse_mid.cir"]
 
 [behaviour.log-transient-convergence-progress]
-summary = "What each build writes to the log while a transient fights for convergence at an edge and then finishes: whether XVII repeats its Heightened Def Con line and 26 its tolerance warning, how often, and where, beside the points the run stored. The time_steps recipe would count those lines per run once this is recorded."
-model = ["lib/log_conditions.py", "lib/metrics.py"]
+summary = "What each build writes to the log while a transient fights for convergence at an edge and then finishes: whether XVII repeats its Heightened Def Con line and 26 its tolerance warning, how often, and where, beside the points the run stored. Nothing reads these lines as a count yet: the recording establishes what such a count would read."
+model = ["lib/log_conditions.py"]
 inputs = ["log/tran_convergence_recovers.cir"]
 pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 

@@ -10,14 +10,14 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from ltspice_mcp.lib.spice_lex_views import read_instance
+from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head
+from ltspice_mcp.lib.spice_lex_views import directive_args, read_instance
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.spice_lex import EditCards, SpiceCard
 
 SEED_MAX = 2147483646
 
-_OPTION_HEAD = re.compile(r"\s*\.opt", re.IGNORECASE)
 _SEED_VALUE = re.compile(r"\bseed\s*=\s*(\S*)", re.IGNORECASE)
 
 _PLAIN_NAME = re.compile(r"[A-Za-z0-9_.:/-]+")
@@ -84,6 +84,56 @@ def seeded_commands(
     )
 
 
+def is_option_card(card: SpiceCard) -> bool:
+    """Whether ngspice takes ``card`` as an option card: a directive whose
+    name starts ``.opt`` (``.option``, ``.options``, ``.opt``), in any case
+    (ngspice-42 ``inp.c``)."""
+    return card.kind == "directive" and directive_head(card).startswith(".opt")
+
+
+def interp_option(card: SpiceCard) -> bool | None:
+    """Whether the option card ``card`` sets ``interp``, which makes a batch
+    run store a transient interpolated onto the print step: ngspice-42 then
+    logs "Interpolated raw file data!" and declares the print step's points in
+    its raw (measured: ``tests/test_time_steps_recipe.py``). False for any
+    other card; None for an option card whose arguments cannot be read."""
+    if not is_option_card(card):
+        return False
+    try:
+        words = directive_args(card)
+    except SpiceLexError:
+        return None
+    return any(word.split("=", 1)[0].strip().casefold() == "interp" for word in words)
+
+
+def read_option_cards(files: Sequence[EditCards]) -> list[tuple[int, SpiceCard]]:
+    """The option cards ngspice may read in a deck's files (``is_option_card``),
+    each with the index of the file it is in.
+
+    A card in a subcircuit that no ``X`` line of the files calls is left out:
+    ngspice drops such a subcircuit unread, options and all, while one called
+    is read (measured on ngspice-42: the seed option under kiltpsa, hsa, ltpsa
+    and spice3, and interp with no mode set). Calls are matched by name across every
+    file, so a subcircuit called only from an uncalled one still counts, and a
+    card in a ``.lib`` section counts whichever section the deck selects
+    (kiltpsa reads every section): the answer errs towards a card being read.
+    """
+    called = {
+        view.model.casefold()
+        for lexed in files
+        for card in lexed.read
+        if card.kind == "instance" and (card.name or "")[:1] in {"x", "X"}
+        if (view := read_instance(card)) is not None and view.model
+    }
+    return [
+        (index, card)
+        for index, lexed in enumerate(files)
+        for card in lexed.read
+        if is_option_card(card)
+        if all(name.casefold() in called for name in card.scope)
+    ]
+
+
 def seed_option(card: SpiceCard) -> str | None:
     """What an option card sets ngspice's random seed to, as written, or None.
 
@@ -95,7 +145,7 @@ def seed_option(card: SpiceCard) -> str | None:
     deck sets it more than once the first in the deck wins, as ngspice
     collects the cards in reverse (``options.c:inp_getopts``).
     """
-    if card.kind != "directive" or not _OPTION_HEAD.match(card.body):
+    if not is_option_card(card):
         return None
     match = _SEED_VALUE.search(card.body)
     return None if match is None else match.group(1)
@@ -103,29 +153,12 @@ def seed_option(card: SpiceCard) -> str | None:
 
 def deck_seeds(files: Sequence[EditCards]) -> list[tuple[int, SpiceCard, str]]:
     """The seed options ngspice may read in a deck's files, as the index of
-    the file each is in, its card and the value it sets (``seed_option``).
-
-    A card in a subcircuit that no ``X`` line of the files calls is left out:
-    ngspice drops such a subcircuit unread, seed and all, while one called
-    sets the seed (measured on ngspice-42 under kiltpsa, hsa, ltpsa and
-    spice3). Calls are matched by name across every file, so a subcircuit
-    called only from an uncalled one still counts, and a card in a ``.lib``
-    section counts whichever section the deck selects (kiltpsa reads every
-    section): the answer errs towards a card being read.
-    """
-    called = {
-        view.model.casefold()
-        for lexed in files
-        for card in lexed.read
-        if card.kind == "instance" and (card.name or "")[:1] in {"x", "X"}
-        if (view := read_instance(card)) is not None and view.model
-    }
+    the file each is in, its card and the value it sets (``seed_option``),
+    among the option cards it reads (``read_option_cards``)."""
     return [
         (index, card, value)
-        for index, lexed in enumerate(files)
-        for card in lexed.read
+        for index, card in read_option_cards(files)
         if (value := seed_option(card)) is not None
-        if all(name.casefold() in called for name in card.scope)
     ]
 
 

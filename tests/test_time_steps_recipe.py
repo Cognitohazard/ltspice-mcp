@@ -88,18 +88,21 @@ _RAMP_DECK = (
     "R1 in out 1k\n"
     "C1 out 0 1n\n"
     "{OPTIONS}"
-    ".tran 10n 10u\n"
+    "{TRAN}\n"
     ".end\n"
 )
 
 
-async def _ramp_job(state: SessionState, work_dir: Path, *, options: str = "") -> str:
+async def _ramp_job(
+    state: SessionState, work_dir: Path, *, options: str = "", tran: str = ".tran 10n 10u"
+) -> str:
     deck = work_dir / "ramp.cir"
-    deck.write_text(_RAMP_DECK.replace("{OPTIONS}", options), encoding="utf-8")
+    text = _RAMP_DECK.replace("{OPTIONS}", options).replace("{TRAN}", tran)
+    deck.write_text(text, encoding="utf-8")
     receipt = await terminal_experiment(
         state,
         {
-            "request_id": f"ramp{len(options)}",
+            "request_id": f"ramp{len(options)}{len(tran)}",
             "circuits": [{"path": deck.name, "id": "ramp"}],
             "variations": [{"kind": "assign", "assign": {"TR": ["1u", "100n", "1p"]}}],
             "execution": {"wait_s": 90, "simulator": "ngspice"},
@@ -119,7 +122,7 @@ async def test_a_job_of_three_runs_gives_one_row_each_and_names_the_run_that_ste
         ngspice_state,
         {
             "sources": [{"job_id": job_id, "runs": "all"}],
-            "recipes": [{"key": "ts", "metric": "time_steps", "threshold_s": 1e-12}],
+            "recipes": [{"key": "ts", "metric": "time_steps", "threshold_s": "1p"}],
         },
     )
     rows = {row["assignments"]["TR"]: row["value"] for row in _rows(data, "ts")}
@@ -127,12 +130,11 @@ async def test_a_job_of_three_runs_gives_one_row_each_and_names_the_run_that_ste
     small = rows["1p"]
     for slow in (rows["1u"], rows["100n"]):
         assert small["min_step"] < slow["min_step"] / 100
-        assert slow["steps_below"] == 0
-        assert "first_below_at" not in slow
-    # The smallest step follows the 1 ps edge at 2 us.
+        assert small["steps_below"] > slow["steps_below"]
+    # The smallest step follows the 1 ps edge at 2 us; the steps below 1 ps
+    # fall at its edges, the rising one at 2 us and the falling one at 5 us.
     assert 2e-6 <= small["min_step_at"] <= 2.01e-6
-    assert small["steps_below"] > 0
-    assert 2e-6 <= small["first_below_at"] <= small["last_below_at"] <= 7e-6
+    assert 2e-6 <= small["first_below_at"] <= small["last_below_at"] <= 5.01e-6
     for value in rows.values():
         assert value["points"] > 2
         assert value["min_step"] <= value["median_step"] <= value["max_step"]
@@ -157,10 +159,38 @@ async def test_ngspice_stores_every_accepted_time_point_without_interp(
         },
     )
     rows = _rows(data, "ts")
-    accepted = await asyncio.to_thread(_accepted_counts, work_dir)
-    assert len(accepted) == 3
-    assert sorted(row["value"]["points"] for row in rows) == sorted(accepted)
+    counts = await asyncio.to_thread(_timepoint_counts, work_dir)
+    assert len(counts) == 3
+    assert sorted(row["value"]["points"] for row in rows) == sorted(a for a, _ in counts)
+    # A run that rejected a time point stores the accepted ones only.
+    for accepted, rejected in counts:
+        if rejected:
+            assert accepted in {row["value"]["points"] for row in rows}
     assert all(row["value"]["stored"] == "accepted" for row in rows)
+
+
+@needs_ngspice
+@ROUTES
+async def test_a_run_saved_from_a_start_time_is_not_called_complete(
+    read: Reader, ngspice_state: SessionState, work_dir: Path
+):
+    """A .tran start time leaves every point before it out of the file, so the
+    1 ps edge at 2 us is not in what is read, and the reply says so instead of
+    reporting the steps from 5 us as every accepted point."""
+    job_id = await _ramp_job(ngspice_state, work_dir, tran=".tran 10n 10u 5u")
+    data = await read(
+        ngspice_state,
+        {
+            "sources": [{"job_id": job_id, "runs": "all"}],
+            "recipes": [{"key": "ts", "metric": "time_steps"}],
+        },
+    )
+    for row in _rows(data, "ts"):
+        assert row["value"]["stored"] == "not_checked"
+        assert row["value"]["t_start"] >= 5e-6
+    observations = _coverage(data)
+    assert observations
+    assert all("start time" in observation["detail"] for observation in observations)
 
 
 @needs_ngspice
@@ -224,13 +254,16 @@ async def test_stored_points_at_one_time_are_counted_apart(
     assert "not checked" in observation["detail"]
 
 
-def _accepted_counts(work_dir: Path) -> list[int]:
-    """The time points each ngspice log under ``work_dir`` counts as accepted."""
+def _timepoint_counts(work_dir: Path) -> list[tuple[int, int]]:
+    """The time points each ngspice log under ``work_dir`` counts as accepted
+    and as rejected."""
     counts = []
     for log in sorted(work_dir.rglob("*.log")):
         text = log.read_text(encoding="utf-8", errors="replace")
-        if (found := re.search(r"Accepted timepoints\s*=\s*(\d+)", text)) is not None:
-            counts.append(int(found[1]))
+        accepted = re.search(r"Accepted timepoints\s*=\s*(\d+)", text)
+        rejected = re.search(r"Rejected timepoints\s*=\s*(\d+)", text)
+        if accepted is not None and rejected is not None:
+            counts.append((int(accepted[1]), int(rejected[1])))
     return counts
 
 
@@ -423,49 +456,105 @@ async def test_a_job_reads_each_case_from_its_own_recording(
 # ---------------------------------------------------------------------------
 
 
-def _ngspice_shaped(work_dir: Path) -> Path:
-    raw = work_dir / "plain.raw"
-    times = [0.0, 1e-9, 3e-9, 7e-9]
+def _ngspice_shaped(work_dir: Path, name: str, start: float = 0.0) -> Path:
+    raw = work_dir / f"{name}.raw"
+    times = [start + t for t in (0.0, 1e-9, 3e-9, 7e-9)]
     raw.write_bytes(
         ngspice_binary_raw([(t, 0.5) for t in times], ["time", "v(out)"], declared=len(times))
     )
     return raw
 
 
-def _sources(family: str, work_dir: Path) -> list[tuple[str, services.AnalysisSource]]:
+#: What LTspice stored of each recording, by build: XVII under compression
+#: keeps fewer points than it accepted, XVII with compression off keeps them
+#: all, and LTspice 26 logs no count to compare with.
+_LTSPICE_STORED = {
+    ("ltspice17", "raw/compress_1mv"): "reduced",
+    ("ltspice17", "raw/compress_1mv_off"): "accepted",
+    ("ltspice17", "raw/step_tran"): "reduced",
+    ("ltspice17", "raw/tran_window"): "reduced",
+    ("ltspice26", "raw/compress_1mv"): "not_checked",
+    ("ltspice26", "raw/compress_1mv_off"): "not_checked",
+    ("ltspice26", "raw/step_tran"): "not_checked",
+    ("ltspice26", "raw/tran_window"): "not_checked",
+}
+
+_RC = "* deck\nV1 in 0 PULSE(0 1 1n 1n 1n 2n 5n)\nR1 in out 1k\nC1 out 0 1p\n"
+
+#: ngspice decks, each with what the server answers of its stored points:
+#: an interp card read, not read, or in a file whose reading turns on the mode.
+_NGSPICE_DECKS: dict[str, tuple[str, dict[str, str], str]] = {
+    "plain": ("", {}, "accepted"),
+    "interp": (".options interp\n", {}, "print_step"),
+    "interp_in_uncalled_subckt": (
+        ".subckt foo a\n.options interp\nR1 a 0 1k\n.ends\n",
+        {},
+        "accepted",
+    ),
+    "interp_in_called_subckt": (
+        "X1 out foo\n.subckt foo a\n.options interp\nR1 a 0 1meg\n.ends\n",
+        {},
+        "print_step",
+    ),
+    "interp_in_include": (".include opts.inc\n", {"opts.inc": ".options interp\n"}, "print_step"),
+    "interp_in_lib": (
+        ".lib m.lib tt\n",
+        {"m.lib": ".lib tt\n.options interp\n.endl tt\n"},
+        "not_checked",
+    ),
+    "lib_without_interp": (
+        ".lib m.lib tt\n",
+        {"m.lib": ".lib tt\n.model d1 D\n.endl tt\n"},
+        "accepted",
+    ),
+    "include_missing": (".include gone.inc\n", {}, "not_checked"),
+}
+
+
+def _bare(raw: Path, dialect: str) -> services.AnalysisSource:
+    return services.AnalysisSource(
+        raw=raw,
+        log=raw.with_suffix(".log"),
+        netlist=None,
+        dialect=None,
+        identity=None,
+        trusted_job_artifact=False,
+        explicit_dialect=dialect,
+    )
+
+
+def _sources(family: str, work_dir: Path) -> list[tuple[str, services.AnalysisSource, str]]:
     """Every kind of run of ``family`` whose stored points the server can be
-    asked about: by build, compression and deck, as each family has them."""
-    state_free: list[tuple[str, services.AnalysisSource]] = []
-
-    def bare(raw: Path, dialect: str) -> services.AnalysisSource:
-        return services.AnalysisSource(
-            raw=raw,
-            log=raw.with_suffix(".log"),
-            netlist=None,
-            dialect=None,
-            identity=None,
-            trusted_job_artifact=False,
-            explicit_dialect=dialect,
-        )
-
+    asked about, by build, compression and deck, with the answer expected."""
+    found: list[tuple[str, services.AnalysisSource, str]] = []
     if family == "ltspice":
-        for build in rec.BUILDS:
-            for case_id in ("raw/compress_1mv", "raw/compress_1mv_off", "raw/step_tran"):
-                raw = rec.stage_run(build, case_id, work_dir / build)
-                state_free.append((f"{build}:{case_id}", bare(raw, "ltspice")))
-                unknown = dataclasses.replace(
-                    bare(raw, "ltspice"), producer=Producer("ltspice", None, None)
-                )
-                state_free.append((f"unknown build:{case_id}", unknown))
-        return state_free
-    raw = _ngspice_shaped(work_dir)
-    plain = dataclasses.replace(bare(raw, "ngspice"), producer=Producer(family, None, None))
-    state_free.append((f"{family}:no deck", plain))
-    for name, options in (("deck", ""), ("interp deck", ".options interp\n")):
-        deck = work_dir / f"{family}_{name.replace(' ', '_')}.cir"
-        deck.write_text(f"* deck\nR1 a 0 1k\n{options}.tran 1n 7n\n.end\n", encoding="utf-8")
-        state_free.append((f"{family}:{name}", dataclasses.replace(plain, netlist=deck)))
-    return state_free
+        for (build, case_id), stored in _LTSPICE_STORED.items():
+            raw = rec.stage_run(build, case_id, work_dir / build)
+            found.append((f"{build}:{case_id}", _bare(raw, "ltspice"), stored))
+            unknown = dataclasses.replace(
+                _bare(raw, "ltspice"), producer=Producer("ltspice", None, None)
+            )
+            found.append((f"unknown build:{case_id}", unknown, "not_checked"))
+        return found
+    producer = Producer(family, None, None)
+    raw = _ngspice_shaped(work_dir, family)
+    plain = dataclasses.replace(_bare(raw, "ngspice"), producer=producer)
+    found.append((f"{family}:no deck", plain, "not_checked"))
+    for name, (cards, files, stored) in _NGSPICE_DECKS.items():
+        folder = work_dir / f"{family}_{name}"
+        folder.mkdir()
+        for file, text in files.items():
+            (folder / file).write_text(text, encoding="utf-8")
+        deck = folder / "deck.cir"
+        deck.write_text(f"{_RC}{cards}.tran 1n 7n\n.end\n", encoding="utf-8")
+        expected = stored if family == "ngspice" else "not_checked"
+        found.append((f"{family}:{name}", dataclasses.replace(plain, netlist=deck), expected))
+    later = _ngspice_shaped(work_dir, f"{family}_later", start=5e-9)
+    deck = work_dir / f"{family}_later.cir"
+    deck.write_text(f"{_RC}.tran 1n 12n 5n\n.end\n", encoding="utf-8")
+    saved_late = dataclasses.replace(_bare(later, "ngspice"), producer=producer, netlist=deck)
+    found.append((f"{family}:saved from a start time", saved_late, "not_checked"))
+    return found
 
 
 @pytest.mark.parametrize("family", sorted(SIMULATORS))
@@ -473,18 +562,19 @@ async def test_no_smallest_step_is_reported_without_what_the_file_leaves_out(
     family: str, state_no_sim: SessionState, work_dir: Path
 ):
     """Over every simulator the server runs, a row that reports a smallest step
-    says what the stored points are, and every answer but 'every accepted point'
-    carries the coverage observation. A run whose points are known to be
-    reduced (LTspice XVII under compression) is always 'reduced'."""
+    says what the stored points are, as the evidence for each kind of run
+    establishes it, and every answer but 'every accepted point' carries the
+    coverage observation. A run whose points are known to be reduced (LTspice
+    XVII under compression) is always 'reduced'."""
     recipe = TimeStepsRecipe(key="ts", metric="time_steps")
     sources = await asyncio.to_thread(_sources, family, work_dir)
-    assert sources
-    for label, source in sources:
+    for label, source, expected in sources:
         value = await metrics.time_steps(source, recipe, 0, state_no_sim)
         assert "min_step" in value, label
         raw = await services.load_raw(source, state_no_sim)
         if await asyncio.to_thread(services.compression_drops_points, source, raw):
             assert value["stored"] == "reduced", label
+        assert value["stored"] == expected, label
         if value["stored"] == "accepted":
             assert "observations" not in value, label
             continue
