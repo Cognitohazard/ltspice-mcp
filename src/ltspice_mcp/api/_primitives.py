@@ -554,7 +554,14 @@ async def load_device_op_points(
         else None
     )
     naming = table_naming(writer, printed_by)
-    return device_op_points_of(section, source.observations, xvii=naming.xvii)
+    observations = source.observations
+    # An empty table says why where that is not "no such device"
+    # (services.device_table_unread), as every reader of the table does.
+    if not section and (
+        unread := await services.device_table_unread(source, family=writer.family)
+    ):
+        observations = (*observations, unread)
+    return device_op_points_of(section, observations, xvii=naming.xvii)
 
 
 def measurements_of(section: Any, observations: tuple[dict[str, Any], ...]) -> LogResult[Any]:

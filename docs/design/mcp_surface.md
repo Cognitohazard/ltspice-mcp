@@ -1384,8 +1384,21 @@ names it in one of five places, by why:
   entries and the Python API's `measurements()` carry the same
   `not_established` with those steps null in `values`, and an `inspect`
   measurements row carries its reason.
-- `not_finite: [name]`: LTspice printed a number that is not finite, such as
-  a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
+- `unreadable` also names a number that is not finite, such as a stepped
+  FRA's gain margin of `infdB`, quoted in its reason: the log decoder
+  (`log_parser.parse_measurements`) holds it as null and gives that one
+  reason, which every route carries (`steps` names the steps it concerns
+  where that is not every step).
+- `printed_once: {name: {step_count, step?, reason}}`: the log printed the
+  value once for a run of several steps. LTspice 26 prints one line for each
+  measurement of a stepped `.op`, and no `.step` line; the line holds the
+  first step's value (recorded: `log/meas_step_op`, compared with the
+  results file of `raw/step_op`), so `step` is 0 for LTspice 26 and
+  absent, with the reason saying it is not established, for any other build
+  and for a log no evidence names. The other steps' values are not in the log, and the reason
+  names the recipe that reads them from the results. The summary's entries,
+  an `inspect` measurements row and the Python API's `measurements()` carry
+  the same statement.
 
 `failed_measurements` means "LTspice printed it as failed" in every reply
 that carries it. The summary, `inspect(kind="results", view="measurements")`
@@ -2821,7 +2834,7 @@ it, and reported when the caller names it.
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth. `errors`, `warnings` and `meas_errors` are built from the run's conditions, the source of `diagnostics`: each distinct line the simulator wrote an error or a warning word on is listed by that word (`log_conditions.said_lines`, `said_as`), a line with no word is in neither list, and a relayed line carries that word as its `severity`, or none. Past 50 distinct lines of one condition, `lines_left_out` gives how many more there were, by code. For QSPICE and Xyce, with no recorded wording, a line is read by the generic patterns the server used before it had recordings, under `simulator_error` and `simulator_warning` |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed), `unreadable` or `not_finite`; its default row shows only those (§3.3) |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed) or `unreadable`, and a value printed once for a stepped run carries `printed_once`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran, dc, ac, noise | `signal` | `window?`, on tran and dc only; `quantiles?`, tran only — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes. An AC or FRA run gives the magnitude in dB and the phase; a noise run has no `mean`. `metrics.signal_stats_defined` decides which runs it reads, over a window or whole |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |

@@ -705,8 +705,8 @@ NOT_READ_BY_JOB: Mapping[str, str] = {
     "run_progress": "how far a running case has got, said only while it runs",
     # What the run's log says; a read of the raw does not read the log.
     "logopinfo_withheld": (
-        "the log's device table, not the raw. A read of that table by job "
-        "(operating_point, api.device_op_points) needs it, and does not repeat it yet"
+        "the log's device table, not the raw: every read of that table by job "
+        "gives it with an empty table (services.device_table_unread), and no other read"
     ),
     "native_log_output": "a run that wrote no raw, so no read of a raw by job is made",
     "missing_required_raw": "a run that wrote no raw, so no read of a raw by job is made",

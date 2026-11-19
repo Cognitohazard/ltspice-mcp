@@ -136,10 +136,18 @@ def test_a_stepped_fra_runs_margins_read_as_the_numbers_printed(tmp_path: Path):
         "at": [15900.4, 8007.62],
         "printed_form": "table_at",
     }
-    # Not a finite number, so held as null and counted.
+    # Not a finite number, so held as null, with what the log printed: the
+    # decoder gives the one reason every route carries. The 'at' printed
+    # beside it, inf, is not the result: the section holds it as null and
+    # counts it.
     assert table["measurements"]["gainmargin_1"] == {
         "values": [None, None],
         "at": None,
+        "unreadable": {
+            "line": "Measurement: GainMargin_1",
+            "reason": "the log gives 'infdB', a number that is not finite, which a reply "
+            "carries as null",
+        },
         "printed_form": "table_at",
     }
-    assert section["nonfinite_count"] == 3
+    assert section["nonfinite_count"] == 1

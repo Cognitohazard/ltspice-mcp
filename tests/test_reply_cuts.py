@@ -304,12 +304,6 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ("analyze.handle_analyze_results", "results.*.values[].value.failed_measurements"): (
         _MEASUREMENT_NAMES
     ),
-    ("analyze.handle_analyze_results", "results.*.per_run.items[].value.not_finite"): (
-        _MEASUREMENT_NAMES
-    ),
-    ("analyze.handle_analyze_results", "results.*.values[].value.not_finite"): (
-        _MEASUREMENT_NAMES
-    ),
     ("inspect_tools.handle_inspect", "results[].data.failed_measurements"): _MEASUREMENT_NAMES,
     **{
         (handler, f"{rows}.{field}"): bound
@@ -333,6 +327,17 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "analyze.handle_analyze_results",
         "results.*.values[].value.not_established.*.steps",
     ): _STEP_INDICES,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.per_run.items[].value.unreadable.*.steps",
+    ): _STEP_INDICES,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.values[].value.unreadable.*.steps",
+    ): _STEP_INDICES,
+    ("inspect_tools.handle_inspect", "results[].data.measurements[].unreadable.steps"): (
+        _STEP_INDICES
+    ),
     # Failures.
     ("experiments.handle_run_experiments", "failures"): _CASE_FAILURES,
     ("jobs.handle_jobs", "failures"): _CASE_FAILURES,

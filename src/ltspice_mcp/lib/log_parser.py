@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import io
 import logging
+import math
 import re
 import tempfile
 from collections import Counter
@@ -28,6 +29,7 @@ from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
 from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
+from ltspice_mcp.lib.log_types import PrintedOnce
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build, which_ltspice
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.store import parser_file_in
@@ -1568,6 +1570,103 @@ def _zero_steps_reason(producer: Producer, form: str) -> str | None:
     )
 
 
+def _other_steps(solves: int) -> str:
+    """Where the values of a stepped .op's other steps are, which its log
+    does not hold (:func:`_printed_once`, :func:`printed_once_refusal`)."""
+    return (
+        f"The values of the other {solves - 1} steps are not in the log: read each "
+        "step's from the run's results, with the 'value' recipe and all_steps=true "
+        "for a trace, or a recipe over the measurement's own expression."
+    )
+
+
+def printed_once_refusal(table: Mapping[str, Any], asked: str) -> str | None:
+    """Why a request for one step (``asked``, as the caller wrote it) of a
+    log's measurements cannot be read, where the log printed each of them
+    once for a run of several steps (``printed_once``,
+    :func:`answered_measurements`); None for any other log.
+
+    The refusal takes its answer from the entries' own statement: how many
+    steps the run had, which step the printed value is where a recording
+    establishes it, and how to read the others. Every route that takes a
+    step for a measurement asks it, so none says the run has one step."""
+    once = next(
+        (
+            entry["printed_once"]
+            for entry in table.get("measurements", {}).values()
+            if "printed_once" in entry
+        ),
+        None,
+    )
+    if once is None:
+        return None
+    count = once["step_count"]
+    which = (
+        f"It is step {once['step']}'s value, the first"
+        if "step" in once
+        else "Which step's value it is is not established"
+    )
+    return (
+        f"{asked} cannot be read from this log: it printed one value for each "
+        f"measurement of a run of {count} steps, with no .step line to choose a step "
+        f"by. {which}; read it with no step chosen. {_other_steps(count)}"
+    )
+
+
+def _printed_once(producer: Producer, solves: int) -> PrintedOnce:
+    """What a measurement printed on one line of a log whose run solved its
+    operating point ``solves`` times, with no ``.step`` line, says of its
+    step: a stepped ``.op``.
+
+    LTspice 26 prints one line for each measurement of a stepped ``.op``
+    (recorded: log/meas_step_op, three steps). The line holds the first
+    step's value: raw/step_op runs the same divider over the same steps, and
+    its results file holds V(out) 0.8, 1.6 and 2.4, where the log printed
+    0.800000011921. Which build wrote the log is :func:`which_ltspice`'s
+    answer. Only LTspice 26 is recorded, so the step is established for it
+    alone: for another current release (24, 25 or later), XVII, which printed
+    no such line in the recording, IV, and a log no evidence names, it is
+    not. The values of the other steps are not in the log either way."""
+    others = _other_steps(solves)
+    found = which_ltspice(producer.program, producer.build)
+    if found is not None and found.generation == "current" and found.major == 26:
+        return {
+            "step_count": solves,
+            "step": 0,
+            "reason": (
+                f"The log printed this value once for a run of {solves} steps (its "
+                f"operating point was solved {solves} times, with no .step line). It "
+                "is the first step's: LTspice 26 prints the first step's value of a "
+                "stepped .op (recorded: log/meas_step_op, compared with the results "
+                f"file of raw/step_op). {others}"
+            ),
+        }
+    if found is None:
+        who = (
+            "the log does not show which LTspice wrote it, and a recording "
+            "establishes the step for LTspice 26 alone"
+        )
+    elif found.generation == "current":
+        release = f"LTspice {found.major}" if found.major is not None else "An LTspice 24 or later"
+        who = (
+            f"{release} wrote it, and a recording establishes the step for "
+            "LTspice 26 alone"
+        )
+    else:
+        who = (
+            f"LTspice {'XVII' if found.generation == 'xvii' else 'IV'} wrote it, and "
+            "no recording shows which step's value that build prints for a stepped .op"
+        )
+    return {
+        "step_count": solves,
+        "reason": (
+            f"The log printed this value once for a run of {solves} steps (its "
+            f"operating point was solved {solves} times, with no .step line), and "
+            f"which step's value it is is not established: {who}. {others}"
+        ),
+    }
+
+
 def answered_measurements(
     table: MeasurementsOutput, producer: Producer, cards: Mapping[str, CardKind] | None = None
 ) -> MeasurementsOutput:
@@ -1582,6 +1681,14 @@ def answered_measurements(
     ``not_established`` gives the steps, from 0, and why. A step it names is
     not in ``failed_measurements``, which means the log printed ``failed``.
 
+    Where the log printed its measurements on lines for a run whose
+    operating point it solved more than once, with no ``.step`` line (a
+    stepped ``.op``: ``op_solves``), each line's entry says so in
+    ``printed_once``: how many steps the run had, the step whose value the
+    line holds where a recording establishes it (:func:`_printed_once`), and
+    how to read the others. This is the one answer to which step such a
+    value belongs to.
+
     A ``producer`` that names no build is read with the build the log's own
     first line names (``printed_by``), as the run named itself there; the
     decoder read it in the parser's process, so a reader of the log alone
@@ -1589,6 +1696,12 @@ def answered_measurements(
     banner = table.get("printed_by")
     if banner is not None and producer.build is None:
         producer = Producer(producer.family or "ltspice", banner, producer.program)
+    solves = table.get("op_solves")
+    once = (
+        _printed_once(producer, solves)
+        if solves is not None and producer.family in (None, "ltspice")
+        else None
+    )
     entries: dict[str, MeasurementEntry] = {}
     # Why a 0 is not established, by printed form, read once per table.
     zero_reasons: dict[str, str | None] = {}
@@ -1608,9 +1721,11 @@ def answered_measurements(
             if reason is not None:
                 answered["values"] = [None if v == 0 else v for v in entry["values"]]
                 answered["not_established"] = {"steps": zeros, "reason": reason}
+        if once is not None and str(form).startswith("line"):
+            answered["printed_once"] = once
         entries[name] = answered  # type: ignore[assignment]
     answered_table: dict[str, Any] = {
-        key: value for key, value in table.items() if key != "printed_by"
+        key: value for key, value in table.items() if key not in ("printed_by", "op_solves")
     }
     return {**answered_table, "measurements": entries}  # type: ignore[typeddict-item]
 
@@ -1934,34 +2049,59 @@ def parse_measurements(
         # tool surfaces the reason.
         return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
-    # A value LTspice printed that is not a number (a WHEN's threshold written
-    # as a parameter, an expression or a braced expression) fails its own
-    # entry, not the table: name (as the reader keys it) -> the text it printed.
+    # A value LTspice printed that is not a number fails its own entry, not
+    # the table: a WHEN's threshold written as a parameter, an expression or a
+    # braced expression, and a number that is not finite, which no reply can
+    # carry (LTspice 26 prints a stepped .fra run's gain margin as 'infdB'
+    # where the loop's phase never crosses: raw/fra_step). This is the one
+    # place that says why such a value is null: name (as the reader keys it)
+    # -> the text it printed, whether that text is a number that is not
+    # finite, and the steps, from 0, it was printed at.
     unreadable: dict[str, str] = {}
+    not_finite: set[str] = set()
+    unreadable_steps: dict[str, list[int]] = {}
     # The rows of a stepped table where LTspice 24 and later print 'failed'
     # (recorded: log/meas_step): name -> the steps, from 0.
     failed_rows: dict[str, list[int]] = {}
 
-    def _coerce(values: list, name: str) -> list[float | None]:
+    def _unread(name: str, index: int, printed: str, *, finite_text: bool) -> None:
+        unreadable.setdefault(name, printed)
+        if not finite_text:
+            not_finite.add(name)
+        unreadable_steps.setdefault(name, []).append(index)
+
+    def _coerce(values: list, name: str, *, metadata: bool = False) -> list[float | None]:
         out: list[float | None] = []
         for index, val in enumerate(values):
+            number: float | None
             if isinstance(val, str) and val.upper() == "FAILED":
                 failed_rows.setdefault(name, []).append(index)
                 out.append(None)
-            elif val is None:
+                continue
+            if val is None:
                 out.append(None)
-            elif isinstance(val, complex):
-                out.append(_complex_measurement(val))
+                continue
+            if isinstance(val, complex):
+                number = _complex_measurement(val)
             elif hasattr(val, "item") and not isinstance(val, str):
-                out.append(float(val.item()))  # numpy scalar
+                number = float(val.item())  # numpy scalar
             elif isinstance(val, str) and (number := printed_measurement(val)) is not None:
-                out.append(number)
+                pass
             else:
                 try:
-                    out.append(float(val))
+                    number = float(val)
                 except (TypeError, ValueError):
-                    unreadable.setdefault(name, str(val))
+                    _unread(name, index, str(val), finite_text=True)
                     out.append(None)
+                    continue
+            # A point or bound beside the result (``at``, ``from``, ``to``) that
+            # is not finite is not the result: it is kept as read, and the log
+            # section holds it as null and counts it, as before.
+            if not math.isfinite(number) and not metadata:
+                _unread(name, index, str(val), finite_text=False)
+                out.append(None)
+                continue
+            out.append(number)
         return out
 
     # Pass 1: split flat names into parent + metadata-suffix.
@@ -1972,10 +2112,15 @@ def parse_measurements(
         if name in skipped:
             parents[name] = _coerce([skipped[name]], name)
             continue
-        coerced = _coerce(reader.dataset.get(name.lower(), []), name)
         suffix_match = next(
             ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
             None,
+        )
+        coerced = _coerce(
+            reader.dataset.get(name.lower(), []),
+            name,
+            metadata=suffix_match is not None
+            and name[: -len(suffix_match[0])] in measure_name_set,
         )
         if suffix_match:
             suffix, meta_key = suffix_match
@@ -2028,23 +2173,36 @@ def parse_measurements(
         # ``vth^2`` as ``vth``, so a result line's value is taken from what it
         # printed. A stepped table's cell or a metadata value has no such text,
         # and is quoted as the reader holds it.
-        printed = (
-            (shown.value if shown is not None and shown.value is not None else unreadable[name])
+        unread_as = (
+            name
             if name in unreadable
             else next(
                 (
-                    unreadable[meta]
+                    meta
                     for suffix, _key in _MEAS_METADATA_SUFFIXES
                     if (meta := name + suffix) in unreadable
                 ),
                 None,
             )
         )
-        if printed is not None:
+        if unread_as is not None:
+            printed = (
+                shown.value
+                if unread_as == name and shown is not None and shown.value is not None
+                else unreadable[unread_as]
+            )
             entry["unreadable"] = {
                 "line": shown.line if shown is not None else None,
-                "reason": f"the log gives {printed!r} where a number belongs",
+                "reason": (
+                    f"the log gives {printed!r}, a number that is not finite, which a "
+                    "reply carries as null"
+                    if unread_as in not_finite
+                    else f"the log gives {printed!r} where a number belongs"
+                ),
             }
+            steps = unreadable_steps[unread_as]
+            if unread_as == name and len(steps) < len(values):
+                entry["unreadable"]["steps"] = steps
         if name in failed_rows:
             entry["failed_steps"] = failed_rows[name]
         form = printed_form(shown)
@@ -2080,6 +2238,13 @@ def parse_measurements(
     banner = log_banner_build(log_text)
     if banner is not None:
         table["printed_by"] = banner
+    # A stepped .op writes no '.step' line, and LTspice 26 prints one line for
+    # each of its measurements, not a table (log/meas_step_op). The bias-point
+    # solves the log records (one each step: scan_op_step_log) are its only
+    # count of the steps.
+    step_rows, solves = scan_op_step_log(text=log_text)
+    if not step_rows and solves > 1 and step_count == 1:
+        table["op_solves"] = solves
     return table
 
 

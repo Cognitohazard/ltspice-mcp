@@ -32,6 +32,11 @@ option` error on a deck that contains it. The server knows the build from an
 earlier run on the executable, its version resource, or the name XVII installs
 under; when none shows it, the run goes without the option and says so in
 `observations` (`logopinfo_withheld`), and from the next run on the build is
+known. A later read of that run's device table by job (`operating_point`, a
+device parameter's `value`, `api.device_op_points`) gives the same
+`logopinfo_withheld` with the empty table. A log read by its path has no job
+record, so an empty table in a log LTspice 24 or later wrote comes with
+`device_table_request_unknown`: whether the run asked for the table is not
 known. The block
 prints every value to three significant digits (`4.66e-05`), which rounds it by
 up to 0.5%, and `analyze_results` reports this in `observations`
