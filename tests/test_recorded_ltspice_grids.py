@@ -42,8 +42,24 @@ GRIDS = grids()
 #: recorded on LTspice 26 only), and wait for a recording run on Windows. A
 #: coordinate a build fills only by refusing the deck for another card is not
 #: recorded.
+#:
+#: log-condition: of the rules, simulator_error has no line on LTspice 26,
+#: and simulator_warning and deck_error.xvii.1 none on XVII: no recording
+#: shows a build write a line that only they take, so they claim the build on
+#: no evidence (log/cond_grid_model_value_word guesses at the last). Of the
+#: forms, an unknown model parameter with no .step, a .dc point past the first
+#: and the first that needs more than Newton iteration, and every fault in a
+#: stepped run but the unknown model parameter, whose decks (behaviour
+#: log-condition-grid) wait for a recording run on Windows.
+#:
+#: step-value: the decks of behaviour step-value-grid fill every coordinate
+#: no recording does: each sweep of each stepped thing alone and nested, a
+#: negative value, zero and many digits in a log and in a raw, and the cases a
+#: name is spelled in.
 UNRECORDED: dict[str, dict[str, int]] = {
     "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
+    "log-condition": {"ltspice26": 20, "ltspice17": 21},
+    "step-value": {"ltspice26": 56, "ltspice17": 56},
 }
 
 
@@ -82,7 +98,8 @@ class TestGridIndex:
                 for axis, value in at.items():
                     allowed = (*grid.axes[axis].values, grid.axes[axis].default)
                     assert value in allowed, f"{cell.id}: {axis}={value!r}"
-                grid.expected(cell, build)
+                if grid.expect:
+                    grid.expected(cell, build)
             unknown = set(cell.extra) - grid.item_keys
             assert not unknown, f"{cell.id}: {sorted(unknown)} is neither an axis nor an item key"
 
@@ -97,7 +114,7 @@ class TestGridIndex:
             for build in rec.BUILDS:
                 at = cell.at(build)
                 for rule in grid.exclusions:
-                    assert not rule.covers(at), (cell.id, build, rule.reason)
+                    assert not rule.covers(at, build), (cell.id, build, rule.reason)
 
     def test_the_count_of_coordinates_not_recorded_only_falls(self, key: str):
         pinned = UNRECORDED[key]
@@ -113,6 +130,22 @@ class TestGridIndex:
                 f"{len(missing)} coordinates of {key} have no recording on {build}: lower "
                 f"the pin from {pinned[build]}"
             )
+
+    def test_every_case_of_the_behaviours_it_covers_is_a_cell_or_says_why_not(self, key: str):
+        """A grid that names the behaviours it covers indexes every case of
+        them, or lists the case in ``outside`` with the reason; a case listed
+        there is not also indexed."""
+        grid = GRIDS[key]
+        indexed = {cell.case for cell in grid.cells}
+        for behaviour in grid.behaviours:
+            assert behaviour in rec.CASES.behaviours, behaviour
+            for case in rec.CASES.of(behaviour):
+                assert (case.case_id in indexed) != (case.case_id in grid.outside), (
+                    f"{case.case_id} of {behaviour} is neither a cell of {key} nor outside it "
+                    "with a reason, or is both"
+                )
+        assert all(grid.outside.values()), "a case outside the grid says why"
+        assert all(rec.CASES.case(case).behaviour in grid.behaviours for case in grid.outside)
 
     def test_a_cell_waiting_for_its_recording_is_on_a_pending_behaviour(self, key: str):
         """A cell whose case no build has recorded belongs to a behaviour

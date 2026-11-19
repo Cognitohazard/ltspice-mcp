@@ -1,0 +1,7 @@
+* two voltage sources in parallel, over two steps
+V1 a 0 1
+V2 a 0 2
+R1 a 0 {r}
+.step param r list 1k 2k
+.op
+.end

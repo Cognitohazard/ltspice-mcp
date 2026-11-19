@@ -357,6 +357,8 @@ These tests run on any machine, without LTspice:
 |`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, a hidden or moved window, a flag named GND, where a net label's text goes, a port's outline, and the text the scene leaves out|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
+|`test_log_condition_grid.py`|which condition each recorded log line states, through the rules of its build, the reader, the decoded log, the summary by path and by job, the run rows and the Python API, the rules a producer with no recording reads with, and `classify_line`; every rule a recording matches is a cell's; and the same routes live on ngspice|
+|`test_step_value_grid.py`|which step each recorded `.step` value names, through the log's step rows, the decoded raw, `steps_with`, the step selector of `analyze_results`, `plot_waveform` and `run_experiments`, and the Python API|
 |`test_recorded_ltspice_grids.py`|the grids' index: every cell names a case and an item of it with the coordinates its deck has, every coordinate has a cell, the functions a grid names exist and a behaviour names them, and the count of coordinates not yet recorded only falls|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
@@ -400,6 +402,16 @@ measurement of a deck, a trace of a raw, a line of a log. Its table names its
 may give other coordinates for one build (`on`) and the builds that do not take
 the item at all (`refused`, with the reason), which the test checks as such.
 
+An `exclude` entry with `builds` holds on those builds only: a rule of the
+code that claims one LTspice build has no coordinate on the other. A grid that
+names the `behaviours` it covers indexes every case of them as a cell, or lists
+the case under `outside` with the reason. A cell's own keys (`item_keys`) may
+say what it is expected to give where `expect` cannot (the log-condition grid's
+`states`, the step-value grid's `steps`), a prediction no recording yet shows
+(`not_established`, which fails once its case is recorded, until it is settled
+and removed), and a route that answers otherwise (`differs`, with the route and
+the reason, counted in the test's `KNOWN_DIFFERENCES`, which only falls).
+
 `test_recorded_ltspice_grids.py` checks the index: each cell's case and item
 exist with the coordinates the cell declares (for the printed-measurement grid,
 its `.meas` card, form, analysis and stepping, read through the lexer); every
@@ -407,7 +419,10 @@ coordinate of every group has a cell, recorded or pending; and the count of
 coordinates with no recorded cell, pinned per build in `UNRECORDED`, only falls.
 The grid's own test reads every recorded cell through every route that answers
 its question: for the printed-measurement grid,
-`test_measurement_answer.py::test_every_recorded_cell_of_the_grid_reads_as_its_form_means`.
+`test_measurement_answer.py::test_every_recorded_cell_of_the_grid_reads_as_its_form_means`;
+for the log-condition grid (which condition a log line states),
+`test_log_condition_grid.py`; for the step-value grid (which step a value
+belongs to), `test_step_value_grid.py`.
 A cell where the server answers differently from the recording is pinned there
 under a name that states the difference, until a fix lands.
 
