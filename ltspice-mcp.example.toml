@@ -82,8 +82,8 @@
 # Default response budget, in tokens, for run_experiments, jobs,
 # analyze_results and inspect replies (0 disables)
 # default_budget = 4000
-# Hours to keep an analyze_results result set whose sources are all
-# files named by path. A result set read from jobs is kept as long as its jobs.
+# Hours a cut reply's stored answer can be read on, and an analyze_results
+# result set read only from files is kept; one read from jobs lives as its jobs.
 # result_set_ttl_hours = 24.0
 # Open plot_waveform's chart in a local browser window (a call's open wins)
 # open_plot = true

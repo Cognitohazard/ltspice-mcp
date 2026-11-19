@@ -318,9 +318,8 @@ def truncated_observation(rung: Rung, estimate: int, cut: str, route: str) -> di
     """The fact that a budget degraded this response, and how to get it back.
 
     ``rung.cut`` names the blocks the trim emptied; ``route`` may be empty when
-    there is nothing to go back for. Beside :func:`attached_trimmed_observation`,
-    which says it of a receipt's attached analysis alone: this one speaks of a
-    whole reply walked down the ladder, and names its rung.
+    there is nothing to go back for. Only a tool still on the ladder
+    (``inspect``) writes it; a reply the presenter cut says so through ``cut``.
     """
     emptied = f" Emptied: {', '.join(rung.cut)}." if rung.cut else ""
     return {
@@ -377,23 +376,6 @@ def over_target_observation(
             "with every field of it) is larger than the target."
             + (f" Cut: {cut}." if cut else "")
             + (f" {more}" if more else "")
-        ),
-    }
-
-
-def attached_trimmed_observation(target: int, parts: Sequence[str], job_id: Any) -> dict[str, Any]:
-    """The fact that fitting a receipt to its target took ``parts`` from its
-    attached analysis, which ``analyze_results`` over the job returns. Beside
-    :func:`truncated_observation`, which says it of a whole reply's ladder:
-    here the ladder ran over the attached analysis alone, and the receipt's
-    own rows are named in its ``cut``."""
-    return {
-        "code": "budget_truncated",
-        "kind": OBSERVATION_KIND,
-        "detail": (
-            f"To fit the reply target of {target} tokens, the attached analysis was "
-            f"{'; '.join(parts)}. analyze_results over job_id {job_id} returns it, and "
-            "with include.provenance its source_hashes."
         ),
     }
 

@@ -471,6 +471,7 @@ FROZEN_ERROR_CODES = (
     "artifact_too_large",
     "asc_export_unavailable",
     "asymptotic_reading",
+    "attached_analysis_not_rendered",
     "batch_job_error",
     "budget_not_met",
     "budget_truncated",
@@ -698,12 +699,14 @@ FROZEN_ERROR_CODES = (
     "source_not_found",
     "source_unavailable",
     "source_unavailable_after_staging",
+    "sources_not_rechecked",
     "sparse_sweep",
     "staging_collision",
     "startup_policy",
     "step_not_found",
     "step_value_unavailable",
     "steps_not_as_recorded",
+    "stored_answer_not_kept",
     "subcircuit_nodes_not_saved",
     "submission_committed",
     "submission_failed",
@@ -798,4 +801,3 @@ def test_a_record_of_services_that_carries_a_code_takes_it_by_keyword():
         if decorators and "code" in fields and "kw_only=True" not in ast.unparse(decorators[0]):
             positional.append(node.name)
     assert positional == []
-

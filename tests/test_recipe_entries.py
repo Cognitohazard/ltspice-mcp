@@ -92,7 +92,7 @@ def test_a_recipe_with_no_rows_keeps_its_entry_on_every_door(
     stored = asyncio.run(
         capture_attached_analysis(AnalyzeResultsInput.model_validate(request), state_no_sim)
     )
-    attached = render_attached_analysis(stored, fields=None)
+    attached = render_attached_analysis(stored)
 
     for door in (page, complete, attached):
         assert set(door["results"]) == keys

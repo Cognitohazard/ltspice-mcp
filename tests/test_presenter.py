@@ -258,9 +258,10 @@ def test_only_whole_entries_of_cuttable_lists_are_cut(made_up, tmp_path):
     assert shown.reply["cut"] == {
         pointer: entry.as_reply() for pointer, entry in shown.cut.items()
     }
-    # It fits, or every list it could cut holds one entry.
+    # It fits, or every list it cut holds one entry; a list it left whole is
+    # one whose cut to one entry would not shorten the reply.
     if estimate_tokens(shown.reply, as_sent=False) > target:
-        assert all(len(resolve_pointer(shown.reply, p, default=[])) <= 1 for p in cuttable)
+        assert all(entry.returned == 1 for entry in shown.cut.values())
 
 
 def test_nothing_outside_the_cut_lists_is_touched(made_up, tmp_path):
@@ -677,3 +678,62 @@ def test_a_fit_is_found_when_a_note_on_the_entries_left_out_shrinks_as_more_are_
     )
     assert shown.met, shown.size
     assert shown.cut["/rows"].returned > 1
+
+
+def test_a_cut_reply_reads_no_stored_answer_and_sweeps_at_most_once_an_interval(
+    tmp_path, monkeypatch
+):
+    """Deciding which stored answers expired reads none of them (each file's
+    modification time is its expiry), and the sweep runs at most once per
+    ``presenter.SWEEP_INTERVAL_S``: a cut reply spends one stat on the sweep,
+    or one stat per stored answer when the sweep is due."""
+    import builtins
+    import os as os_module
+
+    from ltspice_mcp.lib import presenter as presenter_module
+
+    store = _store(tmp_path)
+    for index in range(30):
+        answer = _big()
+        answer["rows"][0] = f"answer {index}"
+        present(answer, _SCHEMA, target=400, tool="tool", snapshot={}, store=store, ttl_hours=1.0)
+
+    reads: list[str] = []
+    real_open = builtins.open
+    real_os_open = os_module.open
+
+    def counting_open(file, *args, **kwargs):
+        if str(file).endswith(".json") and presenter_module.STORED_PREFIX in str(file):
+            reads.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def counting_os_open(path, flags, *args, **kwargs):
+        if presenter_module.STORED_PREFIX in str(path) and not flags & (
+            os_module.O_WRONLY | os_module.O_RDWR
+        ):
+            reads.append(str(path))
+        return real_os_open(path, flags, *args, **kwargs)
+
+    sweeps: list[int] = []
+    real_cleanup = presenter_module.cleanup
+
+    def counting_cleanup(swept_store):
+        sweeps.append(1)
+        return real_cleanup(swept_store)
+
+    real_read = presenter_module.read_text_file
+
+    def counting_read(path, *args, **kwargs):
+        reads.append(str(path))
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(presenter_module, "read_text_file", counting_read)
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.setattr(os_module, "open", counting_os_open)
+    monkeypatch.setattr(presenter_module, "cleanup", counting_cleanup)
+    for index in range(20):
+        answer = _big()
+        answer["rows"][0] = f"another {index}"
+        present(answer, _SCHEMA, target=400, tool="tool", snapshot={}, store=store, ttl_hours=1.0)
+    assert reads == []
+    assert len(sweeps) <= 1

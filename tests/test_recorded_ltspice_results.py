@@ -2724,7 +2724,7 @@ async def test_an_attached_analysis_reads_a_jobs_fra_results(
 
     stored = await attached_analysis_callback(state_no_sim)(job)
 
-    [row] = render_attached_analysis(stored, fields=None)["results"]["loop"]["values"]
+    [row] = render_attached_analysis(stored)["results"]["loop"]["values"]
     assert row["value"]["unity_gain_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
 
 

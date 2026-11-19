@@ -26,7 +26,7 @@ from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ERROR_HINTS, RecipeInvalidError, SimulationError
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
-from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
+from ltspice_mcp.lib import experiment_store, store, wsl
 from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
@@ -3459,7 +3459,20 @@ class TestAttachedAnalysis:
         changed_cursor = changed["analysis"]["result"]["results"]["summary"]["per_run"][
             "next_cursor"
         ]
-        assert result_store.cursor_view(changed_cursor) == ["case_id"]
+        changed_page = await analyze_mod.handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "continue": {
+                        "result_set_id": changed["analysis"]["result"]["result_set_id"],
+                        "cursor": changed_cursor,
+                    }
+                }
+            ),
+            state_with_sim,
+        )
+        assert changed_page.structured_content is not None
+        (row,) = changed_page.structured_content["results"]["summary"]["per_run"]["items"]
+        assert set(row) == {"case_id"} or set(row) - {"value"} == {"case_id"}
 
     async def test_budget_answer_reconstructs_values_independent_of_requested_page(
         self,
@@ -3512,67 +3525,43 @@ class TestAttachedAnalysis:
         job = state_with_sim.all_jobs[full["job_id"]]
         assert job.analysis.result is not None
         assert "answer_top" not in job.analysis.result
-        assert all(
-            "answer_facts" not in block for block in job.analysis.result["results"].values()
-        )
         snapshot_identity = job.analysis.result
         pristine_snapshot = copy.deepcopy(job.analysis.result)
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
-        trim_rung = response_budget.Rung(response_budget.RUNG_TRIM, budget=10_000, measured=0)
-        answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
-        manual_snapshot = receipts_mod.snapshot_receipt(
-            job,
-            None,
-            control_token=job.control_token,
-        )
-        trim_view = receipts_mod.finalize_receipt(
-            receipts_mod.render_receipt_snapshot(
-                manual_snapshot,
-                control_token=job.control_token,
-            )
-        )
-        receipts_mod._degrade_receipt(trim_view, trim_rung)
-        answer_view = receipts_mod.finalize_receipt(
-            receipts_mod.render_receipt_snapshot(
-                manual_snapshot,
-                control_token=job.control_token,
-                analysis_answer_channel=True,
-            )
-        )
-        receipts_mod._degrade_receipt(answer_view, answer_rung)
-        trim_size = response_budget.estimate_tokens(trim_view)
-        answer_size = response_budget.estimate_tokens(answer_view)
-        assert answer_size < trim_size
-        # The handler's real response carries envelope text this manual view
-        # does not (replay observation, progress-augmented hint), so aim the
-        # budget a third of the rung gap above the measured answer size —
-        # still below trim — instead of exactly at it.
-        budget = answer_size + (trim_size - answer_size) // 3 + response_budget.NOTE_RESERVE_TOKENS
-        assert trim_size > budget - response_budget.NOTE_RESERVE_TOKENS
+        # A budget cuts the analysis' lists; it drops nothing the request
+        # asked for and leaves the job's record as it was.
         answer = _assert_schema(
             await _completed_analysis_receipt(
-                request.model_copy(update={"budget": budget}),
+                request.model_copy(update={"budget": 1500}),
                 state_with_sim,
             )
         )
         assert job.analysis.result is snapshot_identity
         assert job.analysis.result == pristine_snapshot
         assert experiment_store.serialize_job(job) == pristine_job
-        note = next(
-            item for item in answer["observations"] if item.get("code") == "budget_truncated"
-        )
-        assert "answer channel" in note["detail"]
+        assert not [item for item in answer["observations"] if item["code"] == "budget_truncated"]
         answer_result = answer["analysis"]["result"]
-        entry = answer_result["results"]["vout"]
-        assert entry["values"] == expected
         assert answer_result["outcome"] == expected_result["outcome"]
         assert answer_result["coverage"] == expected_result["coverage"]
-        assert "next" not in answer_result
-        assert "cursor" not in answer_result
-        assert "signals_available" not in answer_result
-        assert "signals_available" in job.analysis.result["top"]
-        restored = _assert_schema(await _completed_analysis_receipt(request, state_with_sim))
-        assert restored["analysis"]["result"]["signals_available"]
+        assert answer_result["signals_available"]
+        rows = list(answer_result["results"]["vout"]["per_run"]["items"])
+        entry = answer_result["cut"].get("/results/vout/per_run/items")
+        while entry is not None and "next" in entry:
+            page = await analyze_mod.handle_analyze_results(
+                AnalyzeResultsInput.model_validate(
+                    {
+                        "continue": {
+                            "result_set_id": answer_result["result_set_id"],
+                            "cursor": entry["next"],
+                        }
+                    }
+                ),
+                state_with_sim,
+            )
+            assert page.structured_content is not None
+            rows.extend(page.structured_content["results"]["vout"]["per_run"]["items"])
+            entry = page.structured_content["cut"]["/results/vout/per_run/items"]
+        assert rows == expected
 
     async def test_successful_analysis_does_not_report_partial(
         self,
