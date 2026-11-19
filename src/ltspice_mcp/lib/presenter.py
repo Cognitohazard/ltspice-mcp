@@ -83,10 +83,15 @@ class ListCut:
     next: str | None = None
 
     @property
+    def after(self) -> int:
+        """How many entries come after the ones held."""
+        return self.total - self.offset - self.returned
+
+    @property
     def left_out(self) -> bool:
         """Whether entries come after the ones held: what a page's
         ``truncated`` says, with or without a cursor to read them."""
-        return self.offset + self.returned < self.total
+        return self.after > 0
 
     def as_reply(self) -> dict[str, Any]:
         """The ``cut`` entry a reply carries, without the fields that say
@@ -445,6 +450,7 @@ def _expired(data: Mapping[str, Any]) -> bool:
 #: The least time, in seconds, between two sweeps a cut reply runs.
 SWEEP_INTERVAL_S: Final = 600.0
 
+
 def cleanup(store: Store) -> int:
     """Delete the stored answers past their expiry; how many were deleted.
 
@@ -511,6 +517,20 @@ def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
         ),
         mtime=expires.timestamp(),
     )
+
+
+def not_sent(left: Mapping[str, int], *, kept: bool) -> str:
+    """The words a reply says of the entries it did not send: how many of
+    each list (``left``, by name), and, when its answer was not ``kept``,
+    that no cursor reads them. The one writer of those words, for every
+    tool."""
+    counted = ", ".join(f"{count} of {name}" for name, count in left.items())
+    if not kept:
+        return (
+            f"Not sent: {counted}, and no cursor reads them: the answer was not kept "
+            "(see stored_answer.not_kept)."
+        )
+    return f"Not sent: {counted}."
 
 
 #: The code of the note a cut reply carries when its answer was not kept.

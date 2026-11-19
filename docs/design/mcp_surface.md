@@ -688,10 +688,12 @@ Its inline `waveform` samples are thinned as a series (§1). Nothing the
 request asked to include is dropped, and no `budget_truncated` observation
 is made: a cut is said by `cut`. The job's record keeps it at a version
 (`analysis_snapshot.ANSWER_VERSION`); `analysis_snapshot.classify` alone
-says whether this build renders a stored analysis. One an earlier release
-stored is not rendered: the receipt, its status and its run rows answer as
-for any job, and `analysis.error` with an `attached_analysis_not_rendered`
-observation say to run `analyze_results` over the job.
+says whether this build renders a stored analysis: `snapshot`, or why not,
+`earlier` (an earlier release stored it), `later` (a later release did) or
+`damaged` (a record of this version with no answer it can render). One not
+rendered leaves the receipt, its status and its run rows answering as for
+any job, and `analysis.error` with an `attached_analysis_not_rendered`
+observation say which, and to run `analyze_results` over the job.
 
 **Simulator choice.** `execution.simulator` names one of the four supported
 families, or a named executable of one (above); the schema's pattern accepts
@@ -1675,13 +1677,19 @@ answers, so a page reads the steps its first reply read.
   the limit leaves no time for fails alone with the same code (stage
   `deadline`), naming the fix: ask for it in a call of its own. The recipes
   evaluated before it are answered. The check after the reads always runs
-  (at least 50 ms), so nothing read is published unchecked; a source it
-  cannot confirm in time loses its rows, with `analysis_deadline`. A signal
-  listing the bound ends fails with `analysis_deadline` at stage `signals`,
-  naming the sources it did not read, and `signals_available` lists only the
-  runs read. Publishing the artifacts of answered recipes is outside the
-  bound, with a deadline of its own per file (`analyze.PUBLISH_DEADLINE_S`,
-  120 s), so the bound never loses a finished recipe's file. A repeat of a
+  (at least 50 ms). A source it reads and finds changed loses its rows, with
+  `source_drift`; a source the bound leaves it no time to read again keeps
+  the rows its recipes answered, and a `sources_not_rechecked` observation
+  names it. A signal listing the bound ends fails with `analysis_deadline` at
+  stage `signals`, naming the sources it did not read; a source whose
+  signals could not be read is named with the reason, under that reading's
+  code; `signals_available` lists only the runs read. A recipe takes the
+  digest of each file it writes as it writes it, within its own time. The
+  publish step after the bound has one allowance for the whole call,
+  `analyze.PUBLISH_ALLOWANCE_S` (30 s), to compare the new files with those
+  already published; past it, the comparisons not made are skipped and the
+  new files replace the old, so no answered recipe loses its file. One call
+  takes at most the bound plus that allowance, and the renames. A repeat of a
   request writes to the same artifact paths; an artifact already published
   there with the same bytes is kept as it is, never replaced or reopened for
   writing, so a file held open by another program does not fail the repeat;

@@ -182,6 +182,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     image_content,
     make_include_resolver,
+    not_sent,
     open_stored_page,
     open_window_call,
     outcome_of,
@@ -3039,10 +3040,6 @@ def _answer_snapshot(args: VerifyCircuitInput, state: SessionState) -> dict[str,
     return snapshot
 
 
-def _left_out(entry: ListCut) -> int:
-    return entry.total - entry.offset - entry.returned
-
-
 def _say_how_to_read_the_rest(
     reply: dict[str, Any],
     cut: Mapping[str, ListCut],
@@ -3077,10 +3074,9 @@ def _say_how_to_read_the_rest(
             "since. The snapshot does not cover the symbols, includes, libraries or "
             "export the findings also read."
         )
-    more = {pointer: _left_out(entry) for pointer, entry in cut.items() if entry.left_out}
+    more = {pointer: entry.after for pointer, entry in cut.items() if entry.left_out}
     if more and stored.not_kept is not None:
-        not_sent = ", ".join(f"{count} of {pointer}" for pointer, count in more.items())
-        said.append(f"Not sent: {not_sent}; the answer was not kept (see stored_answer).")
+        said.append(not_sent(more, kept=False))
     elif more:
         read_on = call_to_continue(
             "verify_circuit",
@@ -3089,9 +3085,8 @@ def _say_how_to_read_the_rest(
                 "findings_cursor": Unfilled("a cut entry's next"),
             },
         )
-        not_sent = ", ".join(f"{count} of {pointer}" for pointer, count in more.items())
         said.append(
-            f"Not sent: {not_sent}. The complete answer is in {stored.path} (under "
+            f"{not_sent(more, kept=True)} The complete answer is in {stored.path} (under "
             f"'answer'); or read on with {read_on}."
         )
     if said:

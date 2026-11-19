@@ -74,6 +74,7 @@ from ltspice_mcp.lib.presenter import (
     StoredAnswer,
     cuttable_lists,
     join_pointer,
+    not_sent,
     resolve_pointer,
     split_pointer,
     stored_cursor,
@@ -252,6 +253,29 @@ class _PendingArtifact:
     final: Path
     content_type: str
     manifest_id: str
+    #: The written file's SHA-256 and size, taken as the recipe wrote it, so
+    #: publishing it needs no digest of its own.
+    sha256: str
+    size: int
+
+
+async def _written(
+    pending: Path, final: Path, content_type: str, manifest_id: str
+) -> _PendingArtifact:
+    """The artifact a recipe just wrote at ``pending``, with its digest and
+    size, taken within the recipe's own deadline; the temp is removed when
+    they cannot be taken."""
+    try:
+        sha256, size = await services.bounded_parse(
+            pending,
+            lambda: (result_store.sha256_file(pending), pending.stat().st_size),
+            timeout_s=services.RAW_PARSE_TIMEOUT_S,
+        )
+    except BaseException:
+        with contextlib.suppress(OSError):
+            await asyncio.to_thread(pending.unlink)
+        raise
+    return _PendingArtifact(pending, final, content_type, manifest_id, sha256, size)
 
 
 @dataclass(frozen=True)
@@ -2039,7 +2063,7 @@ async def _waveform(
                 plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
-        [_PendingArtifact(pending, final, "text/csv", run.manifest_id)],
+        [await _written(pending, final, "text/csv", run.manifest_id)],
     )
 
 
@@ -2113,7 +2137,7 @@ async def _plot(
                 plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
-        [_PendingArtifact(pending, final, "text/html", run.manifest_id)],
+        [await _written(pending, final, "text/html", run.manifest_id)],
     )
 
 
@@ -2702,10 +2726,12 @@ def _published_size(path: Path) -> int | None:
     return status.st_size if S_ISREG(status.st_mode) else None
 
 
-#: The deadline of each digest a publish takes, in seconds: a file a recipe
-#: already answered with is published under this, not under what is left of
-#: the call's bound, so the bound never loses an answered recipe's artifact.
-PUBLISH_DEADLINE_S: Final = services.RAW_PARSE_TIMEOUT_S
+#: The time, in seconds, the publish step of a whole call may spend comparing
+#: the files it writes with those a repeat of the request already published.
+#: It runs after the call's bound, ``[analysis] analysis_budget_s``, so one
+#: call takes at most that bound plus this allowance (and the renames). Past
+#: it, the comparisons not made are skipped and the new files replace the old.
+PUBLISH_ALLOWANCE_S: Final = 30.0
 
 
 async def _publish(pending: list[_PendingArtifact]) -> list[dict[str, Any]]:
@@ -2716,40 +2742,43 @@ async def _publish(pending: list[_PendingArtifact]) -> list[dict[str, Any]]:
     path is a complete earlier publish. Its name is a digest of the result
     set (the request and the sources' digests), the recipe and the source,
     so a repeat of the request writes to the same path. When the file there
-    already holds the bytes just written (same size and SHA-256) it is kept
-    as it is: never replaced or opened for writing, so a program holding it
-    open (a CSV in a spreadsheet, on Windows) does not fail the repeat. When
-    its bytes differ (a writer of another release, or a file changed after it
-    was published), or the comparison cannot finish (the file is unreadable,
-    or its digest runs out of time), it is replaced, as before this check
-    existed, and a refusal to replace it fails the recipe as before. Each
-    digest has :data:`PUBLISH_DEADLINE_S`."""
+    already holds the bytes just written (same size, then same SHA-256) it is
+    kept as it is: never replaced or opened for writing, so a program holding
+    it open (a CSV in a spreadsheet, on Windows) does not fail the repeat.
+    When its bytes differ (a writer of another release, or a file changed
+    after it was published), or the comparison cannot finish (the file is
+    unreadable, its digest runs out of time, or the step's
+    :data:`PUBLISH_ALLOWANCE_S` is spent), it is replaced, as before this
+    check existed, and a refusal to replace it fails the recipe as before.
+    The new files' digests were taken as they were written (:func:`_written`)."""
     prepared: list[dict[str, Any]] = []
     moved: list[_PendingArtifact] = []
     kept: list[_PendingArtifact] = []
-
-    async def digest_of(path: Path) -> str:
-        return await services.bounded_parse(
-            path, lambda: result_store.sha256_file(path), timeout_s=PUBLISH_DEADLINE_S
-        )
+    loop = asyncio.get_running_loop()
+    allowance_ends = loop.time() + PUBLISH_ALLOWANCE_S
 
     for artifact in pending:
-        digest = await digest_of(artifact.pending)
-        size = await asyncio.to_thread(lambda path=artifact.pending: path.stat().st_size)
-        published = await asyncio.to_thread(_published_size, artifact.final)
         same = False
-        if published == size:
+        left = allowance_ends - loop.time()
+        if left > 0 and await asyncio.to_thread(_published_size, artifact.final) == artifact.size:
             # The comparison only decides whether to keep the old file: one
             # that cannot finish replaces it, as one that differs does.
             with contextlib.suppress(OSError, AnalysisDeadlineExceeded):
-                same = await digest_of(artifact.final) == digest
+                same = (
+                    await services.bounded_parse(
+                        artifact.final,
+                        lambda path=artifact.final: result_store.sha256_file(path),
+                        timeout_s=left,
+                    )
+                    == artifact.sha256
+                )
         (kept if same else moved).append(artifact)
         prepared.append(
             {
                 "path": str(artifact.final),
                 "content_type": artifact.content_type,
-                "sha256": digest,
-                "bytes": size,
+                "sha256": artifact.sha256,
+                "bytes": artifact.size,
             }
         )
     await asyncio.to_thread(_rename_artifacts, moved)
@@ -3717,19 +3746,10 @@ def _say_how_to_read_fail_cases(entry: ListCut) -> str | None:
     says beside its flag: the call that reads the rest, or why none does."""
     if not entry.left_out:
         return None
-    left = entry.total - entry.offset - entry.returned
     if entry.next is None:
-        return _not_sent(entry, "failing case(s)")
-    return f"{left} more failing case(s); read them with {_READ_ON}."
-
-
-def _not_sent(entry: ListCut, what: str) -> str:
-    """What a page left short with no cursor says beside its flag."""
-    left = entry.total - entry.offset - entry.returned
-    return (
-        f"{left} more {what} not sent, and no cursor reads them: the answer was not "
-        "kept (see stored_answer.not_kept)."
-    )
+        # Cut with no cursor: the answer was not kept.
+        return not_sent({"failing cases": entry.after}, kept=False)
+    return f"{entry.after} more failing case(s); read them with {_READ_ON}."
 
 
 def answer_caps(
@@ -3794,7 +3814,7 @@ def say_what_was_cut(
         groups: dict[str, not_shown.LeftOut] = {}
         for pointer, table in facts.items():
             entry = cut.get(pointer)
-            if entry is None or entry.offset + entry.returned >= entry.total:
+            if entry is None or not entry.left_out:
                 continue
             groups[_recipe_of(pointer)] = not_shown.LeftOut(
                 table,
@@ -3840,7 +3860,7 @@ def say_what_was_cut(
                         else:
                             page.pop("hint", None)
                     elif entry.left_out and entry.next is None:
-                        page["hint"] = _not_sent(entry, "entries")
+                        page["hint"] = not_sent({"entries": entry.after}, kept=False)
             elif keys[-2:-1] == ["value"] and keys[-1] in _SERIES_KEYS:
                 # A series thinned: said once on its recipe.
                 recipe = _owned(reply, join_pointer(keys[:2]))
@@ -3972,19 +3992,25 @@ class AttachedAnalysisNotRendered(ResultError):
 #: The code of the note that replaces such an analysis in a receipt.
 NOT_RENDERED_CODE: Final = AttachedAnalysisNotRendered.code
 
-_NOT_RENDERED = (
-    "The attached analysis was stored by an earlier release; this release does not "
-    "render it. Run analyze_results over the job with the same recipes for its answer."
-)
+#: What the receipt says of an attached analysis it does not render, by
+#: ``analysis_snapshot.classify``'s verdict.
+_NOT_RENDERED: Final = {
+    "earlier": "was stored by an earlier release",
+    "later": "was stored by a later release",
+    "damaged": "is damaged: its record is of this release but holds no answer it can render",
+}
 
 
 def stored_analysis(stored: Any) -> StoredAnalysis:
     """The attached analysis a job's record holds, or
-    :class:`AttachedAnalysisNotRendered` for one of another version."""
-    if analysis_snapshot.classify(stored) != "snapshot" or not isinstance(
-        stored.get("answer"), dict
-    ):
-        raise AttachedAnalysisNotRendered(_NOT_RENDERED)
+    :class:`AttachedAnalysisNotRendered`, saying why, for one
+    ``analysis_snapshot.classify`` says this build does not render."""
+    verdict = analysis_snapshot.classify(stored)
+    if verdict != "snapshot":
+        raise AttachedAnalysisNotRendered(
+            f"The attached analysis {_NOT_RENDERED[verdict]}; this release does not render "
+            "it. Run analyze_results over the job with the same recipes for its answer."
+        )
     return StoredAnalysis(
         stored["answer"], dict(stored.get("snapshot") or {}), dict(stored.get("request") or {})
     )
@@ -4343,12 +4369,23 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
     # records and artifacts derived from that source across every recipe
     # that used it.
     postcheck_deadline = step_deadline()
-    postcheck = await _verify_direct_sources(
+    checked_after = await _verify_direct_sources(
         item.source_manifests,
         evaluated_ids,
         postcheck_deadline,
         state=state,
     )
+    # A source the check read and found changed loses what it gave. One the
+    # bound left the check no time to read again keeps its answered rows: the
+    # reply says it was not checked again (sources_not_rechecked).
+    postcheck = {
+        key: fault for key, fault in checked_after.items() if fault.code != "analysis_deadline"
+    }
+    not_rechecked = [
+        key for key, fault in checked_after.items() if fault.code == "analysis_deadline"
+    ]
+    if not_rechecked:
+        observations.append(_not_rechecked(runs, not_rechecked))
     if postcheck:
         failed_ids = set(postcheck)
         await asyncio.to_thread(
@@ -4371,6 +4408,7 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
             and run.manifest_id not in postcheck
         ]
         unread: list[_ResolvedRun] = []
+        unreadable: list[tuple[_ResolvedRun, LTSpiceMCPError]] = []
         for index, run in enumerate(listed):
             if loop.time() >= call_deadline:
                 unread = listed[index:]
@@ -4383,8 +4421,10 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
             except AnalysisDeadlineExceeded:
                 unread = listed[index:]
                 break
-            except LTSpiceMCPError:
-                continue
+            except LTSpiceMCPError as exc:
+                unreadable.append((run, exc))
+        if unreadable:
+            step_failures.append(_signals_not_read(unreadable))
         if unread:
             step_failures.append(_signals_left_by_the_bound(unread, len(listed), budget_s))
 
@@ -4401,6 +4441,53 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
         argument_notes=tuple(args.argument_notes()),
         request=_request_digest(args),
         step_failures=tuple(step_failures),
+    )
+
+
+def _not_rechecked(runs: Sequence[_ResolvedRun], manifest_ids: Sequence[str]) -> Observation:
+    """The observation that the call's bound ended the check after the reads
+    before it read these sources again: their rows stand, unconfirmed."""
+    missed = set(manifest_ids)
+    labels = list(dict.fromkeys(run.label for run in runs if run.manifest_id in missed))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(_FAILURE_WHERE_CAP, len(labels), "sources", "every source is counted")
+            + ")"
+        )
+    return Observation(
+        code="sources_not_rechecked",
+        kind="coverage",
+        detail=(
+            f"The call's work bound ([analysis] analysis_budget_s) ended the check after the "
+            f"reads before it read {len(missed)} source(s) again (sources {named}): their "
+            "rows are as read, not confirmed unchanged since. Ask again for those sources, "
+            "or with a larger analysis_budget_s, to check them."
+        ),
+    )
+
+
+def _signals_not_read(unreadable: Sequence[tuple[_ResolvedRun, LTSpiceMCPError]]) -> Failure:
+    """The failure of a signal listing that could not read some runs: the
+    sources, and why the first could not be read, with its code."""
+    labels = list(dict.fromkeys(run.label for run, _reason in unreadable))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(_FAILURE_WHERE_CAP, len(labels), "sources", "every run not read is counted")
+            + ")"
+        )
+    first = unreadable[0][1]
+    return Failure(
+        code=first.code,
+        stage="signals",
+        where="signals_available",
+        message=(
+            f"The signals of {len(unreadable)} run(s) could not be read (sources {named}): "
+            f"{str(first).rstrip('.')}. signals_available lists only the runs read."
+        ),
     )
 
 

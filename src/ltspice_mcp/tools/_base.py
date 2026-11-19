@@ -32,6 +32,7 @@ from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.observability import note_request
 from ltspice_mcp.lib.presenter import ListCut as ListCut
 from ltspice_mcp.lib.presenter import StoredAnswer as StoredAnswer
+from ltspice_mcp.lib.presenter import not_sent as not_sent
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER

@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Final, Literal
 
-from ltspice_mcp.lib.store import KIND_ANALYSIS_SNAPSHOT, accept
+from ltspice_mcp.lib.store import KIND_ANALYSIS_SNAPSHOT, STORE_VERSION, accept
 from ltspice_mcp.lib.store import envelope as _store_envelope
 
 logger = logging.getLogger(__name__)
@@ -41,21 +41,37 @@ def envelope(payload: dict[str, Any]) -> dict[str, Any]:
     return _store_envelope(KIND_ANALYSIS_SNAPSHOT, answer_version=ANSWER_VERSION, **payload)
 
 
-def classify(value: Any) -> Literal["snapshot", "unsupported", "legacy"]:
-    """Say what a stored attached-analysis value is.
+Verdict = Literal["snapshot", "earlier", "later", "damaged"]
 
-    ``snapshot`` means this build renders it: a record of the store version it
-    reads, holding an analysis at :data:`ANSWER_VERSION`. ``legacy`` means the
-    slot holds what an earlier release wrote there: a public analysis result
-    written before the envelope existed, or a snapshot of an earlier
-    release's own assembly (no :data:`ANSWER_VERSION`). ``unsupported`` means
-    a record of a store version this build does not read. Every way but the
-    first the renderer refuses and points at re-running the analysis:
-    guessing at a shape this build did not write is what the envelope exists
-    to prevent.
+
+def classify(value: Any) -> Verdict:
+    """Say what a stored attached-analysis value is: the one answer to
+    whether this build renders it.
+
+    ``snapshot``: this build renders it, a record of a store version it reads
+    holding an analysis at :data:`ANSWER_VERSION` whose answer is an object.
+    ``earlier``: an earlier release wrote it, a public analysis result
+    written before the envelope existed, a record of an older store version,
+    or an analysis of an older version (none, before versions were written).
+    ``later``: a later release wrote it, a newer store or analysis version.
+    ``damaged``: a record of this version whose analysis cannot be rendered.
+    Every way but the first the renderer refuses and says which: guessing at
+    a shape this build did not write is what the envelope exists to prevent.
     """
     if not isinstance(value, dict) or value.get("kind") != KIND_ANALYSIS_SNAPSHOT:
-        return "legacy"
+        return "earlier"
+    store_version = value.get("store_version")
+    if not isinstance(store_version, int) or isinstance(store_version, bool):
+        return "damaged"
+    if store_version > STORE_VERSION:
+        return "later"
     if not accept(value, _SOURCE, kind=KIND_ANALYSIS_SNAPSHOT, log=logger):
-        return "unsupported"
-    return "snapshot" if value.get("answer_version") == ANSWER_VERSION else "legacy"
+        return "earlier" if store_version < STORE_VERSION else "damaged"
+    answer_version = value.get("answer_version", 0)
+    if not isinstance(answer_version, int) or isinstance(answer_version, bool):
+        return "damaged"
+    if answer_version < ANSWER_VERSION:
+        return "earlier"
+    if answer_version > ANSWER_VERSION:
+        return "later"
+    return "snapshot" if isinstance(value.get("answer"), dict) else "damaged"
