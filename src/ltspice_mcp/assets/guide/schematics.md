@@ -93,9 +93,9 @@ reply's `not_checked` says so, so tell the user. It refuses a case whose
 circuit has changed since the run, since the results would not match it; a
 netlist with a sheet of its name beside it (`results_belong_to_sheet`),
 since LTspice shows that file as the sheet's run: run the sheet, or copy the
-netlist under another name; and, like every read of a job's runs, a case of
-a job whose runs have not all finished (`job_not_terminal`;
-`jobs(action="wait", wait_for="runs")` first).
+netlist under another name; and, like every read of a case, a case whose run
+has not finished (`run_not_finished`; `jobs(action="wait", wait_for="runs")`
+first).
 When the user wants that before the run starts, pass
 `execution={"results_beside_sheet": true}` to `run_experiments` instead: each
 sheet's results are copied beside it as the runs finish, and the receipt's

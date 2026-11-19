@@ -1033,18 +1033,14 @@ async def _place_case_beside_sheet(
 
     Refused where they could not stand as the circuit's own
     (``sheet_results.check_case`` and ``check_placement`` say which), and while the
-    job's runs are not all done, as every read of a job's runs is
-    (``services.runs_unready``).
+    case's run has not finished, as every read of a case is
+    (``services.case_unreadable``).
     """
     case = _case_to_place(job, case_id)
-    unready = services.runs_unready(job)
-    if unready is not None:
+    refusal = await services.case_refusal(job, case)
+    if refusal is not None and refusal.code == "run_not_finished":
         raise _JobsActionError(
-            "job_not_terminal",
-            f"{unready}; wait for them with jobs(action='wait', job_id='{job.job_id}', "
-            "wait_for='runs').",
-            stage="resolution",
-            retryable=True,
+            "run_not_finished", refusal.detail, stage="resolution", retryable=True
         )
     try:
         check_case(job, case)

@@ -28,6 +28,7 @@ from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
+from tests._source_scan import modules, scopes
 from tests.conftest import (
     LIVENESS_S,
     SyncApi,
@@ -139,7 +140,7 @@ async def test_inspect_reads_the_finished_case(one_case_running: _Running):
     )
     (answer,) = data["results"]
     assert answer.get("error") is None, answer
-    names = {row["name"] for row in answer["data"]["items"]}
+    names = {row["name"] for row in answer["data"]["signals"]}
     assert "V(out)" in names
 
 
@@ -163,7 +164,7 @@ async def test_inspect_refuses_the_running_case_with_its_own_reason(
     error = answer["error"]
     assert error["code"] == "run_not_finished", error
     assert run.running.case_id in error["message"]
-    assert "written" in error["message"]
+    assert "written" in error["message"], error["message"]
     assert "wait" in error["message"]
 
 
@@ -229,7 +230,7 @@ async def test_the_python_api_reads_the_finished_case(one_case_running: _Running
     raw = await asyncio.to_thread(
         lambda: api.load_raw(job_id=run.job.job_id, case_id=run.done.case_id)
     )
-    assert "V(out)" in {trace.name for trace in raw.descriptor.signals()}
+    assert "V(out)" in raw.signals
     measured = await asyncio.to_thread(
         lambda: api.measurements(job_id=run.job.job_id, case_id=run.done.case_id)
     )
@@ -275,3 +276,81 @@ async def test_one_unreadable_case_does_not_hide_the_others(one_case_running: _R
         run.running.case_id
     ]
     assert [row["case_id"] for row in data["results"]["v"]["values"]] == [run.done.case_id]
+
+
+#: The functions through which a tool or an API method reaches a job's case to
+#: read it. A scope that calls one of them reads a case.
+_CASE_READS = frozenset(
+    {
+        "experiment_run_context",
+        "resolve_experiment_run",
+        "readable_case",
+        "experiment_case",
+        "case_run_context",
+        "case_refusal",
+        "case_unreadable",
+        "source_for_run",
+    }
+)
+#: What answers a job's question, not a case's: whether its runs are done, or
+#: what its status is.
+_JOB_READINESS = frozenset(
+    {"runs_done", "runs_terminal", "finished", "TERMINAL_STATUSES", "NON_TERMINAL_LIVE_STATUSES"}
+)
+#: The one place that decides whether a case can be read, and the wording of
+#: its refusal.
+_OWNERS = frozenset({"case_unreadable", "case_refusal", "_not_finished"})
+
+
+def _called(nodes: list) -> set[str]:
+    import ast
+
+    names: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+    return names
+
+
+def _reads_job_readiness(nodes: list) -> list[str]:
+    import ast
+
+    found: list[str] = []
+    for node in nodes:
+        if isinstance(node, ast.Attribute) and node.attr == "status":
+            found.append(f"line {node.lineno}: .status")
+        elif isinstance(node, ast.Name) and node.id in _JOB_READINESS:
+            found.append(f"line {node.lineno}: {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in _JOB_READINESS:
+            found.append(f"line {node.lineno}: .{node.attr}")
+    return found
+
+
+def test_no_reader_of_a_case_decides_by_a_status_outside_the_one_answer():
+    """Whether a case can be read is decided only in ``services.case_unreadable``.
+
+    No tool, no API method and no function of ``services`` on the way to a
+    case's results reads a status, a job's or a case's, or asks whether a
+    job's runs are done, in a scope that reads a case: a second answer there
+    would bring back the job-wide gate, or a rule of its own.
+    """
+    offenders: list[str] = []
+    for module, tree in modules().items():
+        reading_module = module.startswith(("tools/", "api/")) or module == "lib/services.py"
+        if not reading_module:
+            continue
+        for name, nodes in scopes(tree):
+            if name.rsplit(".", 1)[-1] in _OWNERS:
+                continue
+            reads_case = bool(_called(nodes) & _CASE_READS) or (
+                module == "lib/services.py" and name in _CASE_READS
+            )
+            if reads_case:
+                offenders.extend(
+                    f"{module}:{name} {where}" for where in _reads_job_readiness(nodes)
+                )
+    assert offenders == []

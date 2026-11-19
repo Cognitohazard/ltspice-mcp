@@ -182,8 +182,10 @@ async def _experiment_case(
         else None
     )
     if job is not None:
-        case = services.experiment_case(job, run_index=run_index, case_id=case_id)
-        return job, case, services.case_run_context(job, case, state, other_raw=other_raw)
+        case, context = await services.readable_case(
+            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
+        return job, case, context
     if (
         path is not None
         and job_id is None
