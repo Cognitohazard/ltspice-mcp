@@ -271,7 +271,8 @@ longer needed.
 ## Tests of the design principles
 
 These design principles in `docs/DESIGN.md`, "Principles", are each held by a
-test that fails when a tool breaks it. Separately, the output-schema conformance
+test that fails when a tool breaks it, except run speed, which a benchmark
+script measures. Separately, the output-schema conformance
 hook in `tests/conftest.py` checks every reply the suite produces against its
 schema, and `tests/test_conformance_hook_armed.py` checks that the hook is live.
 
