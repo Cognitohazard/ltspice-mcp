@@ -1,0 +1,8 @@
+* resistive divider swept over one point, over three resistances
+V1 in 0 0
+R1 in out {r}
+R2 out 0 1k
+.param r=1k
+.step param r list 1k 2k 4k
+.dc V1 3 3 1
+.end

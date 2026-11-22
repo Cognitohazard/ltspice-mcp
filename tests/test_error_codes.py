@@ -464,10 +464,6 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 # so it needs a changelog fragment (changelog.d/) saying which code changed and
 # what replaced it.
 FROZEN_ERROR_CODES = (
-    "ambiguous_inner_device",
-    "ambiguous_instance_ref",
-    "ambiguous_scale",
-    "ambiguous_subckt",
     "ambiguous_target",
     "analysis_deadline",
     "analysis_failed",
@@ -475,6 +471,7 @@ FROZEN_ERROR_CODES = (
     "artifact_too_large",
     "asc_export_unavailable",
     "asymptotic_reading",
+    "attached_analysis_not_rendered",
     "batch_job_error",
     "budget_not_met",
     "budget_truncated",
@@ -490,10 +487,10 @@ FROZEN_ERROR_CODES = (
     "case_not_produced",
     "circuit_id_derived",
     "circuits_empty",
-    "clone_include_unsupported",
     "coarse_compressed_waveform",
     "commit_failed",
     "completeness_mismatch",
+    "compressed_transient",
     "constant_window",
     "control_write_injected",
     "copy_failed",
@@ -508,6 +505,7 @@ FROZEN_ERROR_CODES = (
     "detached_owner",
     "device_op_log_precision",
     "device_op_points_absent",
+    "device_table_request_unknown",
     "downsampled",
     "duplicate_assignment_target",
     "duplicate_circuit_id",
@@ -519,15 +517,15 @@ FROZEN_ERROR_CODES = (
     "external_cancellation_requested",
     "extreme_value",
     "failures_truncated",
-    "geometry_not_literal",
+    "fra_margin_differs",
+    "fra_margin_not_checked",
     "hierarchy_write_conflict",
     "idempotency_conflict",
     "identical_samples",
     "image_unavailable",
     "include_unstaged",
-    "inner_device_not_found",
-    "inner_model_unresolved",
-    "instance_not_found",
+    "instance_parameter_not_taken",
+    "instance_parameter_unestablished",
     "internal_error",
     "invalid_arguments",
     "invalid_assignment_value",
@@ -535,7 +533,6 @@ FROZEN_ERROR_CODES = (
     "invalid_circuit_id",
     "invalid_cursor",
     "invalid_instance_param_target",
-    "invalid_instance_target",
     "invalid_prefix",
     "invalid_query",
     "invalid_resume_request",
@@ -552,16 +549,20 @@ FROZEN_ERROR_CODES = (
     "lint_blocked",
     "live_data_file",
     "live_include",
+    "load_time_exhausted",
     "log_error",
     "log_unread",
     "logopinfo_withheld",
     "max_points_not_applied",
     "meas_batch_abort",
+    "meas_failed_in_every_run",
     "meas_parse_error",
+    "measurements_not_read",
     "memory_limit",
     "merged_corners",
     "micro_sign_folded",
     "mismatch_geometry_unresolved",
+    "mismatch_inside_subcircuit_unmodelled",
     "mismatch_target_missing",
     "missing_circuit_id",
     "missing_completion",
@@ -572,7 +573,6 @@ FROZEN_ERROR_CODES = (
     "multiplier_rewrite_changed",
     "multiplier_rewrite_stops",
     "native_log_output",
-    "nested_fet_unsupported",
     "netlist_invalid",
     "ngspice_lib_section",
     "ngspice_mode_mismatch",
@@ -580,10 +580,8 @@ FROZEN_ERROR_CODES = (
     "no_axis",
     "no_chart",
     "no_table",
-    "non_bsim_inner_device",
     "non_finite",
     "non_minimum_phase",
-    "not_a_sheet",
     "not_found",
     "not_ltspice",
     "not_recoverable",
@@ -597,7 +595,6 @@ FROZEN_ERROR_CODES = (
     "overlapping_assignment",
     "overlapping_mismatch_rules",
     "owner_liveness_unknown",
-    "param_namespace_collision",
     "parse_error",
     "parser_cleanup_failed",
     "partial_progress",
@@ -606,9 +603,9 @@ FROZEN_ERROR_CODES = (
     "path_without_deck_provenance",
     "pdk_native_request",
     "phase_unwrapped",
+    "plot_not_found",
     "post_commit_failed",
     "preexisting_mismatch",
-    "preexisting_mismatch_param",
     "process_owned_job",
     "random_nominal_unavailable",
     "raster_unavailable",
@@ -666,6 +663,7 @@ FROZEN_ERROR_CODES = (
     "request_gate_busy",
     "result_file_not_found",
     "result_unreadable",
+    "results_belong_to_sheet",
     "results_missing",
     "results_not_beside_sheet",
     "results_not_placed",
@@ -673,9 +671,11 @@ FROZEN_ERROR_CODES = (
     "resume_not_authorized",
     "review_against_plot",
     "revision_conflict",
+    "run_not_finished",
     "run_not_found",
     "run_progress",
     "samples_not_compared",
+    "saves_not_stored",
     "search_error",
     "selector_conflict",
     "semantic_profile_required",
@@ -688,39 +688,48 @@ FROZEN_ERROR_CODES = (
     "signals_chosen",
     "signals_not_found",
     "simulation_failed",
+    "simulator_build_not_recorded",
     "simulator_docs_unavailable",
     "simulator_draws_unsupported",
+    "simulator_not_in_session",
+    "simulator_not_recorded",
     "solve_failure",
     "source_drift",
     "source_modified_after_staging",
     "source_not_found",
     "source_unavailable",
     "source_unavailable_after_staging",
+    "sources_not_rechecked",
     "sparse_sweep",
     "staging_collision",
     "startup_policy",
+    "step_not_found",
     "step_value_unavailable",
-    "subckt_unresolved",
+    "steps_not_as_recorded",
+    "stored_answer_not_kept",
+    "subcircuit_nodes_not_saved",
     "submission_committed",
     "submission_failed",
     "symbol_not_found",
     "symbol_unresolved",
+    "time_steps_coverage",
     "too_large",
     "too_large_to_decode",
     "trace_unit_unknown",
     "transport_delay",
-    "unencodable_device_ref",
     "unknown_document",
+    "unknown_heading",
     "unknown_section",
     "unmet_request",
     "unpersisted_runs_recovered",
-    "unplanned_instance",
     "unsupported_file",
     "unsupported_model",
     "unsupported_variant",
     "unwrap_warning",
+    "value_read_otherwise",
     "widget_unavailable",
     "window_chosen",
+    "window_empty",
     "window_empty_steps",
     "window_not_chosen",
     "window_not_discarded",
@@ -765,3 +774,31 @@ class TestErrorCodeVocabulary:
 
     def test_frozen_list_is_sorted_and_unique(self):
         assert list(FROZEN_ERROR_CODES) == sorted(set(FROZEN_ERROR_CODES))
+
+
+def test_a_record_of_services_that_carries_a_code_takes_it_by_keyword():
+    """The vocabulary scan reads a code passed as ``code=`` (or in a ``code``
+    key); a code passed by position is invisible to it, which is how a code
+    once looked unemitted while it was. So each dataclass of ``lib/services.py``
+    with a ``code`` field is keyword-only, and a positional code cannot be
+    written there. The scan counts every ``code=`` such a record is built with.
+
+    Dataclasses elsewhere that carry a ``code`` (``analyze.Failure``,
+    ``analyze.Observation``, ``jobs._JobsError``, ``log_conditions._Rule`` and
+    others) predate this rule and are not held to it here."""
+    from tests._source_scan import PACKAGE, parsed
+
+    tree = parsed(PACKAGE / "lib" / "services.py")
+    positional: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        decorators = [d for d in node.decorator_list if "dataclass" in ast.unparse(d)]
+        fields = {
+            item.target.id
+            for item in node.body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        }
+        if decorators and "code" in fields and "kw_only=True" not in ast.unparse(decorators[0]):
+            positional.append(node.name)
+    assert positional == []

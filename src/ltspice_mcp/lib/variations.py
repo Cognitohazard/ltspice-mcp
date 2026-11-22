@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import product
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, NoReturn, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -25,7 +25,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError, UnreadableCardError
-from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
+from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, capabilities, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
@@ -34,7 +34,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.encoding import encode_spice_text
-from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
+from ltspice_mcp.lib.format import parse_plain_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.hierarchy_expr import NumericFact
 from ltspice_mcp.lib.instance_targeting import (
@@ -50,9 +50,10 @@ from ltspice_mcp.lib.instance_targeting import (
     validate_segments,
 )
 from ltspice_mcp.lib.montecarlo import (
+    InstanceGeometry,
     MCSampler,
     ToleranceSpec,
-    extract_mosfet_instances,
+    TopLevelMosfets,
     inject_card_before_end,
     matches_prefix,
     parse_model_params,
@@ -67,7 +68,6 @@ from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.ngspice_compat import multiplies_m
 from ltspice_mcp.lib.ngspice_driver import SEED_MAX, deck_seeds
 from ltspice_mcp.lib.spice_lex import (
-    DefinitionRule,
     EditCards,
     SpiceCard,
     SpiceLexError,
@@ -77,7 +77,11 @@ from ltspice_mcp.lib.spice_lex import (
     lex_for_edit,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
+from ltspice_mcp.lib.spice_lex_ops import (
+    exported_names,
+    exported_part,
+    fold_micro_suffix_cards,
+)
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     ModelCard,
@@ -89,14 +93,7 @@ from ltspice_mcp.lib.subckt_mismatch import (
     MOBILITY_PARAM,
     VTH_PARAM,
     ClosureFile,
-    MismatchPlan,
-    MismatchPlanError,
-    MismatchValues,
-    XFetTarget,
-    build_plan,
-    draw_mismatch,
-    overlapping_claims,
-    render,
+    require_instance_parameter,
 )
 
 ScalarValue: TypeAlias = StrictInt | StrictFloat | str
@@ -431,10 +428,10 @@ class CircuitDeck:
     record_source_lineage: bool = False
     # The codec a case deck is written in (``StagedDeck.codec``).
     codec: str = "utf-8"
-    # Which definition of a subcircuit defined twice the deck's reader keeps
-    # (``spice_lex.definition_rule``), for a deck with no semantic profile
-    # (QSPICE, Xyce); None for a reader that is not known.
-    definitions: DefinitionRule | None = None
+    # The simulator family that reads the deck (``simulator_build.Producer``),
+    # which names the capability a deck with no semantic profile lacks when a
+    # variation needs it; None for a reader that is not known.
+    family: str | None = None
 
 
 @dataclass(frozen=True)
@@ -521,8 +518,12 @@ class _DeckTargets:
     models_by_ref: dict[str, str]
     model_names: dict[str, list[_Site]]
     #: The other names of each component LTspice exported with its section
-    #: sign (``spice_lex_ops.section_sign_names``), by case-folded name.
+    #: sign (``_other_names``), by case-folded name.
     aliases: dict[str, list[_Site]] = field(default_factory=dict)
+    #: Each part an ngspice copy of an LTspice export renamed, by its folded
+    #: name in the copy, with the name LTspice exported it under
+    #: (``spice_lex_ops.exported_names``).
+    exported: dict[str, str] = field(default_factory=dict)
     #: Each name a card that cannot be split into parts may declare, by
     #: case-folded name: a part's reference, a ``.model``'s name, or a name a
     #: ``.param`` may set (a word before ``=``). With each, the card's line,
@@ -599,19 +600,10 @@ class _DeckClosure:
     circuit_id: str
     files: tuple[_ClosureFile, ...]
     semantic_profile: SemanticProfile | None = None
-    definitions: DefinitionRule | None = None
-    # Mismatch plans built over the UNEDITED closure, keyed by what was
-    # selected. One circuit's cases select the same devices and differ only in
-    # the values written, and a plan costs a lex of every file in the closure —
-    # a PDK's worth, per case. Filled and read only by ``_mismatch_plan``.
-    plans: dict[tuple[Any, ...], MismatchPlan] = field(default_factory=dict, compare=False)
+    family: str | None = None
 
     def texts(self) -> dict[int, str]:
         return {file.index: file.text for file in self.files}
-
-    def unedited(self, files: Sequence[ClosureFile]) -> bool:
-        """Is this the closure's own text, or has a case already edited it?"""
-        return all(file.text is self.files[file.index].text for file in files)
 
 
 def sanitize_circuit_id(text: str) -> str:
@@ -861,11 +853,6 @@ def expand_variations(
                         # them, so a rule is reported in declaration order the
                         # way it is applied.
                         if rule is head and closure.semantic_profile is None:
-                            if any(r.instance is not None for r in mismatch_rules):
-                                raise VariationError(
-                                    "semantic_profile_required",
-                                    "nested mismatch requires an explicit semantic_profile",
-                                )
                             _validate_mismatch_rules(closure, mismatch_rules)
                         continue
                     _resolve_random_rule_targets(closure, rule)
@@ -1079,6 +1066,7 @@ def materialize_variants(
             as_written = editor.hierarchy
             structured.extend(_legacy_instance_edits(editor.hierarchy, aliases))
             _validate_write_sets(closure, ordinary, structured, editor.hierarchy, rules, origins)
+            _require_instance_parameters(editor.hierarchy, structured)
             editor.apply(structured)
             final_files = editor.result()
             if mismatch_rules:
@@ -1089,6 +1077,7 @@ def materialize_variants(
                 mismatch, draws = _nested_mismatch_edits(
                     final_editor.hierarchy, mismatch_rules, sampler, final_editor
                 )
+                _require_instance_parameters(final_editor.hierarchy, mismatch)
                 final_editor.apply(mismatch)
                 final_files = final_editor.result()
                 editor = final_editor
@@ -1113,7 +1102,11 @@ def materialize_variants(
                     "structured targeting requires an explicit semantic_profile",
                 )
             if aliases:
-                _apply_instance_params(closure, texts, list(aliases))
+                # Refused when the alias resolved (``_resolve_instance_param``);
+                # a case expanded elsewhere is refused here by the same rule.
+                _refuse_descent_without_profile(
+                    closure, f"target {aliases[0].target!r} {_ALIAS_NEEDS_BODY}"
+                )
             if mismatch_rules:
                 assert sampler is not None
                 assignments.update(_apply_random_rules(closure, texts, mismatch_rules, sampler))
@@ -1239,7 +1232,7 @@ def _refuse_unread(
     variation needs it."""
     for file in closure.files:
         for name, declarations in file.targets.unread.items():
-            names = (name, *section_sign_names(name))
+            names = (name, *(n.casefold() for n in _other_names(name, file.targets.exported)))
             if pattern not in names and not (
                 _is_glob(pattern) and any(fnmatch.fnmatchcase(n, pattern) for n in names)
             ):
@@ -1277,7 +1270,9 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     model_names: dict[str, list[_Site]] = {}
     aliases: dict[str, list[_Site]] = {}
     unread: dict[str, list[_UnreadDeclaration]] = {}
-    cards = _lexed_file(text, depth).read
+    lexed = _lexed_file(text, depth)
+    exported = exported_names(lexed.cards)
+    cards = lexed.read
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if (unread_card := _unread_declarations(card)) is not None:
             names, declared = unread_card
@@ -1298,7 +1293,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
                 continue
             site = _Site(view.ref, card.scope, section)
             components.setdefault(view.ref.casefold(), []).append(site)
-            for alias in section_sign_names(view.ref):
+            for alias in _other_names(view.ref, exported):
                 aliases.setdefault(alias.casefold(), []).append(site)
             if view.model is not None:
                 models_by_ref.setdefault(view.ref.casefold(), view.ref)
@@ -1309,7 +1304,20 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
         model_names=model_names,
         aliases=aliases,
         unread=unread,
+        exported=exported,
     )
+
+
+def _other_names(ref: str, exported: dict[str, str]) -> tuple[str, ...]:
+    """Every other name the part ``ref`` answers to as a target: those of the
+    name LTspice exported it under (``spice_lex_ops.exported_part``),
+    which is ``ref`` itself in LTspice's copy of an export and the name the
+    copy records in ngspice's (``spice_lex_ops.exported_names``). ``R§Load``
+    answers to ``RLoad`` and ``Load``; ``RLoad`` in ngspice's copy answers to
+    ``R§Load`` and ``Load``."""
+    part = exported_part(ref, exported)
+    names = () if part is None else part.names()
+    return tuple(name for name in names if name.casefold() != ref.casefold())
 
 
 def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
@@ -1331,11 +1339,7 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
         circuit_id=circuit.circuit_id,
         files=tuple(files),
         semantic_profile=circuit.semantic_profile,
-        definitions=(
-            circuit.semantic_profile.subckt_rule
-            if circuit.semantic_profile is not None
-            else circuit.definitions
-        ),
+        family=circuit.family,
     )
 
 
@@ -1595,6 +1599,8 @@ def _resolve_instance_param(
             f"only {VTH_PARAM} (a shift of the signed threshold) and {MOBILITY_PARAM} "
             "(a mobility multiplier) can be set per instance",
         )
+    if closure.semantic_profile is None:
+        _refuse_descent_without_profile(closure, f"target {target!r} {_ALIAS_NEEDS_BODY}")
     folded = target.casefold()
     _refuse_unread(closure, folded, kinds=(".param", "part"), what="target", target=target)
     clashes = sorted(
@@ -1629,99 +1635,6 @@ def _closure_files(closure: _DeckClosure, texts: dict[int, str]) -> list[Closure
         ClosureFile(index=file.index, path=file.path, text=texts[file.index])
         for file in closure.files
     ]
-
-
-def _mismatch_plan(
-    closure: _DeckClosure,
-    files: list[ClosureFile],
-    *,
-    prefix: Sequence[str] | None = None,
-    selectors: Sequence[str] | None = None,
-    exact: bool = False,
-) -> MismatchPlan:
-    """Build a mismatch plan, relabelling its refusals as variation errors.
-
-    Reused across the cases of one circuit while the closure still reads as it
-    did when the plan was built: a plan resolves which devices a selection
-    names, and every case of a circuit names the same ones — only the values
-    differ. Each build lexes every file in the closure, which on a PDK deck is
-    the dominant cost of materializing a case.
-
-    A case that has already edited the closure gets its own plan rather than
-    the cached one, because the edit can be the very thing the plan reads.
-    """
-    prefixes = None if prefix is None else tuple(prefix)
-    key = (prefixes, tuple(selectors) if selectors is not None else None, exact)
-    unedited = closure.unedited(files)
-    if unedited and key in closure.plans:
-        return closure.plans[key]
-    try:
-        plan = build_plan(
-            files,
-            prefix=prefixes,
-            selectors=selectors,
-            exact=exact,
-            subckt_rule=closure.definitions,
-        )
-    except MismatchPlanError as exc:
-        raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
-    if unedited:
-        closure.plans[key] = plan
-    return plan
-
-
-def _apply_instance_params(
-    closure: _DeckClosure,
-    texts: dict[int, str],
-    edits: list[ResolvedAssignment],
-) -> None:
-    """Write every per-instance mismatch value this case asks for, at once.
-
-    One plan over all of them, so a device subcircuit two instances share is
-    cloned once and both instances point at the same patched copy.
-    """
-    if not edits:
-        return
-    files = _closure_files(closure, texts)
-    plan = _mismatch_plan(
-        closure,
-        files,
-        selectors=[edit.refs[0] for edit in edits],
-        exact=True,
-    )
-    values: dict[str, MismatchValues] = {}
-    written: dict[tuple[str, str], str] = {}
-    for edit in edits:
-        target = _instance_target(plan, edit.refs[0])
-        assert edit.instance_param is not None
-        key = (target.ref.casefold(), edit.instance_param)
-        previous = written.get(key)
-        if previous is not None:
-            raise VariationError(
-                "duplicate_assignment_target",
-                f"Circuit {closure.circuit_id!r}: targets {previous!r} and "
-                f"{edit.target!r} both set {edit.instance_param} on {target.ref}",
-            )
-        written[key] = edit.target
-        number = float(parse_spice_value(str(edit.value)))
-        current = values.get(target.ref, MismatchValues())
-        values[target.ref] = (
-            MismatchValues(delvto=number, mulu0=current.mulu0)
-            if edit.instance_param == VTH_PARAM
-            else MismatchValues(delvto=current.delvto, mulu0=number)
-        )
-    texts.update(render(files, plan, values))
-
-
-def _instance_target(plan: MismatchPlan, selector: str) -> XFetTarget:
-    x_ref, _, inner = selector.partition(".")
-    for target in plan.targets:
-        if target.x_ref.casefold() != x_ref.casefold():
-            continue
-        if inner and target.inner_ref.casefold() != inner.casefold():
-            continue
-        return target
-    raise KeyError(selector)
 
 
 def _closure_scope(closure: _DeckClosure) -> str:
@@ -1783,7 +1696,10 @@ def _resolve_random_rule_targets(
             for folded, sites in file.targets.components.items():
                 # A part exported as ``R§Load`` answers to ``RLoad`` and ``Load``
                 # too, so a target works on either simulator's copy of the deck.
-                names = (folded, *section_sign_names(folded))
+                names = (
+                    folded,
+                    *(n.casefold() for n in _other_names(folded, file.targets.exported)),
+                )
                 if any(fnmatch.fnmatchcase(name, pattern) for name in names):
                     by_ref.setdefault(folded, []).extend((file, site) for site in sites)
         if not by_ref:
@@ -1874,13 +1790,11 @@ def _apply_assignments(
     edits: tuple[ResolvedAssignment, ...],
 ) -> None:
     by_file: dict[int, list[ResolvedAssignment]] = {}
-    instance_params: list[ResolvedAssignment] = []
     for edit in edits:
-        if edit.kind == "instance_param":
-            instance_params.append(edit)
-            continue
+        # A per-instance target is written by the hierarchy editor
+        # (``_legacy_instance_edits``); the caller passes none here.
+        assert edit.kind != "instance_param"
         by_file.setdefault(edit.file_index, []).append(edit)
-    _apply_instance_params(closure, texts, instance_params)
     for index, file_edits in by_file.items():
         file = closure.files[index]
         lexed = file.lexed(texts[index])
@@ -2451,14 +2365,47 @@ def _flat_mismatch_files(
         if not any(ref.startswith(prefixes) for ref in file.targets.components):
             continue
         with reading(file.path.name):
-            refs = [
-                instance.ref
-                for instance in extract_mosfet_instances(texts[file.index], deck=file.is_deck)
-            ]
+            devices = _flat_devices(texts[file.index], deck=file.is_deck)
         for position, rule in enumerate(rules):
-            if any(matches_prefix(ref, rule.prefix) for ref in refs):
+            # Sized or not: a rule reaches every device its prefix claims, and
+            # one it cannot size is refused (``_rule_devices``), never skipped.
+            if any(matches_prefix(ref, rule.prefix) for ref in devices.refs):
+                _rule_devices(devices, rule)
                 hits[position].append(file.index)
     return tuple(tuple(indexes) for indexes in hits)
+
+
+def _flat_devices(text: str, *, deck: bool) -> TopLevelMosfets:
+    """The top-level ``M`` cards of one file of a deck with no semantic
+    profile, sized or not: the one reading of them a mismatch draw makes."""
+    from ltspice_mcp.lib.montecarlo import (
+        extract_mosfet_instances,  # noqa: TID251 - the one reader of a flat deck's devices
+    )
+
+    return extract_mosfet_instances(text, deck=deck)
+
+
+def _rule_devices(devices: TopLevelMosfets, rule: MismatchRule) -> list[InstanceGeometry]:
+    """The devices ``rule`` reaches among ``devices``, each sized; refuse the
+    rule when it reaches one this path cannot size.
+
+    Drawn for the others alone, the spread reported would be for fewer
+    devices than the rule names, with nothing to say so. The hierarchy path
+    of a deck with a profile refuses a device whose W or L it cannot resolve
+    the same way (``_nested_mismatch_edits``)."""
+    unsized = [item for item in devices.unsized if matches_prefix(item.ref, rule.prefix)]
+    if unsized:
+        named = "; ".join(f"{item.ref}: {item.reason}" for item in unsized)
+        raise VariationError(
+            "mismatch_geometry_unresolved",
+            f"Mismatch prefix {rule.prefix!r} reaches {len(unsized)} top-level "
+            f"device{'s' if len(unsized) != 1 else ''} the server cannot size for a draw "
+            f"({named}). On this simulator the server evaluates no expression in a "
+            "device's card, so a draw for the other devices alone would report a spread "
+            "for fewer devices than the rule names. Give those cards a model and W, L and "
+            "m as literal numbers, or narrow the prefix to leave them out.",
+        )
+    return [item for item in devices.sized if matches_prefix(item.ref, rule.prefix)]
 
 
 def _mismatch_head(rules: Sequence[RandomRule]) -> MismatchRule | None:
@@ -2466,67 +2413,94 @@ def _mismatch_head(rules: Sequence[RandomRule]) -> MismatchRule | None:
     return next((rule for rule in rules if isinstance(rule, MismatchRule)), None)
 
 
-# The answer for a closure no prefix could reach into, so the descent walk is
-# skipped rather than run to prove itself empty.
-_NO_DESCENT = MismatchPlan(targets=(), skips=(), clones=())
-
-
-def _descend(
-    closure: _DeckClosure,
-    texts: dict[int, str],
-    rules: list[MismatchRule],
-) -> tuple[list[ClosureFile], MismatchPlan]:
-    """The plan covering every mismatch rule at once, and the files it read.
-
-    One plan for the whole set, not one per rule: the descent clones the device
-    subcircuit it patches, and per-rule plans would clone one device once per
-    rule, under a different name each time.
-    """
-    if not _has_subckt_candidate(closure, rules):
-        return [], _NO_DESCENT
-    files = _closure_files(closure, texts)
-    return files, _mismatch_plan(closure, files, prefix=[rule.prefix for rule in rules])
-
-
 def _refuse_unreached(
     closure: _DeckClosure,
     rules: list[MismatchRule],
     flat: tuple[tuple[int, ...], ...],
-    plan: MismatchPlan,
 ) -> None:
-    """Refuse a mismatch rule that reaches no device at either level.
+    """Refuse a mismatch rule that reaches no top-level device.
 
     A rule that quietly matches nothing leaves every run identical while the
     job still reports success — zero measured spread, which reads as a design
     that is insensitive to mismatch rather than one that was never perturbed.
     """
-    unmatched = [
-        rule
-        for rule, indexes in zip(rules, flat, strict=True)
-        if not indexes
-        and not any(matches_prefix(target.x_ref, rule.prefix) for target in plan.targets)
-    ]
+    unmatched = [rule for rule, indexes in zip(rules, flat, strict=True) if not indexes]
     if not unmatched:
         return
     prefixes = ", ".join(repr(rule.prefix) for rule in unmatched)
     raise VariationError(
         "ambiguous_target",
         f"Circuit {closure.circuit_id!r}: mismatch prefix {prefixes} matches no "
-        f"top-level device with numeric W/L, and no X instance reaching a MOS device "
-        f"one subcircuit level down{_closure_scope(closure)}",
+        f"top-level device with numeric W/L{_closure_scope(closure)}",
+    )
+
+
+#: Why a per-instance target (``X1:delvto``) is refused on a deck with no
+#: semantic profile, for ``_refuse_descent_without_profile``.
+_ALIAS_NEEDS_BODY = (
+    "sets a mismatch parameter on a device inside a subcircuit, which needs a reading "
+    "of the subcircuit's body"
+)
+
+
+def _refuse_descent_without_profile(closure: _DeckClosure, what: str) -> NoReturn:
+    """Refuse a mismatch draw for a device inside a subcircuit on a deck with no
+    semantic profile: the one decision that such a deck has no way into a
+    subcircuit body.
+
+    A deck gets a profile only where the hierarchy reader models its simulator
+    (``hierarchy.SUPPORTED_FAMILIES``). Without one the server does not know
+    how the simulator reads the body: which ``W`` and ``L`` the device takes,
+    how its expressions evaluate, how ``m`` passes down. A draw made on a guess
+    at those has the wrong area and so the wrong spread, with nothing to say
+    so. The reason is the capability table's (``capabilities``), so the table
+    and the refusal cannot drift apart.
+    """
+    reason = capabilities.gap_reason(closure.family, "hierarchy") or (
+        "The simulator that reads this deck is not known, so the server cannot tell "
+        "how it reads a subcircuit body. Run the deck on LTspice or ngspice."
+    )
+    raise VariationError(
+        "mismatch_inside_subcircuit_unmodelled",
+        f"Circuit {closure.circuit_id!r}: {what}. {reason}",
     )
 
 
 def _validate_mismatch_rules(closure: _DeckClosure, rules: list[MismatchRule]) -> None:
-    """Resolve the mismatch rules against the unedited closure and refuse misses.
+    """Resolve the mismatch rules of a deck with no semantic profile and refuse
+    a miss, before any case is written.
 
-    Expansion's half of the resolution materialization runs, so a rule cannot
-    validate here and then reach nothing there. The plan it builds is the one
-    materialization reuses.
+    Such a deck draws for top-level ``M`` cards only. A rule whose prefix
+    names an ``X`` instance is refused (``_refuse_descent_without_profile``)
+    even when it also reaches top-level devices: drawing for those alone would
+    report a spread that leaves out the devices the prefix asked for.
     """
+    _refuse_rules_reaching_subcircuits(closure, rules)
     texts = closure.texts()
-    _, plan = _descend(closure, texts, rules)
-    _refuse_unreached(closure, rules, _flat_mismatch_files(closure, texts, rules), plan)
+    _refuse_unreached(closure, rules, _flat_mismatch_files(closure, texts, rules))
+
+
+def _refuse_rules_reaching_subcircuits(closure: _DeckClosure, rules: list[MismatchRule]) -> None:
+    """Refuse, on a deck with no semantic profile, a nested ``instance`` rule
+    and a rule whose prefix names an ``X`` instance, even one that also
+    reaches top-level devices: drawing for those alone would report a spread
+    that leaves out the devices the prefix asked for."""
+    nested = [rule.instance for rule in rules if rule.instance is not None]
+    if nested:
+        _refuse_descent_without_profile(
+            closure,
+            f"mismatch instance {', '.join(repr(i) for i in nested)} names a device "
+            "inside a subcircuit, and a mismatch draw for it needs a reading of the "
+            "subcircuit's body",
+        )
+    reaching = [rule.prefix for rule in rules if _names_subckt_instance(closure, rule)]
+    if reaching:
+        _refuse_descent_without_profile(
+            closure,
+            f"mismatch prefix {', '.join(repr(p) for p in reaching)} names a subcircuit "
+            "instance, and a mismatch draw for a device inside a subcircuit needs a "
+            "reading of its body (or narrow the prefix to top-level M devices)",
+        )
 
 
 def _apply_mismatch_rules(
@@ -2536,17 +2510,17 @@ def _apply_mismatch_rules(
     sampler: MCSampler,
     model_card: Callable[[str], str | None],
 ) -> dict[str, float]:
-    """Perturb every device the mismatch rules reach, at whichever level.
+    """Perturb every top-level device the mismatch rules of a deck with no
+    semantic profile reach (``_validate_mismatch_rules`` refused the rest).
 
-    A rule answered by top-level ``M`` cards is applied on its own, in
-    declaration order, exactly as before subcircuit descent existed — each
-    injects its own variant model card and the next rule reads what the one
-    before it wrote. Descent is then attempted for every rule, not only for the
-    ones the top level left empty, because a deck holding plain transistors
-    alongside X-wrapped ones is ordinary and each rule should reach the devices
-    its prefix names.
+    Each rule is applied on its own, in declaration order: each injects its
+    own variant model card and the next rule reads what the one before it
+    wrote.
     """
     mismatch_rules = [rule for rule in rules if isinstance(rule, MismatchRule)]
+    # Refused when the rules were read (``_validate_mismatch_rules``); a case
+    # expanded elsewhere is refused here by the same rule.
+    _refuse_rules_reaching_subcircuits(closure, mismatch_rules)
     flat = _flat_mismatch_files(closure, texts, mismatch_rules)
     draws: dict[str, float] = {}
     for rule, indexes in zip(mismatch_rules, flat, strict=True):
@@ -2561,93 +2535,17 @@ def _apply_mismatch_rules(
                 )
             texts[index] = text
             draws.update(sampled)
-
-    # Descent reads the closure as the flat pass left it: a variant model card
-    # injected above is part of the file the clone is copied out of.
-    files, plan = _descend(closure, texts, mismatch_rules)
-    _refuse_unreached(closure, mismatch_rules, flat, plan)
-    if plan.targets:
-        _refuse_overlapping_rules(closure, plan, mismatch_rules)
-        draws.update(_apply_subckt_mismatch(closure, texts, files, plan, mismatch_rules, sampler))
+    _refuse_unreached(closure, mismatch_rules, flat)
     return draws
 
 
-def _has_subckt_candidate(closure: _DeckClosure, rules: list[MismatchRule]) -> bool:
-    """Is there an X reference any of these prefixes could reach?
-
-    Read off the target index the closure already built, so a deck of plain
-    transistors does not pay for a descent walk that can only come back empty.
-    """
-    prefixes = tuple(rule.prefix.casefold() for rule in rules)
-    if not prefixes:
-        return False
+def _names_subckt_instance(closure: _DeckClosure, rule: MismatchRule) -> bool:
+    """Does the rule's prefix name an ``X`` instance anywhere in the closure?"""
     return any(
-        ref.startswith("x") and ref.startswith(prefixes)
+        ref[:1].casefold() == "x" and matches_prefix(ref, rule.prefix)
         for file in closure.files
         for ref in file.targets.components
     )
-
-
-def _refuse_overlapping_rules(
-    closure: _DeckClosure,
-    plan: MismatchPlan,
-    siblings: list[MismatchRule],
-) -> None:
-    """Refuse two rules that both claim one X-wrapped device.
-
-    A device reached through a subcircuit takes its values on its own instance
-    line, so a second rule would overwrite the first rather than layer on it —
-    unlike a top-level device, where each rule injects its own model card and
-    the next reads the one before. Rather than pick a winner by declaration
-    order, say which prefixes collide.
-    """
-    collision = overlapping_claims(plan, [rule.prefix for rule in siblings])
-    if collision is None:
-        return
-    x_ref, prefixes = collision
-    raise VariationError(
-        "overlapping_mismatch_rules",
-        f"Circuit {closure.circuit_id!r}: instance {x_ref} is claimed by "
-        f"{len(prefixes)} mismatch rules (prefixes "
-        f"{', '.join(repr(p) for p in prefixes)}); a device reached "
-        "through a subcircuit takes one rule's values, so narrow the prefixes "
-        "until each device is claimed once",
-    )
-
-
-def _apply_subckt_mismatch(
-    closure: _DeckClosure,
-    texts: dict[int, str],
-    files: list[ClosureFile],
-    plan: MismatchPlan,
-    rules: list[MismatchRule],
-    sampler: MCSampler,
-) -> dict[str, float]:
-    """Draw and write per-instance values for devices one subcircuit level down.
-
-    The receipt carries what the rules asked for against what they reached,
-    because a device the plan could not descend into is a fact the reader needs
-    — an aggregate that reports only the draws it made cannot be told apart
-    from one where every device was covered.
-    """
-    try:
-        drawn = draw_mismatch(plan, [_engine_rule(rule) for rule in rules], sampler)
-        if drawn.values:
-            texts.update(render(files, plan, drawn.values))
-    except MismatchPlanError as exc:
-        raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
-    draws: dict[str, float] = {}
-    for ref, delvto in drawn.delvto.items():
-        draws[f"random:mismatch:{ref}.{VTH_PARAM}"] = delvto
-        draws[f"random:mismatch:{ref}.{MOBILITY_PARAM}"] = drawn.mulu0[ref]
-
-    draws["random:mismatch:requested"] = float(len(plan.targets) + len(plan.skips))
-    draws["random:mismatch:matched"] = float(len(plan.targets))
-    draws["random:mismatch:applied"] = float(len(drawn.values))
-    draws["random:mismatch:skipped"] = float(len(plan.skips))
-    for skip in plan.skips:
-        draws[f"random:mismatch:{skip.x_ref}:{skip.code}"] = 1.0
-    return draws
 
 
 def _apply_mismatch_rule(
@@ -2664,11 +2562,7 @@ def _apply_mismatch_rule(
     ``.END`` hold no device the simulator reads (``_ClosureFile.is_deck``).
     """
     engine_rule = _engine_rule(rule)
-    instances = [
-        instance
-        for instance in extract_mosfet_instances(text, deck=deck)
-        if matches_prefix(instance.ref, rule.prefix)
-    ]
+    instances = _rule_devices(_flat_devices(text, deck=deck), rule)
     if not instances:
         raise VariationError(
             "ambiguous_target",
@@ -2682,13 +2576,6 @@ def _apply_mismatch_rule(
                 "model_missing",
                 f"Mismatch instance {instance.ref!r} references missing model "
                 f"{instance.model_name!r}",
-            )
-        if instance.multiplier is None:
-            raise VariationError(
-                "mismatch_geometry_unresolved",
-                f"Mismatch instance {instance.ref!r} gives its multiplier m as something "
-                "other than a positive number, so the area its draw stands for is unknown; "
-                "write m as a number",
             )
         nominals = parse_model_params(base_card)
         mismatch = sample_instance_mismatch(sampler, instance, engine_rule)
@@ -2750,6 +2637,27 @@ def _legacy_instance_edits(
             raise VariationError("ambiguous_target", "mismatch alias must select a MOS")
         result.append(InstanceEdit(row.instance, "parameter", edit.value, edit.instance_param))
     return result
+
+
+def _require_instance_parameters(hierarchy: Hierarchy, edits: Sequence[InstanceEdit]) -> None:
+    """Refuse every edit of ``edits`` that writes ``delvto`` or ``mulu0`` on a
+    device's card where the simulator that reads ``hierarchy`` is known not to
+    apply it to the device's model, or is not known to
+    (``subckt_mismatch.require_instance_parameter``). Asked of every edit
+    before an editor applies it, whichever spelling made it (a structured
+    ``instances`` target, the ``X1:delvto`` alias, a mismatch draw), so no
+    draw is run that changes nothing and no run is started that the simulator
+    stops on."""
+    rows = {tuple(s.casefold() for s in row.instance): row for row in hierarchy.instances}
+    for edit in edits:
+        parameter = (edit.parameter or "").casefold()
+        if edit.attribute != "parameter" or parameter not in (VTH_PARAM, MOBILITY_PARAM):
+            continue
+        row = rows.get(tuple(s.casefold() for s in edit.instance))
+        if row is None:
+            # The editor refuses an instance its hierarchy does not hold.
+            continue
+        require_instance_parameter(row, hierarchy.profile.simulator, parameter)
 
 
 @dataclass(frozen=True)
@@ -2998,8 +2906,8 @@ def _path_multiplier(row: ResolvedInstance) -> float:
     (``hierarchy_expr.card_copies``): LTspice ignores ``m`` on an X line at any
     depth, and ngspice passes an X line's ``m`` down to the cards of a
     subcircuit that does not declare ``m``, replacing each card's own ``m`` or,
-    in its HSPICE modes, multiplying it. A deck with no semantic profile is
-    drawn by ``subckt_mismatch``, which reads the same rule. All the copies
+    in its HSPICE modes, multiplying it. A deck with no semantic profile gets
+    no draw inside a subcircuit (``_refuse_descent_without_profile``). All the copies
     share one mismatch draw, so the area the draw stands for is this many
     times W·L. An ``m`` written but not resolvable to a positive number
     refuses the rule: drawn as one copy, the sigma would be too large.
@@ -3024,10 +2932,9 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
     subcircuit, ngspice takes the draw as ``delvto`` and ``mulu0`` on the
     device's card, which needs a BSIM3 or BSIM4 model.
     """
-    from ltspice_mcp.lib.subckt_mismatch import require_scoped_bsim
-
     if len(row.instance) > 1 and simulator == "ngspice":
-        require_scoped_bsim(row)
+        # Whether ngspice applies them to this model is asked as each is
+        # written (``_instance_parameter_edit``).
         return False
     if row.model_source is None or len(row.model_family) != 1:
         raise VariationError(
@@ -3042,8 +2949,10 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
 def _nested_mismatch_edits(
     hierarchy: Hierarchy, rules: Sequence[MismatchRule], sampler: MCSampler, editor: TargetEditor
 ) -> tuple[list[InstanceEdit], dict[str, float]]:
-    from ltspice_mcp.lib.montecarlo import InstanceGeometry
-
+    # Sizes each device by the hierarchy reader, which evaluates its W, L and
+    # m as the simulator does; a deck with no profile evaluates none and
+    # refuses a device it cannot size (``_rule_devices``). Both refuse, never
+    # skip, a device whose size is not read.
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()

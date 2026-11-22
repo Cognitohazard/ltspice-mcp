@@ -106,11 +106,25 @@ async def test_hook_rejects_a_list_cut_short_with_no_way_to_read_the_rest(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """A list a reply cuts short gives a cursor, or says beside its flag how to
-    read the rest. spec.fail_cases has no cursor of its own; with its hint left
-    off, a real analysis of a real raw emits a cut list with no way on, and the
-    hook must refuse it."""
+    read the rest. spec.fail_cases has no cursor of its own; with its hint and
+    the reply's cursor left off, a real analysis of a real raw emits a cut list
+    with no way on, and the hook must refuse it."""
+    state_no_sim.config.default_budget = 0
     monkeypatch.setattr(analyze_mod, "_FAIL_CASE_PAGE_CAP", 1)
-    monkeypatch.setattr(analyze_mod, "_say_how_to_read_fail_cases", lambda spec: None)
+    monkeypatch.setattr(analyze_mod, "_say_how_to_read_fail_cases", lambda entry: None)
+    said = analyze_mod.say_what_was_cut
+
+    def without_the_way_on(whole: Any) -> Any:
+        annotate, apart = said(whole)
+
+        def forgetful(reply: dict[str, Any], *rest: Any) -> None:
+            annotate(reply, *rest)
+            for key in ("cursor", "next", "hint"):
+                reply.pop(key, None)
+
+        return forgetful, apart
+
+    monkeypatch.setattr(analyze_mod, "say_what_was_cut", without_the_way_on)
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     recipe = {
         "key": "vout",

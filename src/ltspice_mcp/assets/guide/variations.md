@@ -17,7 +17,7 @@ first, then bare names:
 | Target | Meaning |
 |-|-|
 | `"M1@model"`, glob `"M*@model"` | swap the instance's model card — the corner idiom, `{"M*@model": ["NTT", "NSS", "NFF"]}` |
-| `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4, through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`) |
+| `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4; LTspice `delvto` on a level 54 BSIM4 model only; through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`; refused on QSPICE and Xyce) |
 | a declared `.param` name | substitute that parameter |
 | a component reference (`R1`, `C2`) | substitute that component's value |
 
@@ -42,6 +42,20 @@ To hold a value fixed in every case, give it a list of one value in an entry
 of its own: `{"kind": "assign", "assign": {"SU": [0], "TLON": ["1n"]}}`
 multiplies the grid by one, and every case records the value in its
 assignments.
+
+## Case ids and the order of cases
+
+A case's id is `<circuit id>-case-<number>`: the number counts that
+circuit's cases from 0, padded to four digits (`dut-case-0007`; wider past
+9999), and names its staged deck (`case-0007` and the deck's own extension). The circuit id is the
+circuit's `id`, else its file stem made valid. A run row's `run_index` counts
+the whole job's cases from 0, circuits in the order given. Cases follow the
+entries in the order given, the last entry changing fastest; inside a grid
+entry the last target changes fastest, and a `random` or `pdk_native`
+entry's samples change fastest of all, wherever the entry stands. So
+`[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}, {"kind": "assign", "assign": {"C1": ["1n", "2n"]}}]` on
+circuit `dut` runs `dut-case-0000` R1=1k C1=1n, `-0001` 1k/2n, `-0002` 2k/1n,
+`-0003` 2k/2n. A resume keeps each case's id, run index and order.
 
 ## Monte Carlo: `random` rules
 
@@ -114,6 +128,8 @@ To set a target σ instead of a technology coefficient, invert the formula to
 `2.24e-2`. Each instance is drawn independently, so a differential pair's
 input-referred offset σ is √2 × the per-device figure.
 
+### Parallel copies and `m`
+
 A device the simulator builds as m parallel copies from one card shares that
 card's one draw, so its area is `m·W·L`. LTspice ignores `m` on an X line, so
 there m is the device's own. On ngspice an X line's `m` reaches the cards of a
@@ -124,6 +140,8 @@ A subcircuit that declares `m` takes the X line's `m` as an ordinary
 parameter. On both, an inner `m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
 (`W=1u m=12`) gets the σ of a 12 µm device. An `m` that does not resolve to a
 positive number refuses the request with `mismatch_geometry_unresolved`.
+
+### Choosing the devices and their model parameters
 
 MOSFETs defined by a `.model` card, which an `.asc` with plain `nmos`/`pmos`
 symbols exports, take the same rule with `prefix: "M"`, and the mismatch
@@ -151,6 +169,15 @@ applies to the model card's `VTO`/`KP`:
   List the physical MOS instances with `inspect(kind="hierarchy")` (guide
   section 'hierarchy'). Sampling uses each device's final W/L, after any
   `assign` variation has set it.
+- On QSPICE and Xyce a rule whose `prefix` names an `X` instance, an
+  `instance` rule and `X1:delvto` are refused with
+  `mismatch_inside_subcircuit_unmodelled`: the server does not model how those
+  simulators read a subcircuit body, so it cannot tell the device's W, L and m.
+  Run the deck on LTspice or ngspice. A rule on top-level `M` cards runs there,
+  reading literal W, L, m and model parameters; a rule that reaches a card
+  whose W, L or m is an expression or missing is refused with
+  `mismatch_geometry_unresolved`, naming the card: write them as numbers, or
+  narrow the prefix.
 
 ## Explicit per-instance values
 
@@ -165,3 +192,12 @@ When you choose the offsets yourself (worst-case corners, a measured die), use
 `X1:delvto` selects the FET only when the subckt body contains exactly one; a
 multi-FET body needs the qualified form `X1.M0:delvto`. These targets work
 only in `assign`. In `random` rules, mismatch uses the Pelgrom rule above.
+
+On LTspice, `X1:delvto` runs only on a level 54 (BSIM4) model, where both
+builds are recorded to take it. LTspice 26 stops on `delvto` on BSIM3 and on
+`mulu0` on BSIM3 and BSIM4, and XVII ignores them, so those are refused with
+`instance_parameter_not_taken`; on any other level whether LTspice applies
+them is not recorded, and they are refused with
+`instance_parameter_unestablished`. A `mismatch` rule with an `instance` list
+gives the device its own model copy instead. On ngspice they need a BSIM3 or
+BSIM4 model (`unsupported_model` otherwise).

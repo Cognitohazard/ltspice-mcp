@@ -202,6 +202,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             logger.info("Sandbox ([security] allowed_paths):")
             for allowed_path in sandbox:
                 logger.info(f"  - {allowed_path.resolve()}")
+            if "run_code" in state.tool_dispatch:
+                logger.warning(
+                    "run_code is served, and allowed_paths does not confine it: a snippet "
+                    "has this process's file access ([tools] run_code = false turns it off)"
+                )
 
         if boot.preloaded_circuits:
             logger.info(
@@ -238,7 +243,7 @@ SPICE simulation with LTspice and ngspice, and LTspice .asc schematic editing.
 
 Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) returns its core (how to work here, the Python API, the rules that cause silent errors) and an index of topic sections and task playbooks; add "section" to read one. Read the section for a task before starting it.
 
-{python_door} Tools: one step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
+{python_door} Tools: one step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two. Ask an analyze_results recipe before your own numpy: tone or .four (amplitude, phase), transient_response, measurements (.meas values), stability (margins), time_steps (each run's smallest time step).
 
 Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. LTspice's own MCP server (set_design_content, start_simulation) edits and runs only the copy open in its window: edit sheets with edit_schematic and run them with run_experiments. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures.
 """

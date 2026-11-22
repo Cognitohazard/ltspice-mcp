@@ -14,7 +14,7 @@ and renderers live in ``tools/receipts``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
@@ -35,6 +35,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
@@ -49,51 +50,71 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
 )
-from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.job_lifecycle import WaitFor
+from ltspice_mcp.lib.job_simulator import job_simulator
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
-from ltspice_mcp.lib.pagination import decode_offset, unpaged
-from ltspice_mcp.lib.pagination import page as _page
+from ltspice_mcp.lib.pagination import unpaged
+from ltspice_mcp.lib.presenter import ListCut, StoredAnswer, open_record
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
-from ltspice_mcp.lib.sheet_results import NotPlaced, check_case, place_case
+from ltspice_mcp.lib.sheet_results import (
+    NotPlaced,
+    check_case,
+    place_checked,
+    where_placed,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import experiments
 from ltspice_mcp.tools._base import (
+    CUT_SCHEMA,
     ENVELOPE_ERROR_SCHEMA,
     HINT_SCHEMA,
     OUTCOME_SCHEMA,
+    PAGE_OF_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
-    ResponseBudget,
+    STORED_ANSWER_SCHEMA,
     ToolInput,
     failure_text,
     failures_schema,
     format_response,
+    open_stored_page,
     outcome_of,
     page_schema,
+    present_job_answer,
+    presented,
+    record_page,
     registry,
     resolve_response_budget,
     safe_path,
+    say_over_target,
+    stored_page,
 )
 from ltspice_mcp.tools.experiments import attached_analysis_callback
 from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
+    DELIVERY,
+    JOB_RUNS,
+    JOB_SIMULATOR_NOTES_SCHEMA,
+    JOB_SIMULATOR_SCHEMA,
     JOB_STATUS_SCHEMA,
+    JOB_TYPE_SCHEMA,
     JOBS_PAGE_LIMIT,
     OBSERVATION_SCHEMA,
-    RECEIPT_DEFAULT_ROUTE,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
     RUN_ROWS_CUT,
+    RUNS_NOT_SHOWN_SCHEMA,
+    RUNS_PAGE_ROWS,
     RUNS_PAGE_SCHEMA,
-    ReceiptBuild,
     ReceiptSnapshot,
     finalize_receipt,
-    negotiate_receipt,
+    receipt_parts,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
     resolve_run_fields,
+    run_rows_record,
+    say_which_rows,
     snapshot_receipt,
     snapshot_receipt_live,
 )
@@ -114,7 +135,7 @@ class JobsInput(ToolInput):
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
             "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
             "cases of a recoverable job; 'place_beside_sheet' copies a case's "
-            "results beside its sheet. Each action takes only its own fields, "
+            "results beside its sheet or netlist. Each action takes only its own fields, "
             "listed in the tool's description."
         ),
     )
@@ -316,7 +337,7 @@ class JobsRunsInput(_AddressedJobsInput):
 
 
 class JobsPlaceBesideSheetInput(_AddressedJobsInput):
-    """Copy a finished case's results beside its sheet, where LTspice opens a sheet's."""
+    """Copy a finished case's results beside its sheet or netlist, where LTspice keeps them."""
 
     action: Literal["place_beside_sheet"]  # pyright: ignore[reportIncompatibleVariableOverride]
     case_id: str | None = Field(
@@ -469,6 +490,7 @@ _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
     "failures": failures_schema(CASE_FAILURE_SCHEMA),
     "hint": HINT_SCHEMA,
     "error": ENVELOPE_ERROR_SCHEMA,
+    "cut": CUT_SCHEMA,
 }
 
 _JOBS_COMMON_REQUIRED = [
@@ -484,9 +506,11 @@ _JOBS_COMMON_REQUIRED = [
 _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "job_id": {"type": ["string", "null"]},
     "request_id": {"type": ["string", "null"]},
-    "job_type": {"type": "string"},
+    "job_type": JOB_TYPE_SCHEMA,
     "status": JOB_STATUS_SCHEMA,
     "analysis_status": {"type": "string"},
+    "simulator": JOB_SIMULATOR_SCHEMA,
+    "simulator_notes": JOB_SIMULATOR_NOTES_SCHEMA,
     "dialect": {"type": ["string", "null"]},
     "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
     "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
@@ -496,6 +520,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
     "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
     "lineage": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lineage"],
+    "runs_not_shown": RUNS_NOT_SHOWN_SCHEMA,
 }
 
 _JOBS_RECEIPT_REQUIRED = [
@@ -558,6 +583,8 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
                     "job_id": {"type": "string"},
                     "status": {"type": "string"},
                     "request_id": {"type": "string"},
+                    "simulator": JOB_SIMULATOR_SCHEMA,
+                    "simulator_notes": JOB_SIMULATOR_NOTES_SCHEMA,
                     "finished_at": {"type": ["string", "null"]},
                 },
                 "required": ["job_id", "status", "request_id", "finished_at"],
@@ -586,22 +613,23 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
 
 def _jobs_receipt_schema(action: Literal["status", "wait", "resume"]) -> dict[str, Any]:
     properties = {
-        "action": {"const": action},
+        "action": {"const": action, DELIVERY: True},
         **_JOBS_COMMON_PROPERTIES,
         **_JOBS_RECEIPT_PROPERTIES,
     }
     required = [*_JOBS_COMMON_REQUIRED, *_JOBS_RECEIPT_REQUIRED]
     if action == "wait":
-        properties["timed_out"] = {"type": "boolean"}
+        properties["timed_out"] = {"type": "boolean", DELIVERY: True}
         required.append("timed_out")
     if action == "resume":
+        # What the resume call did, not what the job is: the delivery's.
         properties.update(
             {
-                "resumed": {"type": "boolean"},
-                "replayed": {"type": "boolean"},
-                "resume_request_id": {"type": "string"},
-                "addressed_parent_job_id": {"type": "string"},
-                "head_job_id": {"type": ["string", "null"]},
+                "resumed": {"type": "boolean", DELIVERY: True},
+                "replayed": {"type": "boolean", DELIVERY: True},
+                "resume_request_id": {"type": "string", DELIVERY: True},
+                "addressed_parent_job_id": {"type": "string", DELIVERY: True},
+                "head_job_id": {"type": ["string", "null"], DELIVERY: True},
                 "control_token": {"type": "string"},
             }
         )
@@ -625,10 +653,13 @@ def _jobs_page_schema(
 ) -> dict[str, Any]:
     page = page_schema({"type": "array", "items": item_schema, CUT: cut})
     properties = {
-        "action": {"const": action},
+        "action": {"const": action, DELIVERY: True},
         **_JOBS_COMMON_PROPERTIES,
         **page["properties"],
     }
+    if action == "list":
+        properties["stored_answer"] = STORED_ANSWER_SCHEMA
+        properties["page_of"] = PAGE_OF_SCHEMA
     required = [*_JOBS_COMMON_REQUIRED, *page["required"]]
     if addressed:
         properties.update(
@@ -640,7 +671,12 @@ def _jobs_page_schema(
         )
         required.extend(["job_id", "request_id", "status"])
     if action == "runs":
+        properties["simulator"] = JOB_SIMULATOR_SCHEMA
+        properties["simulator_notes"] = JOB_SIMULATOR_NOTES_SCHEMA
         properties["dialect"] = {"type": ["string", "null"]}
+        # The job as it stood when this page was read from its record.
+        properties["progress"] = RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["progress"]
+        properties["runs_not_shown"] = RUNS_NOT_SHOWN_SCHEMA
         required.append("dialect")
     return {
         "type": "object",
@@ -653,18 +689,23 @@ def _jobs_page_schema(
 _PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "action": {"const": "place_beside_sheet"},
+        "action": {"const": "place_beside_sheet", DELIVERY: True},
         **_JOBS_COMMON_PROPERTIES,
         "job_id": {"type": ["string", "null"]},
         "request_id": {"type": ["string", "null"]},
         "status": JOB_STATUS_SCHEMA,
         "case_id": {"type": "string"},
-        "sheet": {"type": "string"},
+        "sheet": {
+            "type": "string",
+            "description": "The circuit file, sheet or netlist, the results were copied beside.",
+        },
         "files": {
             "type": "array",
             # What a write did: leaving one out would hide a file it replaced.
             CUT: NEVER,
-            "description": "Each file copied beside the sheet, and whether it replaced one there.",
+            "description": (
+                "Each file copied beside the circuit, and whether it replaced one there."
+            ),
             "items": {
                 "type": "object",
                 "properties": {
@@ -677,7 +718,24 @@ _PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
         },
         "assignments": {
             "type": "object",
-            "description": "What the case's variations set, which the sheet does not show.",
+            "description": "What the case's variations set, which the circuit does not show.",
+        },
+        "not_checked": {
+            "type": "array",
+            # Each is a check the reply would otherwise imply was made.
+            CUT: NEVER,
+            "description": "What the copy did not check, each said in full.",
+            "items": {"type": "string"},
+        },
+        "left_in_place": {
+            "type": "array",
+            # What a write left: leaving one out would pass it off as this run's.
+            CUT: NEVER,
+            "description": (
+                "Each of the circuit's result files beside it that this run did not "
+                "write: another run's, left where it was."
+            ),
+            "items": {"type": "string"},
         },
     },
     "required": [
@@ -742,15 +800,6 @@ class _JobsActionError(Exception):
         self.retryable = retryable
 
 
-def _decode_jobs_cursor(cursor: str | None) -> int:
-    offset = decode_offset(cursor)
-    if offset is None:
-        raise InvalidCursorError(
-            "Invalid jobs cursor; use the opaque next_cursor returned by the prior page"
-        )
-    return offset
-
-
 #: What a list page held to its cap says of the groups after it.
 _LIST_PAGED = (
     "Read the next groups with "
@@ -758,25 +807,42 @@ _LIST_PAGED = (
     + "."
 )
 
-#: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
-#: control-plane's next step, and the ladder's own note reaches the caller on
-#: ``observations`` without displacing it.
-_BUDGET_NOTES = response_budget.Notes(
-    cut="presentation was reduced, no run or receipt was dropped.",
-    route=(
-        "Ask again with a larger 'budget' for the full presentation, or page on with next_cursor."
-    ),
-    default_route=RECEIPT_DEFAULT_ROUTE,
-)
+#: How a caller gets a fresh list when a list cursor's stored answer is gone.
+_LIST_AGAIN = 'Call jobs(action="list") again without cursor for a fresh list.'
+
+#: Where a list answer's circuit groups are, as the presenter names a list.
+_LIST_ROWS = "/items"
 
 
-async def _negotiate_jobs(
-    budget: ResponseBudget,
-    build: ReceiptBuild,
-    page_limit: int,
-) -> dict[str, Any]:
-    """Render this jobs response at the mildest ladder rung that fits ``budget``."""
-    return await negotiate_receipt(budget, build, page_limit, notes=_BUDGET_NOTES)
+def _say_which_groups(
+    reply: dict[str, Any],
+    cut: Mapping[str, ListCut],
+    stored: StoredAnswer | None,
+    _paged: str | None,
+) -> None:
+    """The words a cut list reply carries: its page fields set from the cut,
+    which groups it holds, and the call that reads on."""
+    entry = cut.get(_LIST_ROWS)
+    if entry is None:
+        return
+    reply["returned"] = entry.returned
+    reply["truncated"] = entry.left_out
+    reply["next_cursor"] = entry.next
+    said = [
+        f"Circuit groups {entry.offset + 1} to {entry.offset + entry.returned} of {entry.total}."
+    ]
+    if entry.next is not None:
+        said.append(
+            "Read the next with "
+            + call_to_continue("jobs", {"action": "list", "cursor": entry.next})
+            + (
+                f"; the complete list is in {stored.path} under 'answer'."
+                if stored is not None
+                else "."
+            )
+        )
+    hint = reply.get("hint")
+    reply["hint"] = " ".join([*([hint] if isinstance(hint, str) and hint else []), *said])
 
 
 def _without_control_tokens(value: Any) -> Any:
@@ -915,6 +981,7 @@ def _collect_circuit_groups(
                         "job_id": experiment.job_id,
                         "status": experiment.status,
                         "request_id": experiment.request_id,
+                        **job_simulator(experiment, state).fields(),
                         "finished_at": (
                             experiment.completed_at.isoformat()
                             if experiment.completed_at is not None
@@ -973,45 +1040,36 @@ async def _await_foreign_experiment_cancellation(
 async def _place_case_beside_sheet(
     job: ExperimentJob, case_id: str | None, state: SessionState
 ) -> dict[str, Any]:
-    """Copy one finished case's results beside the sheet it ran
-    (``sheet_results.place_case``), under the sheet's lock.
+    """Copy one finished case's results beside the circuit it ran, by the one
+    checked placement (``sheet_results.place_checked``).
 
-    Refused where LTspice's window could not take them as the sheet's own
-    (``sheet_results.check_case`` and ``place_case`` say which), and while the
-    job's runs are not all done, as every read of a job's runs is
-    (``services.runs_unready``).
+    Refused where they could not stand as the circuit's own
+    (``sheet_results.check_case`` and ``check_placement`` say which), including
+    while the job's runs have not all ended (``job_not_terminal``), which a
+    wait on them ends.
     """
     case = _case_to_place(job, case_id)
-    unready = services.runs_unready(job)
-    if unready is not None:
-        raise _JobsActionError(
-            "job_not_terminal",
-            f"{unready}; wait for them with jobs(action='wait', job_id='{job.job_id}', "
-            "wait_for='runs').",
-            stage="resolution",
-            retryable=True,
-        )
     try:
         check_case(job, case)
     except NotPlaced as exc:
-        raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
+        raise _JobsActionError(
+            exc.code,
+            str(exc),
+            stage="resolution",
+            retryable=exc.code == "job_not_terminal",
+        ) from None
     sheet = await asyncio.to_thread(safe_path, str(case.circuit_path), state)
-
-    def place() -> list[dict[str, Any]]:
-        try:
-            return place_case(job, case, sheet)
-        except NotPlaced as exc:
-            raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
-
-    async with circuit_file_lock(sheet):
-        # The check and the copy are one unit off the loop, shielded so a
-        # cancelled call cannot leave a sheet with some of a run's files.
-        files = await asyncio.shield(asyncio.to_thread(place))
+    try:
+        placement = await place_checked(job, case, sheet)
+    except NotPlaced as exc:
+        raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
     return {
         "case_id": case.case_id,
         "sheet": str(sheet),
-        "files": files,
+        "files": placement.files,
         "assignments": dict(case.assignments),
+        "not_checked": placement.not_checked,
+        "left_in_place": placement.left_in_place,
     }
 
 
@@ -1039,16 +1097,25 @@ def _case_to_place(job: ExperimentJob, case_id: str | None) -> ExperimentCase:
 
 
 def _placed_hint(placed: dict[str, Any]) -> str:
-    """What the caller needs to know after results are placed beside a sheet."""
-    hint = (
-        f"LTspice opens {Path(placed['sheet']).name}'s results from beside it; a click on a "
-        "net in the sheet plots it once they are opened from the sheet. LTspice reads "
-        "results only when it opens them, so a plot of the earlier ones already open "
-        "shows them until it is opened again; plot_waveform(in_ltspice=true) reopens it."
-    )
+    """What the caller needs to know after results are placed beside a circuit."""
+    circuit = Path(placed["sheet"])
+    if is_asc(circuit):
+        hint = (
+            f"LTspice opens {circuit.name}'s results from beside it; a click on a "
+            "net in the sheet plots it once they are opened from the sheet. LTspice reads "
+            "results only when it opens them, so a plot of the earlier ones already open "
+            "shows them until it is opened again; plot_waveform(in_ltspice=true) reopens it."
+        )
+    else:
+        hint = (
+            f"The results are beside {circuit.name}, under its name, "
+            f"{where_placed(circuit)}; not_checked says what was not checked."
+        )
+    if placed["not_checked"] and is_asc(circuit):
+        hint += " not_checked says what was not checked."
     if placed["assignments"]:
         hint += (
-            " This case ran with values its variations set, which the sheet does not "
+            " This case ran with values its variations set, which the circuit does not "
             "show: see assignments."
         )
     return hint
@@ -1161,7 +1228,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
                 "source": [],
                 "completeness": Completeness(),
                 "lint": [],
-                "runs": _page([], limit=JOBS_PAGE_LIMIT),
+                "runs": unpaged([]),
                 "artifacts": [],
             }
         )
@@ -1189,6 +1256,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
                     analysis_status=snapshot.analysis_status,
                     dialect=snapshot.dialect,
                     completeness=snapshot.completeness,
+                    **snapshot.simulator.fields(),
                 )
                 if snapshot.lineage is not None:
                     common["lineage"] = dict(snapshot.lineage)
@@ -1481,18 +1549,15 @@ def failed_jobs_evaluation(
 def render_jobs_data(
     evaluation: JobsEvaluation,
     *,
-    limit: int | None = None,
-    rung: response_budget.Rung | None = None,
     served: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Present one evaluation as a response payload.
+    """One evaluation's complete answer: every group, every run row, every
+    receipt. MCP presents it through the presenter (:func:`handle_jobs`); the
+    Python API returns it as it is.
 
-    ``limit`` is the presentation argument MCP and the Python API differ by: an integer
-    is one MCP page of that size (the budget ladder re-renders at smaller ones),
-    and ``None`` is the complete result the Python API returns. Cancel
-    receipts are never paged either way — they are the acknowledgement itself,
-    not a page over a larger set. ``served`` is the MCP session's tools, which
-    an attached analysis's failures name as where their snippet runs.
+    ``served`` is the MCP session's tools, which an attached analysis's
+    failures name as where their snippet runs; None gives the attached
+    analysis as the Python API does, with every failure.
     """
     args = evaluation.args
     if evaluation.error is not None:
@@ -1502,12 +1567,7 @@ def render_jobs_data(
         return data
 
     if isinstance(args, JobsListInput):
-        groups = list(evaluation.groups)
-        page = (
-            unpaged(groups)
-            if limit is None
-            else _page(groups, offset=_decode_jobs_cursor(args.cursor), limit=limit)
-        )
+        page = unpaged(list(evaluation.groups))
         # A listing has no per-item failure channel to fill: every group it
         # found is reported, and a short page is a cursor, not a shortfall.
         list_failures: list[Any] = []
@@ -1579,12 +1639,7 @@ def render_jobs_data(
     assert snapshot is not None  # every remaining action snapshots its job
 
     if isinstance(args, JobsRunsInput):
-        data = render_runs_envelope(
-            snapshot,
-            offset=_decode_jobs_cursor(args.cursor),
-            limit=limit,
-            run_fields=args.run_fields,
-        )
+        data = render_runs_envelope(snapshot, run_fields=args.run_fields)
         return _without_control_tokens(data)
 
     action: Literal["status", "wait"] = "wait" if isinstance(args, JobsWaitInput) else "status"
@@ -1592,9 +1647,6 @@ def render_jobs_data(
         action,
         snapshot,
         timed_out=None if isinstance(args, JobsResumeInput) else evaluation.timed_out,
-        runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
-        analysis_answer_channel=rung is not None and rung.answer_channel,
-        analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         analysis_served=served,
     )
     if evaluation.warnings:
@@ -1650,59 +1702,174 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         "work from an earlier session."
         " 'resume' creates a child of a terminal recoverable head, preserving "
         "produced cases; use a new resume_request_id for each retry. "
-        "'place_beside_sheet' copies a case's results beside the .asc it ran, "
-        "where LTspice's window opens them. " + jobs_fields_by_action()
+        "'place_beside_sheet' copies a case's results beside the sheet or netlist it "
+        "ran. " + jobs_fields_by_action()
     ),
     input_model=JobsInput,
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=JOBS_OUTPUT_SCHEMA,
 )
 async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:
-    """Execute one jobs control-plane action with an action-discriminated response."""
+    """Execute one jobs control-plane action with an action-discriminated response.
+
+    Every reply that can be long goes through the presenter: a receipt's run
+    rows and a runs page are cut as rows and read back from the job's record,
+    and a list is stored and cut as groups. A cursor is opened before any job
+    is read, so a bad one is refused first.
+    """
+    try:
+        if isinstance(args, JobsListInput) and args.cursor is not None:
+            reply = await _list_page(args, state)
+            return format_response(reply)
+        runs_from = (
+            open_record(args.cursor, kind=JOB_RUNS)
+            if isinstance(args, JobsRunsInput) and args.cursor is not None
+            else None
+        )
+    except InvalidCursorError as exc:
+        return _failed_reply(failed_jobs_evaluation(args, exc, state))
     evaluation = await evaluate_jobs(args, state)
-    built: dict[str, Any] | None = None
-    if evaluation.error is None:
-        page_limit = JOBS_PAGE_LIMIT
-        if isinstance(args, JobsListInput):
-            # A page size is an MCP control; the Python API returns every group,
-            # so only this page says it was held.
-            page_limit, held = held_to_cap("limit", args.limit, JOBS_PAGE_LIMIT)
-            if held is not None:
-                evaluation = replace(
-                    evaluation,
-                    warnings=(f"{held} {_LIST_PAGED}", *evaluation.warnings),
-                )
-        try:
-            budget = resolve_response_budget(args.budget, state)
-            served = frozenset(state.tool_dispatch)
-            if budget.tokens is None:
-                built = render_jobs_data(evaluation, limit=page_limit, served=served)
-            else:
-                # The presentation re-runs at a smaller page for each rung the
-                # ladder tries; the control-plane work above ran once.
-                built = await _negotiate_jobs(
-                    budget,
-                    lambda limit, rung: render_jobs_data(
-                        evaluation, limit=limit, rung=rung, served=served
-                    ),
-                    page_limit,
-                )
-        except Exception as exc:
-            # Presentation failed over an action that already happened — a
-            # cancel among them. Report it through this tool's own envelope
-            # rather than letting it out as a protocol error carrying no
-            # structuredContent at all.
-            if isinstance(args, JobsResumeInput):
-                exc = SubmissionCommitted(args.resume_request_id, exc)
-            evaluation = failed_jobs_evaluation(
+    if evaluation.error is not None:
+        return _failed_reply(evaluation)
+    try:
+        reply = await _present_jobs(args, evaluation, runs_from, state)
+    except Exception as exc:
+        # Presentation failed over an action that already happened — a
+        # cancel among them. Report it through this tool's own envelope
+        # rather than letting it out as a protocol error carrying no
+        # structuredContent at all.
+        if isinstance(args, JobsResumeInput):
+            exc = SubmissionCommitted(args.resume_request_id, exc)
+        return _failed_reply(
+            failed_jobs_evaluation(
                 args, exc, state, prior=evaluation if isinstance(args, JobsResumeInput) else None
             )
-    if built is None:
-        # A failed call renders once, off the budget ladder: its envelope is
-        # already the irreducible floor, and the ladder's trim rung would take
-        # the empty fact channels the output schema requires.
-        built = render_jobs_data(evaluation)
+        )
+    return format_response(reply)
 
-    result = format_response(built)
+
+async def _present_jobs(
+    args: JobsInput,
+    evaluation: JobsEvaluation,
+    runs_from: tuple[str, int] | None,
+    state: SessionState,
+) -> dict[str, Any]:
+    """The reply to send for one evaluation that did not fail."""
+    budget = resolve_response_budget(args.budget, state)
+    if isinstance(args, JobsListInput):
+        # A page size is an MCP control; the Python API returns every group,
+        # so only this page says it was held.
+        page_limit, held = held_to_cap("limit", args.limit, JOBS_PAGE_LIMIT)
+        if held is not None:
+            evaluation = replace(
+                evaluation,
+                warnings=(f"{held} {_LIST_PAGED}", *evaluation.warnings),
+            )
+        return await presented(
+            render_jobs_data(evaluation),
+            tool="jobs",
+            schema=JOBS_OUTPUT_SCHEMA,
+            snapshot={"action": "list", "circuit": str(evaluation.circuit or "")},
+            state=state,
+            annotate=_say_which_groups,
+            target=budget.tokens,
+            caps={_LIST_ROWS: page_limit},
+            over=say_over_target,
+        )
+    if isinstance(args, JobsRunsInput):
+        return await _runs_page(args, evaluation, runs_from, budget.tokens)
+    if isinstance(args, (JobsStatusInput, JobsWaitInput, JobsResumeInput)):
+        served = frozenset(state.tool_dispatch)
+        return await present_job_answer(
+            lambda: render_jobs_data(evaluation, served=served),
+            receipt_parts(snapshot=evaluation.snapshot),
+            tool="jobs",
+            schema=JOBS_OUTPUT_SCHEMA,
+            budget=budget,
+            state=state,
+            delivery=(
+                "status"
+                if isinstance(args, JobsStatusInput)
+                else "wait"
+                if isinstance(args, JobsWaitInput)
+                # A replayed resume recovers a reply the caller lost: in full.
+                else "replay"
+                if evaluation.replayed
+                else "resume"
+            ),
+        )
+    # A cancel's receipts and a placement's files are the acknowledgement
+    # itself, not a page over a larger set: sent whole.
+    return render_jobs_data(evaluation)
+
+
+def _failed_reply(evaluation: JobsEvaluation) -> types.CallToolResult:
+    """A failed call, rendered once and sent whole: its envelope is already
+    the irreducible floor."""
+    result = format_response(render_jobs_data(evaluation))
     result.is_error = evaluation.is_error
     return result
+
+
+async def _list_page(args: JobsListInput, state: SessionState) -> dict[str, Any]:
+    """The next groups of a stored list answer: nothing is listed again."""
+    assert args.cursor is not None
+    stored, pointer, offset = await open_stored_page(
+        args.cursor, tool="jobs", schema=JOBS_OUTPUT_SCHEMA, state=state, gone=_LIST_AGAIN
+    )
+    if stored.answer.get("action") != "list" or pointer != _LIST_ROWS:
+        raise InvalidCursorError(
+            f"{args.cursor[:40]!r} is not a cursor jobs(action='list') returned: pass a "
+            "cut entry's next unchanged."
+        )
+    page_limit, _held = held_to_cap("limit", args.limit, JOBS_PAGE_LIMIT)
+    return await stored_page(
+        stored,
+        pointer,
+        offset,
+        schema=JOBS_OUTPUT_SCHEMA,
+        state=state,
+        annotate=_say_which_groups,
+        cap=page_limit,
+        target=resolve_response_budget(args.budget, state).tokens,
+        over=say_over_target,
+    )
+
+
+async def _runs_page(
+    args: JobsRunsInput,
+    evaluation: JobsEvaluation,
+    runs_from: tuple[str, int] | None,
+    target: int | None,
+) -> dict[str, Any]:
+    """One page of a job's run rows, read from its record now and cut as rows
+    from the cursor's offset."""
+    assert evaluation.snapshot is not None
+    job_id = evaluation.snapshot.job_id
+    data = render_jobs_data(evaluation)
+    offset = 0
+    if runs_from is not None:
+        key, offset = runs_from
+        if key != job_id or (offset and offset >= data["total"]):
+            refused = (
+                f"This cursor reads the run rows of job {key!r}, not {job_id!r}: pass it "
+                f"with job_id={key!r}."
+                if key != job_id
+                else f"This cursor starts at run row {offset + 1}, and job {job_id} has "
+                f"{data['total']}: pass a cut entry's next unchanged."
+            )
+            raise InvalidCursorError(refused)
+    # The facts of every row are read off the loop: a job can hold many rows.
+    annotate, apart = await asyncio.to_thread(
+        say_which_rows, evaluation.snapshot, args.run_fields, offset
+    )
+    return await record_page(
+        data,
+        RUNS_PAGE_ROWS,
+        offset,
+        run_rows_record(job_id),
+        target=target,
+        annotate=annotate,
+        apart=apart,
+        over=say_over_target,
+    )

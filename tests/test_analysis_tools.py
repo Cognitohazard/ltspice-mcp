@@ -21,6 +21,7 @@ from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import owner_path
 from ltspice_mcp.lib.metrics import (
     MetricValue,
+    SignalExpression,
     has_active_device,
 )
 from ltspice_mcp.lib.metrics import (
@@ -33,7 +34,7 @@ from ltspice_mcp.lib.metrics import (
     parse_freq as _parse_freq,
 )
 from ltspice_mcp.lib.metrics import (
-    split_ratio as _split_ratio,
+    signal_expression as _read_signal,
 )
 from ltspice_mcp.lib.recipes import (
     AcStructureRecipe,
@@ -1205,20 +1206,20 @@ class TestBodeRatioSignal:
             )
 
 
-class TestSplitRatio:
+class TestReadSignal:
     def test_plain_signal_is_not_ratio(self):
-        assert _split_ratio("V(out)") is None
+        assert _read_signal("V(out)") == SignalExpression("V(out)")
 
     def test_two_operand_ratio(self):
-        assert _split_ratio("V(out)/V(mid)") == ("V(out)", "V(mid)")
+        assert _read_signal("V(out)/V(mid)") == SignalExpression("V(out)", "V(mid)")
 
     def test_three_operands_rejected(self):
-        with pytest.raises(ResultError, match="exactly 'A/B'"):
-            _split_ratio("V(a)/V(b)/V(c)")
+        with pytest.raises(ResultError, match="two operands and one '/'"):
+            _read_signal("V(a)/V(b)/V(c)")
 
     def test_empty_operand_rejected(self):
-        with pytest.raises(ResultError, match="exactly 'A/B'"):
-            _split_ratio("V(out)/")
+        with pytest.raises(ResultError, match="two operands and one '/'"):
+            _read_signal("V(out)/")
 
 
 @pytest.mark.asyncio
@@ -1843,13 +1844,13 @@ class TestTraceDeviceFilter:
     """Pure helpers behind operating_point's device= filter."""
 
     def test_the_owner_of_each_name(self):
-        assert owner_path("@m1[gm]", xvii=False) == ("m1",)
-        assert owner_path("v(@m1[vth])", xvii=False) == ("m1",)
-        assert owner_path("i(@m1[id])", xvii=False) == ("m1",)
-        assert owner_path("Id(M1)", xvii=False) == ("m1",)
-        assert owner_path("Ic(Q2)", xvii=False) == ("q2",)
-        assert owner_path("I(R1)", xvii=False) == ("r1",)
-        assert owner_path("V(out)", xvii=False) is None
+        assert owner_path("@m1[gm]", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("v(@m1[vth])", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("i(@m1[id])", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("Id(M1)", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("Ic(Q2)", xvii=False, schematic=False) == ("q2",)
+        assert owner_path("I(R1)", xvii=False, schematic=False) == ("r1",)
+        assert owner_path("V(out)", xvii=False, schematic=False) is None
 
     def test_filter_narrows_to_device(self):
         op = {
@@ -1857,7 +1858,7 @@ class TestTraceDeviceFilter:
             "currents": {"Id(M1)": 1e-3, "I(R1)": 2e-3},
             "device_op_points": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
         }
-        assert _filter_operating_point(op, "M1", xvii=False) is True
+        assert _filter_operating_point(op, "M1", xvii=False, schematic=False) is True
         assert op["currents"] == {"Id(M1)": 1e-3}
         assert op["device_op_points"] == {"@m1[gm]": 1e-3}
         # Node voltages are not device-scoped -> dropped from the focused view.
@@ -1865,12 +1866,12 @@ class TestTraceDeviceFilter:
 
     def test_filter_matches_subcircuit_path_suffix(self):
         op = {"voltages": {}, "currents": {}, "device_op_points": {"@m.x1.mn[gm]": 5.0}}
-        assert _filter_operating_point(op, "mn", xvii=False) is True
+        assert _filter_operating_point(op, "mn", xvii=False, schematic=False) is True
         assert op["device_op_points"] == {"@m.x1.mn[gm]": 5.0}
 
     def test_filter_no_match_reports_false(self):
         op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_op_points": {}}
-        assert _filter_operating_point(op, "Q9", xvii=False) is False
+        assert _filter_operating_point(op, "Q9", xvii=False, schematic=False) is False
 
 
 @pytest.mark.asyncio

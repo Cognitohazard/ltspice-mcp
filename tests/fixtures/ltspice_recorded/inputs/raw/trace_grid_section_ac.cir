@@ -1,0 +1,6 @@
+* section sign in an instance name, in an AC analysis
+I1 0 a AC 1
+R§Load a 0 1k
+C1 a 0 1n
+.ac dec 2 1k 100k
+.end

@@ -68,6 +68,61 @@ TERMINAL_CASE_STATUSES: frozenset[str] = frozenset({"produced", "failed", "cance
 ACTIVE_CASE_STATUSES: frozenset[str] = frozenset({"submitted", "running"})
 
 
+#: Where each step's stepped values are kept: the log's ``.step`` lines, or
+#: the variables the raw's plot opens with (``result_kinds.SteppedKind``).
+StepValuesKept = Literal["raw", "log"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class CaseSteps:
+    """How a case's results are stepped, decided once when its run ended from
+    what the run wrote: the raw's header and the log's ``.step`` lines, read by
+    the raw reader (``decoded_raw.steps_held``). Every reader asks this record.
+
+    ``count`` is the number of steps its first plot holds, 1 for results that
+    are not stepped, None where it was not established, and
+    ``not_established`` then says why. ``parameters`` names the stepped
+    parameters, in the order the steps first name them; ``values_from`` says
+    where each step's values are kept, None where nothing gives them (and
+    ``not_established`` says so beside a count).
+    """
+
+    count: int | None
+    parameters: tuple[str, ...] = ()
+    values_from: StepValuesKept | None = None
+    #: The kind of stepped result the plot is (``result_kinds``), None for one
+    #: no kind describes or results that are not stepped.
+    kind: str | None = None
+    not_established: str | None = None
+
+    @property
+    def holds_steps(self) -> bool:
+        """Its results may hold more than one step: they do, or how many they
+        hold was not established."""
+        return self.count != 1
+
+    def to_record(self) -> dict[str, Any]:
+        """The record's form, each field written only when set."""
+        return {
+            "count": self.count,
+            **({"parameters": list(self.parameters)} if self.parameters else {}),
+            **({"values_from": self.values_from} if self.values_from else {}),
+            **({"kind": self.kind} if self.kind else {}),
+            **({"not_established": self.not_established} if self.not_established else {}),
+        }
+
+    @classmethod
+    def from_record(cls, data: dict[str, Any]) -> CaseSteps:
+        count = data.get("count")
+        return cls(
+            count=count if isinstance(count, int) and not isinstance(count, bool) else None,
+            parameters=tuple(str(name) for name in data.get("parameters") or ()),
+            values_from=data.get("values_from"),
+            kind=data.get("kind"),
+            not_established=data.get("not_established"),
+        )
+
+
 @dataclass
 class ExperimentCase:
     """One expanded, staged simulator invocation owned by an experiment."""
@@ -92,8 +147,14 @@ class ExperimentCase:
     submitted_at: datetime | None = None
     completed_at: datetime | None = None
     run_token: str = ""
-    step_index: int | None = None
-    step_values: dict[str, Any] = field(default_factory=dict)
+    #: How the case's results are stepped, set when its run ended
+    #: (:class:`CaseSteps`); None before, for a run that left no raw, and for
+    #: a case recorded before the server kept it.
+    steps: CaseSteps | None = None
+    #: The ``step_index`` and ``step_values`` a record written before ``steps``
+    #: held, kept as read so the record is written back as it was (a recovery
+    #: journal refuses a candidate that does not round-trip); None otherwise.
+    legacy_step_fields: dict[str, Any] | None = field(default=None, repr=False, compare=False)
     native_statistics: NativeCaseRecord | None = None
     #: The build this case's run named in its own output (log banner, console
     #: banner or raw ``Command:``), read once the run ended. None until then,
@@ -114,6 +175,13 @@ class ExperimentCase:
     #: for a run that has not ended, and for one recorded before the server
     #: classified logs.
     log_diagnostics: dict[str, Any] | None = None
+    #: What the run's log says its measurements did not give, read when the
+    #: run ended (``log_types.run_measurement_facts``): ``{}`` for nothing to
+    #: report, ``{"coverage": "log_unread"}`` for a log whose measurements
+    #: could not be read; beside a ``failed`` list, ``requested`` holds the
+    #: ``.meas`` names the deck asks for, where it was read. None for a run
+    #: that has not ended, and for one recorded before the server kept them.
+    measurement_facts: dict[str, Any] | None = None
 
 
 def sample_index(case: ExperimentCase) -> int | None:
@@ -337,6 +405,12 @@ class ExperimentJob:
     #: request would launch now is a different build. None when the simulator
     #: named no program, and on a record written before it was recorded.
     simulator_executable: SimulatorExecutable | None = None
+    #: The selector the run resolved to, as ``execution.simulator`` names it
+    #: (``ltspice``, ``ltspice:xvii``; ``simulator.simulator_selector``): the
+    #: default's when the request named none. What a reply names the job's
+    #: simulator by (``job_simulator``). None on a record written before it
+    #: was recorded; ``simulator`` keeps the class name, which resume reads.
+    simulator_selector: str | None = None
     #: Whether the job's decks were read with each subcircuit instance spelled
     #: without its X (LTspice XVII and IV, ``device_names.naming_for``), as
     #: their hierarchy profile was built at submission: what each run's raw is

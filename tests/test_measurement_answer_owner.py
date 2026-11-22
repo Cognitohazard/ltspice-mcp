@@ -22,8 +22,17 @@ _ANSWERING = {"answer_measurements", "answered_measurements"}
 #: Scopes that take a log's decoded measurements and pick no field of them,
 #: with why.
 _PICKS_NO_FIELD: dict[str, str] = {
-    "tools/analyze.py:_measurement_step_plan": (
-        "counts the rows of the tables to pair each with its .step line"
+    "tools/analyze.py:_measurements_failed_everywhere": (
+        "reads which names LTspice printed failed, never a value"
+    ),
+    "lib/services.py:measurements_unread": (
+        "reads only whether the section was decoded, never a value"
+    ),
+    "lib/services.py:_unread_detail": (
+        "reads only the decoder's error for a section it could not decode, never a value"
+    ),
+    "lib/services.py:read_measurements": (
+        "hands the decoded section, or why it was not read, to a reader that answers it"
     ),
 }
 

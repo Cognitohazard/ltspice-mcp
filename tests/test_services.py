@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import re
 import threading
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -420,7 +419,7 @@ class TestOptionalRawSources:
         assert source.trusted_job_artifact
 
     @pytest.mark.parametrize("provenance", ["log", "raw", "token", "no_folder", "no_token"])
-    def test_case_console_candidate_uses_recorded_output_inventory(
+    async def test_case_console_candidate_uses_recorded_output_inventory(
         self, state_no_sim, work_dir, provenance
     ):
         from tests.test_state import _experiment
@@ -446,13 +445,13 @@ class TestOptionalRawSources:
         elif provenance == "no_token":
             case.run_token = ""
             expected = None
-        run = services.experiment_run_context(job, state_no_sim, require_raw=False)
+        run = await services.experiment_run_context(job, state_no_sim, require_raw=False)
         assert run.console == expected
         assert services.source_for_run(run).console == expected
         assert case.status == "produced"
         assert job.status == "completed"
 
-    def test_a_case_with_no_raw_says_why(self, state_no_sim, work_dir):
+    async def test_a_case_with_no_raw_says_why(self, state_no_sim, work_dir):
         """A read of a failed case names its failure as the receipt does, and
         the log it left, not only its status."""
         from tests.test_state import _experiment
@@ -467,22 +466,22 @@ class TestOptionalRawSources:
         state_no_sim.job_registry.add_experiment_job(job, already_persisted=True)
 
         with pytest.raises(ResultError) as raised:
-            services.resolve_experiment_run(job.job_id, state_no_sim)
+            await services.resolve_experiment_run(job.job_id, state_no_sim)
 
         message = str(raised.value)
         assert f"status 'failed' (include_unstaged): {case.error}" in message
         assert job.job_id in message
         assert str(case.log_file) in message
 
-    def test_job_resolution_raw_default_and_log_opt_in(self, state_no_sim, work_dir):
+    async def test_job_resolution_raw_default_and_log_opt_in(self, state_no_sim, work_dir):
         from tests.test_state import _experiment
 
         job = _experiment(work_dir, work_dir / "deck.cir", job_id="recorded_logs")
         job.cases[0].log_file = work_dir / "recorded.log"
         state_no_sim.job_registry.add_experiment_job(job, already_persisted=True)
         with pytest.raises(ResultError, match="did not produce a raw result"):
-            services.resolve_experiment_run(job.job_id, state_no_sim)
-        run = services.resolve_experiment_run(job.job_id, state_no_sim, require_raw=False)
+            await services.resolve_experiment_run(job.job_id, state_no_sim)
+        run = await services.resolve_experiment_run(job.job_id, state_no_sim, require_raw=False)
         assert run.raw is None
         assert run.log == job.cases[0].log_file
         assert run.identity["case_id"] == job.cases[0].case_id
@@ -490,12 +489,12 @@ class TestOptionalRawSources:
     @pytest.mark.parametrize(
         ("job_status", "case_status"),
         [
-            ("running", "produced"),
+            ("running", "running"),
             ("completed", "failed"),
             ("completed", "cancelled"),
         ],
     )
-    def test_log_opt_in_retains_existing_status_gates(
+    async def test_log_opt_in_retains_existing_status_gates(
         self, state_no_sim, work_dir, job_status, case_status
     ):
         from tests.test_state import _experiment
@@ -504,10 +503,7 @@ class TestOptionalRawSources:
         job.status = job_status
         job.cases[0].status = case_status
         job.cases[0].raw_file = work_dir / "existing.raw"
-        if job_status == "running":
-            # A sibling still runs, so the job's runs are not done yet.
-            job.cases.append(replace(job.cases[0], case_id="case_0001", status="running"))
         with pytest.raises(ResultError):
-            services.experiment_run_context(job, state_no_sim, require_raw=False)
+            await services.experiment_run_context(job, state_no_sim, require_raw=False)
         assert job.status == job_status
         assert job.cases[0].status == case_status

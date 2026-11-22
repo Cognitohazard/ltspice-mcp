@@ -8,7 +8,6 @@ listing the caller believed it was continuing).
 """
 
 from ltspice_mcp.lib.pagination import (
-    decode_offset,
     encode_offset,
     page,
     page_of,
@@ -81,20 +80,8 @@ def test_unpaged_carries_everything_and_continues_nowhere():
     assert data["next_cursor"] is None
 
 
-def test_offset_cursor_round_trips():
-    assert decode_offset(encode_offset(0)) == 0
-    assert decode_offset(encode_offset(4210)) == 4210
-
-
-def test_an_absent_cursor_is_the_first_page():
-    assert decode_offset(None) == 0
-
-
-def test_a_cursor_that_is_not_ours_is_refused_rather_than_clamped():
-    # None, not 0: a caller resuming with a corrupted or foreign cursor must be
-    # told, never silently handed page one of the same listing again.
-    for bad in ("", "o:", "o:-3", "o:12x", "x:12", "12", "o:1:2"):
-        assert decode_offset(bad) is None
+def test_an_offset_cursor_names_its_offset():
+    assert encode_offset(4210) == "o:4210"
 
 
 def test_retotal_reconciles_rows_a_caller_replaced_without_moving_the_total():

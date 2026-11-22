@@ -30,9 +30,10 @@ from ltspice_mcp.api._exceptions import (
     ApiValidationError,
 )
 from ltspice_mcp.api._primitives import (
+    DeviceOpPoints,
     LogResult,
     RawResult,
-    device_op_points_of,
+    load_device_op_points,
     load_log_section,
     load_raw_result,
     measurements_of,
@@ -342,6 +343,15 @@ def _unwrap(result: types.CallToolResult) -> dict[str, Any]:
     return payload
 
 
+async def _polling_wait(request: Any, state: SessionState) -> Any:
+    """A ``jobs`` wait as the API's own polling calls it: no caller reads the
+    page, so it sends every standing note in full and remembers none."""
+    from ltspice_mcp.tools._base import notes_in_full
+
+    with notes_in_full():
+        return await jobs.handle_jobs(request, state)
+
+
 async def _handler_page(
     handler: Any,
     model: BaseModel,
@@ -382,12 +392,11 @@ async def _complete_run_receipt(
         control_token=control_token if isinstance(control_token, str) else None,
         provenance=request.provenance,
         run_fields=request.run_fields,
-        runs_cap=max(1, len(snapshot.runs_by_key)),
         analysis_fields=analysis_fields,
     )
-    # The complete receipt is re-rendered from the record, which knows only
-    # what happened to it. Whether THIS call replayed is on the handler's
-    # receipt and nowhere else, so it is carried across rather than re-derived.
+    # The job's complete answer, every run row, read from the record, which
+    # knows only what happened to it. Whether THIS call replayed is on the
+    # handler's receipt and nowhere else, so it is carried across.
     data["replayed"] = bool(receipt.get("replayed"))
     return experiments.finalize_receipt(data)
 
@@ -511,31 +520,8 @@ async def _collect_analysis(
     request: analyze.AnalyzeResultsInput,
     state: SessionState,
 ) -> dict[str, Any]:
-    drives: list[analyze.AnalysisEvaluation] = []
-    position: analyze.AnalysisContinuationPosition | None = None
-    seen: set[tuple[str, int, int, int]] = set()
-    while True:
-        drive = await analyze.evaluate_analysis_results(
-            request,
-            state,
-            continuation=position,
-            # The set is immutable and the previous drive holds it, so a
-            # continuation resumes without re-reading it from disk.
-            loaded=drives[-1].item if drives else None,
-        )
-        drives.append(drive)
-        position = drive.continuation
-        if position is None:
-            return analyze.complete_analysis_evaluations(drives)
-        marker = (
-            position.result_set_id,
-            position.work_index,
-            position.row_offset,
-            position.missing_offset,
-        )
-        if marker in seen:
-            raise ApiInternalError("The analysis evaluator continuation made no progress")
-        seen.add(marker)
+    # One evaluation gives every recipe, every row and every failure.
+    return await analyze.complete_analysis(request, state)
 
 
 def _dedupe(values: Sequence[Any]) -> list[Any]:
@@ -766,12 +752,16 @@ class _CataloguedMethod:
             return self._counted(as_sent, emit_api_event, capturing_request, args, kwargs)
 
     def _run(self, as_sent: Callable[..., Any], args: Any, kwargs: dict[str, Any]) -> Any:
-        if kwargs.get("raw_page"):
-            return self.__func__(*args, **kwargs)
+        # Every result and error payload leaves here as a SentResult, which
+        # answers a declared field the reply left out with its empty value
+        # (api/_result.py). A raw page already is a sent reply.
+        from ltspice_mcp.api._result import sent_result  # noqa: TID251 - the one place a result is wrapped
+
+        sent = (lambda value, _tool: value) if kwargs.get("raw_page") else as_sent
         try:
-            return as_sent(self.__func__(*args, **kwargs), self.__name__)
+            return sent_result(sent(self.__func__(*args, **kwargs), self.__name__), self.__name__)
         except ApiCallError as exc:
-            exc.payload = as_sent(exc.payload, self.__name__)
+            exc.payload = sent_result(sent(exc.payload, self.__name__), self.__name__)
             raise
 
     def _counted(
@@ -879,21 +869,24 @@ class ApiMethodsMixin(ABC):
         return _reference.reference(op)
 
     @staticmethod
-    def guide(section: str | None = None) -> str:
-        """Return the guide: its core and index, or one section.
+    def guide(section: str | None = None, heading: str | None = None) -> str:
+        """Return the guide: its core and index, one section, or one heading of it.
 
         ``guide()`` is the core a session reads first — how to work here,
         Python or tools, the rules that cause silent errors — ending in an index
         of the topic sections and task playbooks. ``guide('ltspice')`` or
-        ``guide('bench-craft')`` returns one of them. The same text
-        ``inspect(kind='guide')`` serves over MCP.
+        ``guide('bench-craft')`` returns one of them, and
+        ``guide('schematics', heading='MOSFET orientation conventions')`` one
+        heading of a section, down to the next heading of its level, matched
+        whatever its case. The same text ``inspect(kind='guide')`` serves over
+        MCP.
 
         A static method for the same reason as :meth:`reference`: reading the
         guide must not require a session.
         """
         from ltspice_mcp.lib import guide as _guide
 
-        return _guide.read(section)
+        return _guide.read(section, heading)
 
     @abstractmethod
     def _check_process_and_thread(self) -> None:
@@ -1235,11 +1228,15 @@ class ApiMethodsMixin(ABC):
             # timed_out, and rendering a complete receipt per dwell would pay
             # for the whole wait in receipts nobody reads.
             try:
-                page = self.jobs(
+                page = self._dispatch(
+                    "jobs",
+                    jobs.JobsInput,
+                    _polling_wait,
+                    _collect_jobs,
                     raw_page=True,
-                    action="wait",
-                    job_id=job_id,
-                    timeout_s=dwell,
+                    arguments={"action": "wait", "job_id": job_id, "timeout_s": dwell},
+                    cancelable=True,
+                    cancel_on_interrupt=True,
                 )
                 if not page.get("timed_out"):
                     return self.jobs(action="wait", job_id=job_id, timeout_s=0)
@@ -1411,7 +1408,7 @@ class ApiMethodsMixin(ABC):
         run_index: int = 0,
         case_id: str | None = None,
         log_path: str | Path | None = None,
-    ) -> LogResult[dict[str, float | None]]:
+    ) -> DeviceOpPoints:
         """Return the semiconductor operating points of a log or one experiment
         case, by device and parameter: ``ops["m1"]["gm"]``, with what the read
         says of them in ``ops.observations``.
@@ -1420,14 +1417,26 @@ class ApiMethodsMixin(ABC):
         digits whatever ``.options numdgt`` says: LTspice 26 under ``.options
         logopinfo``, LTspice XVII always. A device inside a subcircuit is keyed
         by its path (``ops["xa.xin.mtail"]``), whichever build named it in the
-        table. Empty when the log has no such table, as an ngspice log never
+        table, with the name the table gave it in ``ops.table_names``
+        (``u1:d1`` on LTspice 26, ``d:u1:1`` on XVII, for ``ops["xu1.d1"]``).
+        Empty when the log has no such table, as an ngspice log never
         does: ngspice's are traces of its raw, read with
         ``load_raw(...).value("@m1[gm]")``. ``log_path`` is the older
         spelling of ``path``, still accepted.
         """
         path = _older_spelling(path, "log_path", log_path)
-        return device_op_points_of(
-            *self._log_section("device_op", path, job_id, run_index, case_id)
+        self._check_process_and_thread()
+        _one_source(path, job_id, run_index, case_id)
+        return self._marshal(
+            load_device_op_points(
+                state=self._state,
+                log_path=path,
+                job_id=job_id,
+                run_index=run_index,
+                case_id=case_id,
+            ),
+            cancelable=True,
+            cancel_on_interrupt=True,
         )
 
     def _log_section(

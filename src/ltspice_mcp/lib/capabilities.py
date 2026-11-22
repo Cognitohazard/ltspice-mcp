@@ -222,7 +222,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         "results_beside_sheet",
         "refinement",
-        "Put a run's results where the simulator's window finds them for the sheet.",
+        "Put a run's results where the simulator keeps them for its circuit file, a sheet "
+        "or a netlist.",
         "ltspice_mcp.lib.sheet_results",
     ),
 )
@@ -298,7 +299,11 @@ ENTRIES: tuple[Entry, ...] = (
         "ngspice",
         "lint_rules",
         "supported",
-        ("test:tests/test_lint_rules.py", "fixture:ngspice_ac_no_meas.log"),
+        (
+            "test:tests/test_lint_rules.py",
+            "fixture:ngspice_ac_no_meas.log",
+            "test:tests/test_library_card_read.py",
+        ),
     ),
     *_each(
         _UNMODELLED,
@@ -331,14 +336,21 @@ ENTRIES: tuple[Entry, ...] = (
         "ngspice",
         "hierarchy",
         "supported",
-        ("test:tests/test_hierarchy.py", "test:tests/test_hierarchy_check.py"),
+        (
+            "test:tests/test_hierarchy.py",
+            "test:tests/test_hierarchy_check.py",
+            "test:tests/test_library_card_read.py",
+            "test:tests/test_power_operator.py",
+        ),
     ),
     *_each(
         _UNMODELLED,
         "hierarchy",
         "gap",
-        "The hierarchy reader models LTspice and ngspice only; a run on {display} gets no "
-        "semantic profile, so nested instance targeting is unavailable.",
+        "The hierarchy reader models LTspice and ngspice only: the server does not model how "
+        "{display} reads a subcircuit body, so a run on {display} gets no semantic profile, "
+        "and nested instance targeting and a mismatch draw for a device inside a subcircuit "
+        "are refused. Run the deck on LTspice or ngspice for either.",
     ),
     # --- diagnostics -------------------------------------------------------
     Entry(
@@ -367,8 +379,9 @@ ENTRIES: tuple[Entry, ...] = (
         _UNMODELLED,
         "diagnostics",
         "unverified",
-        "Convergence and fatal errors are read with the generic patterns, and every line "
-        "of the log is counted as unclassified; no recording of {display}'s wording exists.",
+        "Errors and warnings are read with the generic patterns the server used before it "
+        "had recordings, and every other line of the log is counted as unclassified; no "
+        "recording of {display}'s wording exists.",
     ),
     # --- results -----------------------------------------------------------
     Entry(
@@ -436,8 +449,9 @@ ENTRIES: tuple[Entry, ...] = (
         "statistical_sampling",
         "unverified",
         "The random variation writes its draws into the deck as values, but no recording "
-        "or live test of a {display} run exists, and a mismatch draw inside a subcircuit "
-        "needs the hierarchy reader, which does not model {display}.",
+        "or live test of a {display} run exists. A mismatch draw for a device inside a "
+        "subcircuit is refused (see hierarchy); one for a top-level M card reads its "
+        "literal W, L and m and the model's literal parameters, evaluating no expression.",
     ),
     # --- refinements -------------------------------------------------------
     Entry("ltspice", "progress_in_point", "supported", ("recorded:raw-partial",)),
@@ -521,6 +535,8 @@ ENTRIES: tuple[Entry, ...] = (
             "test:tests/test_hierarchy.py",
             "test:tests/test_ngspice_startup_mode.py",
             "test:tests/test_ngspice_mode.py",
+            "test:tests/test_library_card_read.py",
+            "test:tests/test_power_operator.py",
         ),
         mechanism=(
             "[simulator] ngbehavior, passed as -D ngbehavior= on every run, with -n so that "
@@ -554,8 +570,20 @@ ENTRIES: tuple[Entry, ...] = (
         "ltspice",
         "results_beside_sheet",
         "supported",
-        ("recorded:sheet-results-command",),
-        mechanism="A copy of the run's files beside the sheet, under the sheet's name.",
+        (
+            "recorded:results-beside-a-netlist",
+            "recorded:plot-settings",
+            "recorded:window-run",
+            "recorded:sheet-results-command",
+        ),
+        mechanism=(
+            "A copy of the run's files beside the circuit file, under its name. Established: "
+            "LTspice keeps a run's results and log there, a netlist's batch run and a "
+            "sheet's run in the window, on LTspice 26 and XVII. LTspice's window opening "
+            "them from a sheet is recorded on LTspice 26 and not on XVII. What the window "
+            "does with results beside a netlist is not recorded, and a reply that put "
+            "results there says so."
+        ),
     ),
 )
 

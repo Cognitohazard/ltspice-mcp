@@ -1,0 +1,8 @@
+* an operating point stepped over a negative value, zero and a value of more than six digits, read for which step each value belongs to
+V1 in 0 {v}
+R1 in out 1k
+R2 out 0 4k
+.param v=1
+.step param v list -1 0 1.2345678
+.op
+.end

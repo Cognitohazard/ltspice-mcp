@@ -105,7 +105,7 @@ for the parser or starts a process, and the parser's entry module
 its first request or imports any decoding code; `test_parser_process.py`
 checks both. Its checks that set `sys.platform` to another value run anywhere
 and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
-native macOS interpreter, run in CI's macOS job (full tier only) and skip
+native macOS interpreter, run in CI's macOS job (release tier only) and skip
 elsewhere; a pass there also shows only the refusal and does not show a working macOS parser.
 Supporting macOS needs
 native tests there of the hard memory limit, applied before any decoding code
@@ -113,7 +113,8 @@ is imported, and of the parser's cleanup after a deadline, after repeated
 cancellation and after the server process dies, including a child process
 that tries to break away from the parser's process tree.
 
-Both CI tiers (*CI tiers* below) run the suite on a native Windows runner
+Every CI tier but docs (*CI tiers* below), so every landing that changes code
+and every release, runs the suite on a native Windows runner
 (`check-windows` in `.github/workflows/checks.yml`): Python 3.12, one xdist
 worker per core, no coverage gate, and the official Windows build of ngspice,
 the one users install, pinned by version and SHA-256, unpacked to
@@ -125,8 +126,8 @@ suite runs unless ngspice reads it. The runner's code page is cp1252 and its
 paths have no spaces, so a run on a user's machine still covers what this job
 cannot.
 
-CI's full tier also runs the suite on a native macOS
-runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
+The release gate in `publish.yml`, and no landing, also runs the suite on a
+native macOS runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
 ngspice and Cairo from Homebrew, one xdist worker per core, and no coverage gate. Because the server
 refuses to parse there, a test that reads a result fails there for that reason
 alone, and `tests/parser_refusal.py` reports it as skipped, with the refusal as
@@ -160,11 +161,7 @@ recorded LTspice results and the parser itself.
 
 The optional Sky130 integration tests find a `sky130A` root containing
 `libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
-console ngspice. `TestOpenPdkDevice` in `test_subckt_mismatch.py` gives two
-instances of one Sky130 transistor different threshold shifts (`delvto`) and
-checks that the server passes each shift to its own instance as a parameter
-on the subcircuit (`X`) line, and that ngspice reports exactly that shift.
-`test_nested_targeting.py` changes the width and threshold of a transistor
+console ngspice. `test_nested_targeting.py` changes the width and threshold of a transistor
 inside one subcircuit instance and checks with ngspice that only that
 instance changes, then reads that transistor's operating point through
 `analyze_results`.
@@ -203,7 +200,8 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| push to `master`; the release gate in `publish.yml`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
 
@@ -217,17 +215,24 @@ push to it runs full again while the label stays. Adding any other label
 starts a run that skips every check and cancels nothing. A pull request retitled to `Rollup…` after it was opened runs
 full from its next push, or at once if it is labelled `full-ci`.
 
+A landing is held to Linux and Windows; macOS is checked at release. No
+tier a landing gets runs `check-macos`, so a macOS regression first shows
+when a release is cut, and holds the release until it is fixed. To run the
+release tier on a branch before then, start CI by hand on it: the Actions
+tab, the CI workflow, "Run workflow", or `gh workflow run ci.yml --ref
+<branch>`.
+
 A job a tier leaves out is skipped by its own condition, so it reports as
-skipped under the same name it has in a full run, and a required check of
+skipped under the same name it has in a release run, and a required check of
 that name still passes. That is why the Linux suite is three jobs with fixed
 names, `check (3.11)`, `check (3.12)` and `check (3.13)`, which share one list
 of steps, instead of a matrix: a matrix job skipped by its condition reports
 once, under a name that is not any leg's.
 
 A pull request therefore proves Windows and Linux on 3.12 only. A failure
-only on 3.11, 3.13 or macOS first shows on the push to `master`, or on a
-rollup; label a pull request `full-ci` when it touches code whose behaviour
-depends on the interpreter version or on macOS.
+only on 3.11 or 3.13 first shows on the push to `master`, or on a rollup;
+label a pull request `full-ci` when it touches code whose behaviour depends on
+the interpreter version.
 
 ## Code paths that answer one question
 
@@ -323,7 +328,9 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   manifest field, the files of other cases, or the bridge recordings), or
   gives in an `unrecordable` key the reason it cannot be recorded. A behaviour
   whose inputs were written where no LTspice runs carries a `pending` key
-  saying how to record them. The tree checks excuse it from having a
+  saying how to record them. One that only a window shows, with no input here,
+  carries a `pending` key naming the recorder that asks a window
+  (`tests/ltspice_bridge_recorder.py`) and what it has yet to ask. The tree checks excuse it from having a
   recording and fail once it has one, so the key comes out with the
   recording, and a test that reads the recording skips while it is pending.
 - `ltspice26/` and `ltspice17/` hold each build's output, one file per output,
@@ -350,6 +357,16 @@ These tests run on any machine, without LTspice:
 |`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, a hidden or moved window, a flag named GND, where a net label's text goes, on a wire and on a part's pin, a port's outline, the text the scene leaves out, and the suite's own sheets drawn with its stand-in symbols|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
+|`test_log_condition_grid.py`|which condition each recorded log line states, through the rules of its build, the reader, the decoded log, the summary by path and by job, the run rows and the Python API, the rules a producer with no recording reads with, and `classify_line`; every rule a recording matches is a cell's; and the same routes live on ngspice|
+|`test_step_value_grid.py`|which step each recorded `.step` value names, through the log's step rows, the decoded raw, `steps_with`, the step selector of `analyze_results`, `plot_waveform` and `run_experiments`, and the Python API|
+|`test_results_layout_grid.py`|how each recorded results file is laid out and what its plot is (writer, analysis, storage, order, value widths, precision, stepped kind, steps, axis), through the header reader, the run row's reader, the decoder, `inspect`, `analyze_results`, `plot_waveform` and the Python API; every stepped kind and LTspice analysis the code declares is shown on each build or counted; and the layout of ngspice raws live|
+|`test_trace_name_grid.py`|which trace each name a user writes reads, and what it holds, through `naming_for`, `find_trace`, `trace_keys`, `read_in_plot`, `trace_quantity`, `node_voltages`, the unit, `inspect`, `analyze_results`, `plot_waveform` and the Python API; every recorded trace of the grid's cases is found under the name a user writes; and ngspice's dotted names live|
+|`test_value_number_grid.py`|what number each recorded value is, through `parse_spice_value`, `is_scaled_number`, `plain_number`, `parse_plain_value`, the Monte Carlo nominal, the netlist comparison, a `.step` value, an `analyze_results` time and frequency, a window bound of the Python API, a directive's leading numbers, the evaluator and `inspect(kind="hierarchy")`; the lint's reading of a capital M; every suffix the reader knows is an axis value; and the server's reading for ngspice against ngspice live, in each mode|
+|`test_expression_value_grid.py`|what each recorded parameter expression evaluates to, through `Environment`, `load_hierarchy` and `inspect(kind="hierarchy")`; a cell of one plain operator declares what arithmetic gives; every operator the evaluator takes is an axis value; and the server's reading for ngspice against ngspice live, in each mode|
+|`test_deck_card_grid.py`|which lines of each recorded deck are cards and which directive each is (a title, a `+` line, a comment, a `.end` and a `.ends`, a line break, each directive the server acts on in each spelling and case), through the lexer and a deck read for an edit, the lexer's reading of an included file, the netlist reading of `services`, the netlist graph, the hierarchy, the dangling-node check, a run's source amplitudes, a variation's targets, `inspect` and the Python API; every directive the lexer knows is an axis value; and the server's reading for ngspice against ngspice live, in each mode|
+|`test_element_nodes_grid.py`|which words of each recorded element card are its nodes and which its model, for each letter by what follows its nodes, a node count that varies, a switch's state and a call's `params:`, through the same routes; every letter the views and the dangling-node check know is an axis value; and the same live on ngspice|
+|`test_declaration_grid.py`|what each recorded `.param`, `.model` and `.subckt` card declares (each form of an assignment, a model's parameters and level, a subcircuit's defaults), through `ParamCard`, `assigned_params`, `ModelCard`, `SubcktCard`, a variation's targets, a run's source amplitudes and the hierarchy's value of the element each sets; every form the card readers tell apart is an axis value or listed outside the grid; and the same live on ngspice|
+|`test_recorded_ltspice_grids.py`|the grids' index: every cell names a case and an item of it with the coordinates its deck has, every coordinate has a cell, the functions a grid names exist and a behaviour names them, and the count of coordinates not yet recorded only falls|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
 They read the recordings through the same code that reads a live result (the
@@ -367,6 +384,89 @@ side in the test, under a name that states the difference
 `EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR` and
 `JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY` in
 `test_recorded_ltspice_schematics.py`).
+
+### Grids
+
+A recording settles the case it was written for; a grid makes sure the cases
+cover a question. **A grid is the full cross of the input forms that the
+functions deciding one question depend on, recorded on both builds, and each of
+those functions is tested on every cell.** It is declared in `cases.toml`
+beside the behaviours, as `[grid.<key>]`, and is an index over their cases: it
+names no file of its own. `tests/_recorded_grids.py` reads it.
+
+A grid states its `question`; the `functions` that decide it, as
+`module:name`, each also named in the `model` of a behaviour (a behaviour's
+`model` may name a function beside its module, `lib/log_parser.py:printed_form`,
+and `test_ltspice_recorder.py` checks that each named function exists); its
+`axis` table, each axis with its values and an optional `default`; its
+`groups`, the axes crossed together, each group standing apart from the others
+(a short list of forms tested on their own is a group of one axis); the
+`exclude` entries, the coordinates no input can have, each with its reason; and
+`expect`, what its test expects by axis value, written from what the input
+means rather than from the code under test. A cell is one item of a case: a
+measurement of a deck, a trace of a raw, a line of a log. Its table names its
+`cases`, the coordinates its items share under `at`, and its `items`; a cell
+may give other coordinates for one build (`on`) and the builds that do not take
+the item at all (`refused`, with the reason), which the test checks as such.
+
+An `exclude` entry with `builds` holds on those builds only: a rule of the
+code that claims one LTspice build has no coordinate on the other. A grid that
+names the `behaviours` it covers indexes every case of them as a cell, or lists
+the case under `outside` with the reason. A cell's own keys (`item_keys`) may
+say what it is expected to give where `expect` cannot (the log-condition grid's
+`states`, the step-value grid's `steps`), a prediction no recording yet shows
+(`not_established`, which fails once its case is recorded, until it is settled
+and removed), and a route that answers otherwise (`differs`, with the route and
+the reason, counted in the test's `KNOWN_DIFFERENCES`, which only falls).
+
+`test_recorded_ltspice_grids.py` checks the index: each cell's case and item
+exist with the coordinates the cell declares (for the printed-measurement grid,
+its `.meas` card, form, analysis and stepping, read through the lexer); every
+coordinate of every group has a cell, recorded or pending; and the count of
+coordinates with no recorded cell, pinned per build in `UNRECORDED`, only falls.
+The grid's own test reads every recorded cell through every route that answers
+its question: for the printed-measurement grid,
+`test_measurement_answer.py::test_every_recorded_cell_of_the_grid_reads_as_its_form_means`;
+for the log-condition grid (which condition a log line states),
+`test_log_condition_grid.py`; for the step-value grid (which step a value
+belongs to), `test_step_value_grid.py`; for the results-layout grid (how a
+results file is laid out, and what its plot is), `test_results_layout_grid.py`;
+for the trace-name grid (which trace a name reads, and what it holds),
+`test_trace_name_grid.py`; for the value-number grid (what number a value
+is), `test_value_number_grid.py`; for the expression-value grid (what a
+parameter expression evaluates to), `test_expression_value_grid.py`; for the
+deck-card grid (which lines of a deck are cards, and which directive a card
+is), `test_deck_card_grid.py`; for the element-node grid (how many nodes an
+element takes, and what follows them), `test_element_nodes_grid.py`; for the
+declaration grid (what a `.param`, `.model` or `.subckt` card declares),
+`test_declaration_grid.py`. The three deck grids read a deck through every
+route with `tests/_deck_readings.py`.
+A cell where the server answers differently from the recording is pinned there
+under a name that states the difference, until a fix lands.
+
+To add a cell to a grid:
+
+1. Find the case that records it, or write a deck under a behaviour (with
+   `pending` until it is recorded). A form a build may refuse goes in a deck of
+   its own, since a refusal stops the run; each cell needs an effect in the log
+   of its own, so that it can be told apart.
+2. Add a `[[grid.<key>.cell]]` table, or an item to one, naming the case, the
+   item and its coordinates.
+3. Run `test_recorded_ltspice_grids.py` and the grid's test. When the cell
+   fills a coordinate that had no recording, lower the pin in `UNRECORDED`.
+
+To add a grid:
+
+1. Name the question and every function that answers it (all of them: a grid's
+   test runs each cell through each). Read their branches: each input form a
+   branch depends on is an axis, and an axis no branch reads is not one.
+2. Declare `[grid.<key>]` with its axes, groups, exclusions and `expect`; index
+   the recorded cases as cells; and write the decks for the coordinates no
+   recording fills, under a pending behaviour.
+3. Name each function in the `model` of the behaviours whose recordings are
+   evidence for it, pin the count of unrecorded coordinates in `UNRECORDED`,
+   and write the grid's test, which reads every recorded cell through every
+   route that answers the question.
 
 ### Recording again
 

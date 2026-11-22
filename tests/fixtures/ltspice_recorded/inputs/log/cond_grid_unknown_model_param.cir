@@ -1,0 +1,7 @@
+* a model card with a parameter the device does not know, in a run with no .step
+V1 in 0 1
+R1 in out 1k
+D1 out 0 DX
+.model DX D(Is=1e-14 Bogus=3)
+.op
+.end

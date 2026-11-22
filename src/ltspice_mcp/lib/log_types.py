@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
-from typing import Any, Literal, NotRequired, get_args
+from typing import Any, Literal, NamedTuple, NotRequired, get_args
 
 from typing_extensions import TypedDict
 
@@ -20,6 +20,7 @@ LogSectionName = Literal[
     "temperatures",
     "fourier",
     "native_tables",
+    "fra_margins",
     "error_context",
 ]
 LOG_SECTIONS: tuple[LogSectionName, ...] = get_args(LogSectionName)
@@ -181,6 +182,23 @@ class LogCondition(TypedDict):
     first_text: str
     channel: Literal["log", "console"]
     severity: NotRequired[str]
+    #: Each distinct occurrence that carries a word, with its word, in order,
+    #: at most ``log_conditions.WRITTEN_KEPT``; ``written_left_out`` counts the
+    #: rest. Kept on the decoded log for the summary, never on a run row
+    #: (``log_conditions.run_diagnostics``).
+    written: NotRequired[list[WrittenLine]]
+    written_left_out: NotRequired[int]
+
+
+class WrittenLine(TypedDict):
+    """One distinct occurrence of a condition that is an error or a warning:
+    its text as written, the simulator's word on it, and the line classifier's
+    reading where the simulator's wording has no recordings
+    (``LogCondition.written``)."""
+
+    text: str
+    severity: NotRequired[str]
+    read_as: NotRequired[str]
 
 
 class LogDiagnostics(TypedDict):
@@ -196,9 +214,23 @@ class LogDiagnostics(TypedDict):
 
 class UnreadableValue(TypedDict):
     """Why a measurement's printed value was not read: the log line that
-    printed it (None where no line names it) and the reason."""
+    printed it (None where no line names it) and the reason, which quotes
+    what the log printed. ``steps`` names the steps, from 0, of a stepped
+    table whose value it was, where that is not every step."""
 
     line: str | None
+    reason: str
+    steps: NotRequired[list[int]]
+
+
+class PrintedOnce(TypedDict):
+    """A measurement the log printed once for a run of several steps
+    (``log_parser.answered_measurements``): how many steps the run had,
+    the step, from 0, whose value the line holds where a recording
+    establishes it, and a reason that says so and how to read the others."""
+
+    step_count: int
+    step: NotRequired[int]
     reason: str
 
 
@@ -238,6 +270,9 @@ class _MeasurementMetadata(TypedDict, total=False):
     #: result, and why (``log_parser.answered_measurements``): their values
     #: are null.
     not_established: NotEstablished
+    #: The log printed this measurement once for a run of several steps
+    #: (``log_parser.answered_measurements``).
+    printed_once: PrintedOnce
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -295,8 +330,8 @@ class MeasurementsOutput(TypedDict):
     ``failed_measurements`` names, in the order the log printed them, the
     measurements LTspice printed as failed: ``Measurement "name" FAIL'ed``, or
     ``failed`` in a row of the measurement's stepped table. It means that and
-    nothing else; a value that is null for another reason (``unreadable``, or a
-    number that is not finite) is not listed.
+    nothing else; a value that is null for another reason (``unreadable``,
+    which a number that is not finite is too) is not listed.
     """
 
     measurements: dict[str, MeasurementEntry]
@@ -309,6 +344,11 @@ class MeasurementsOutput(TypedDict):
     #: producer its entries are answered for
     #: (``log_parser.answered_measurements``) and never passes it on.
     printed_by: NotRequired[str]
+    #: How many times a log that prints its measurements on lines, with no
+    #: ``.step`` line, solved its operating point, where more than once: a
+    #: stepped ``.op`` (``log_parser.parse_measurements``). A reader turns it
+    #: into each entry's ``printed_once`` and never passes it on.
+    op_solves: NotRequired[int]
 
 
 def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = None) -> bool:
@@ -330,3 +370,199 @@ def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = N
     if step is not None:
         return step in steps
     return set(range(len(entry.get("values") or ()))) <= set(steps)
+
+
+def result_unreadable(entry: Mapping[str, Any]) -> Any:
+    """Why an answered measurement entry's result could not be read, or None.
+
+    An entry's ``unreadable`` says its ``values`` were printed as other than a
+    number. That is its result unless ``answer`` names ``at``: a WHEN with no
+    FIND printed its threshold there, the level it searched for, and its
+    result is the crossing, which reads. An entry whose answer is not known
+    is named by ``answer_unknown`` alone, so each null has one reason."""
+    if entry.get("answer") == "at" or "answer_unknown" in entry:
+        return None
+    return entry.get("unreadable")
+
+
+def result_numbers(entry: Mapping[str, Any]) -> list[float | None]:
+    """The results of an answered measurement entry
+    (``log_parser.answered_measurements``), one per step: the numbers of the
+    field its ``answer`` names (``at`` for a WHEN with no FIND printed on its
+    own line, else ``values``), and nulls for an entry that names none
+    (``answer_unknown``). The one answer to "which numbers are this
+    measurement's results", which the statistics read."""
+    values = list(entry.get("values", []))
+    field = entry.get("answer")
+    if field == "value":
+        return values
+    if field == "at":
+        at = entry.get("at")
+        return list(at) if isinstance(at, list) else [at] * len(values)
+    return [None] * len(values)
+
+
+class NoNumber(NamedTuple):
+    """One reason the log decoder gives for a step of a measurement holding
+    no number. ``field`` is the name a measurements row gives the reason
+    under beside its statistics (``metrics.measurement_rows``), and the name
+    the statistics count such steps under
+    (``signal_analysis.compute_measurement_stats``); ``holds`` says whether
+    it is the reason at a step, from 0, given the log's answered measurement
+    table, the measurement's name and its entry; ``counted`` is the sentence
+    the statistics' schema says a count of such steps means."""
+
+    field: str
+    holds: Callable[[Mapping[str, Any], str, Mapping[str, Any], int], bool]
+    counted: str
+
+
+def _unreadable_at(
+    table: Mapping[str, Any], name: str, entry: Mapping[str, Any], step: int
+) -> bool:
+    reason = result_unreadable(entry)
+    return reason is not None and step in reason.get("steps", (step,))
+
+
+#: Why a step of a measurement has no number, as the log decoder decides it
+#: (``log_parser.parse_measurements`` and ``log_parser.answered_measurements``),
+#: in the order they are asked; the first that holds is the step's reason. The
+#: one list: the row's reason fields and the statistics' counts are both read
+#: from it, so a reason added here reaches both. ``printed_once`` is not one:
+#: a value printed once for a run of several steps is a number.
+NO_NUMBER_REASONS: tuple[NoNumber, ...] = (
+    # The simulator printed it failed: FAIL'ed, or 'failed' in a table's row.
+    NoNumber(
+        "failed_measurements",
+        lambda table, name, _entry, step: measurement_failed(table, name, step),
+        "Steps the simulator printed failed: FAIL'ed, or 'failed' in a stepped table's row.",
+    ),
+    # Which printed field holds the result is not known: no step has a number.
+    NoNumber(
+        "answer_unknown",
+        lambda _table, _name, entry, _step: "answer_unknown" in entry,
+        "Steps with no number because which printed field holds the result is not known.",
+    ),
+    # The log printed something other than a finite number for the result.
+    NoNumber(
+        "unreadable",
+        _unreadable_at,
+        "Steps where the log printed something other than a finite number for the result.",
+    ),
+    # What the log printed is not established as the result (XVII's 0).
+    NoNumber(
+        "not_established",
+        lambda _table, _name, entry, step: (
+            step in entry.get("not_established", {}).get("steps", ())
+        ),
+        "Steps whose printed value is not established as the result, such as a 0 LTspice "
+        "XVII prints for a failed step: each may be a failure or a real 0, so "
+        "failure_count is a lower bound while this count is present.",
+    ),
+)
+
+#: The reason the simulator said the measurement failed, which alone is
+#: counted as a failure, wherever it stands in the list.
+FAILED = "failed_measurements"
+assert FAILED in {reason.field for reason in NO_NUMBER_REASONS}
+
+
+def no_number_reasons(table: Mapping[str, Any], name: str) -> list[str | None]:
+    """Why each step, from 0, of the measurement ``name`` of a log's answered
+    measurement ``table`` holds no number: the ``field`` of the first of
+    :data:`NO_NUMBER_REASONS` that holds there, or None where none does. A
+    reason is read only where the step has no number: an entry's statement
+    may cover steps that hold one (an ``unreadable`` that names no steps
+    covers every step), so a caller pairs the reasons with the entry's
+    :func:`result_numbers`. The one answer to "why has this step
+    of a measurement no number", which the statistics ask
+    (``metrics.measurement_rows``)."""
+    entry = (table.get("measurements") or {}).get(name)
+    if not isinstance(entry, Mapping):
+        return []
+    return [
+        next(
+            (
+                reason.field
+                for reason in NO_NUMBER_REASONS
+                if reason.holds(table, name, entry, step)
+            ),
+            None,
+        )
+        for step in range(len(entry.get("values") or ()))
+    ]
+
+
+#: Why a run's log says nothing of its measurements that can be trusted, by
+#: the reason ``services.measurements_unread`` gives, as every reader that
+#: says so words it: the run row (``measurements_coverage``), the ``summary``
+#: recipe, the ``measurements`` recipe and the Python API's ``measurements``.
+MEASUREMENTS_UNREAD: dict[str, str] = {
+    "simulator_unsupported": (
+        "the server reads .meas results only from LTspice and ngspice logs, and does "
+        "not read this simulator's measure output"
+    ),
+    "log_unread": (
+        "the run's log was not captured, or its measurements section could not be decoded"
+    ),
+}
+
+
+def run_measurement_facts(
+    table: Mapping[str, Any], requested: Sequence[str] | None
+) -> dict[str, Any]:
+    """What one run's measurement ``table`` (the log's, answered by
+    ``log_parser.answered_measurements`` where it was) says the run did not
+    give of the ``.meas`` its deck requests (``requested``, from
+    ``result_observations.parse_requested_outputs``; None where the deck was
+    not read), as a run keeps it.
+
+    ``failed``: the names LTspice printed as failed (:func:`measurement_failed`),
+    in the order the log printed them. ``failed_steps``: for a name that
+    failed at some steps of a stepped run only, those steps from 0.
+    ``not_established``: for a name whose printed value is not established as
+    its result at some steps (XVII prints 0 for a failed step), those steps.
+    ``not_printed``: each requested name the log printed nothing for, not
+    even a failure (LTspice 26 on ``deck/save_omits_meas``; ngspice skips a
+    top-level ``.meas`` in batch mode). Each only when it names something, so
+    facts without them say every requested ``.meas`` was given. ``requested``
+    is kept whenever the deck's own text requests a ``.meas``: for
+    :func:`given_no_value`'s callers to say whether a failure is every one
+    the deck requests, and for a receipt to say the deck has ``.meas`` cards
+    without reading it again."""
+    facts: dict[str, Any] = {}
+    failed = list(table.get("failed_measurements") or ())
+    entries = table.get("measurements") or {}
+    if failed:
+        facts["failed"] = failed
+        partly = {
+            name: list(entries[name]["failed_steps"])
+            for name in failed
+            if not measurement_failed(table, name)
+        }
+        if partly:
+            facts["failed_steps"] = partly
+    unestablished = {
+        name: list(entry["not_established"]["steps"])
+        for name, entry in entries.items()
+        if isinstance(entry, Mapping) and entry.get("not_established")
+    }
+    if unestablished:
+        facts["not_established"] = unestablished
+    printed = list(entries)
+    missing = [name for name in requested or () if measurement_named(name, printed) is None]
+    if missing:
+        facts["not_printed"] = missing
+    if requested:
+        facts["requested"] = list(requested)
+    return facts
+
+
+def given_no_value(facts: Mapping[str, Any]) -> list[str]:
+    """The names a run's :func:`run_measurement_facts` say it gave no value
+    for at any step: printed failed at every step, or not printed at all."""
+    partly = facts.get("failed_steps") or {}
+    return [
+        *(name for name in facts.get("failed") or () if name not in partly),
+        *(facts.get("not_printed") or ()),
+    ]

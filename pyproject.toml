@@ -27,7 +27,8 @@ dependencies = [
     # No [cli] extra: nothing here imports typer or rich, and that extra pulls
     # both into every install for the `mcp` command-line tool we never invoke.
     "mcp>=2.3,<3.0",
-    "numpy>=1.26,<3.0",
+    # 2.0: np.trapezoid, which the signal, AC and loop-structure readers call.
+    "numpy>=2.0,<3.0",
     # Direct use (scoped simulator kill, job owner-pid liveness); also a
     # spicelib transitive, so this adds no new install weight.
     "psutil>=5.9,<8.0",
@@ -134,6 +135,7 @@ select = [
     "PERF",  # performance anti-patterns
     "PT",    # pytest style
     "TID251", # banned names (see banned-api below)
+    "NPY201", # names NumPy 2 removed, which the numpy floor no longer has
 ]
 ignore = [
     "E501",    # line length (handled by formatter)
@@ -164,7 +166,8 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.format.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.variations.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.simulator_build.executable_file_version".msg = "Ask simulator_build.which_ltspice which LTspice a program is; it also reads the build a run reported and the stock file names."
-"ltspice_mcp.lib.job_lifecycle.runs_terminal".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
+"ltspice_mcp.lib.job_lifecycle.runs_terminal".msg = "Ask services.case_unreadable whether a case can be read; job_lifecycle.runs_done says only whether a wait on a job's runs returns."
+"ltspice_mcp.lib.job_lifecycle.runs_done".msg = "Ask services.case_unreadable whether a case can be read, whatever its job's status; runs_done answers only when a wait on a job's runs returns and when a case may be placed beside its circuit."
 "ltspice_mcp.lib.job_lifecycle.stop_for_owner".msg = "Settle a job this session runs with LiveJob.stop_for_owner, which gives its coordinator and the shutdown's bookkeeping one reading of the runs; only a record whose owner died is settled directly."
 "ltspice_mcp.lib.experiment_store.stop_for_owner".msg = "Settle a job this session runs with LiveJob.stop_for_owner, which gives its coordinator and the shutdown's bookkeeping one reading of the runs; only a record whose owner died is settled directly."
 "ltspice_mcp.lib.experiment_store.load_job".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
@@ -173,6 +176,8 @@ known-first-party = ["ltspice_mcp"]
 "os.killpg".msg = "Signal a process group with proc_kill.kill_process_group, which signals it only while its leader is still the process started: a reaped leader's pid, and the group id that is the same number, can name another process."
 "ltspice_mcp.lib.asc_document.shown_value".msg = "Ask SheetPart.shown_attribute which text a part shows for an attribute, as the scene lays it out."
 "ltspice_mcp.lib.recipes.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
+"ltspice_mcp.api._result.sent_result".msg = "A catalogued operation's result is wrapped once, in _CataloguedMethod._run; read the result it returns."
+"ltspice_mcp.api._result.SentResult".msg = "A catalogued operation's result is wrapped once, in _CataloguedMethod._run; read the result it returns."
 "ltspice_mcp.tools.analyze.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
 "ltspice_mcp.lib.log_parser.measurement_answer".msg = "Read a log's measurements through services.answer_measurements, which names the field holding each result."
 "ltspice_mcp.lib.log_parser.answered_measurements".msg = "Read a log's measurements through services.answer_measurements, which names the field holding each result."
@@ -188,7 +193,16 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.instance_targeting.walk_active".msg = "Read a hierarchy only where its mode's rules are established (hierarchy.require_established) or its values are confirmed against ngspice (hierarchy_check); mark the use with which."
 "ltspice_mcp.lib.runner_base.SimRunner".msg = "Launch a simulator through RunnerBase.submit_netlist, which passes ngspice NGSPICE_NO_USER_INIT so no user startup file changes its mode."
 "ltspice_mcp.lib.simulator.current_ngbehavior".msg = "Ask simulator.run_ngbehavior for the mode a run passes ngspice and reads its deck in; current_ngbehavior is the session's configured mode, for showing it."
+"ltspice_mcp.lib.device_names.trace_keys".msg = "Pair two results' traces with device_names.pair_traces (through RawResult.compare), or read a name with trace_names.read_in_plot; a trace's keys are read only where a deck's own names are compared or traces are paired."
+"ltspice_mcp.lib.trace_names.trace_keys".msg = "Pair two results' traces with device_names.pair_traces (through RawResult.compare), or read a name with trace_names.read_in_plot; a trace's keys are read only where a deck's own names are compared or traces are paired."
+"ltspice_mcp.lib.result_observations.trace_keys".msg = "Pair two results' traces with device_names.pair_traces (through RawResult.compare), or read a name with trace_names.read_in_plot; a trace's keys are read only where a deck's own names are compared or traces are paired."
+"ltspice_mcp.lib.device_names.pair_traces".msg = "Compare two results with RawResult.compare, the one pairing of their traces."
+"ltspice_mcp.lib.device_names.instance_readings".msg = "Read a name inside subcircuits with trace_names.read_in_plot, or select a device with device_names.device_query; only device_names reads a name's instances."
 "ltspice_mcp.lib.spice_lex.cards_from_path".msg = "Read a deck with spice_lex.lex_deck, or spice_lex.lex_for_edit for an edit; a file's every card reads its title and the cards after .END as cards."
+"ltspice_mcp.lib.ltspice_window.results_beside".msg = "Ask sheet_results.files_beside which files beside a circuit its run goes to; it names the results, the log and the other raws together."
+"ltspice_mcp.lib.sheet_results.place_beside_sheet".msg = "Place a case's results beside its circuit with sheet_results.place_checked, which checks the circuit against the run and holds its locks until the copy ends."
+"ltspice_mcp.lib.sheet_results.place_case".msg = "Place a case's results beside its circuit with sheet_results.place_checked, which checks the circuit against the run and holds its locks until the copy ends."
+"ltspice_mcp.lib.sheet_results.placement_lock".msg = "Place a case's results beside its circuit with sheet_results.place_checked, which takes these locks and holds them until the copy ends."
 "spicelib.utils.file_search.search_file_in_containers".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
 "spicelib.utils.file_search.find_file_in_directory".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
 "ltspice_mcp.lib.symbol_library.find_symbol".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
@@ -196,6 +210,8 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.symbol_library.find_beside".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
 "ltspice_mcp.lib.symbol_library.find_in_library".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
 "ltspice_mcp.lib.symbol_library.symbol_files".msg = "List the names a sheet's lookups find with SymbolResolver.listing, which searches each folder once, as its lookups do."
+"ltspice_mcp.lib.montecarlo.extract_mosfet_instances".msg = "Read a flat deck's devices for a mismatch rule with variations._flat_devices and _rule_devices, which refuse a rule that reaches a device it cannot size."
+"ltspice_mcp.lib.variations.extract_mosfet_instances".msg = "Read a flat deck's devices for a mismatch rule with variations._flat_devices and _rule_devices, which refuse a rule that reaches a device it cannot size."
 
 [tool.ruff.lint.per-file-ignores]
 # Tests exercise a banned name directly.

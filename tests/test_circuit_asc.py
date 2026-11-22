@@ -7,6 +7,7 @@ off disk, so a claim about geometry is checked against what was actually written
 """
 
 import json
+import os
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -4437,11 +4438,31 @@ class TestAReferenceNamesThePartLTspiceDoes:
         self, asc_state: SessionState, work_dir: Path, op: dict[str, Any]
     ):
         written: dict[str, bytes] = {}
-        for spelling in ("R1", "r1"):
-            asc = _write_sheet(work_dir / f"spelled_{spelling}.asc", *_TWO_PARTS)
+        # Files named apart by more than case: on Windows two names that
+        # differ only by case are one file.
+        for spelling, name in (("R1", "upper"), ("r1", "lower")):
+            asc = _write_sheet(work_dir / f"spelled_{name}.asc", *_TWO_PARTS)
             apply_one(asc_state, asc, _naming(op, spelling))
             written[spelling] = asc.read_bytes()
         assert written["r1"] == written["R1"]
+
+    def test_a_sheet_rewritten_within_one_file_time_tick_reads_as_written(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """An op batch saved through the test helper leaves no cached editor
+        behind, as edit_schematic's commit leaves none: a sheet then written
+        back with bytes of the same size, in the same file-time tick (set
+        back here with ``os.utime``), reads as written, not as the edited
+        editor."""
+        asc = _write_sheet(work_dir / "rewritten.asc", *_TWO_PARTS)
+        original = asc.read_bytes()
+        before = asc.stat()
+        rename = {"op": "set_component_attribute", "reference": "R1"}
+        apply_one(asc_state, asc, {**rename, "attribute": "InstName", "value": "R5"})
+        asc.write_bytes(original)
+        os.utime(asc, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert asc.stat().st_size == before.st_size
+        assert sorted(load_editor(asc_state, asc).get_components()) == ["R1", "R2"]
 
     @pytest.mark.parametrize("op", _NAMING_OPS, ids=lambda op: op["op"])
     def test_a_reference_no_part_has_is_refused_with_the_parts_there_are(

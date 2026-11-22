@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
+import contextvars
+import functools
 import hashlib
 import json
 import logging
 import secrets
 import shutil
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import experiment_store, now, services
@@ -55,6 +58,7 @@ from ltspice_mcp.lib.job_lifecycle import (
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics
+from ltspice_mcp.lib.log_types import run_measurement_facts
 from ltspice_mcp.lib.native_execution import prepare_native_cases
 from ltspice_mcp.lib.ngspice_driver import validate_seed
 from ltspice_mcp.lib.pdk_native import (
@@ -74,6 +78,12 @@ from ltspice_mcp.lib.raw_parser import (
     result_digest,
 )
 from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
+from ltspice_mcp.lib.redirect import same_location
+from ltspice_mcp.lib.result_observations import (
+    Observation,
+    deck_observation_inputs,
+    subcircuit_nodes_not_saved,
+)
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     NativeLaunchContext,
@@ -85,8 +95,15 @@ from ltspice_mcp.lib.runner_base import (
     inject_ngspice_control_write,
 )
 from ltspice_mcp.lib.sheet_results import not_placed_for_owner_stop, place_job_beside_sheets
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
+from ltspice_mcp.lib.simulator import (
+    dialect_for_simulator_name,
+    is_ngspice,
+    raw_extension_for,
+    run_ngbehavior,
+    simulator_selector,
+)
 from ltspice_mcp.lib.simulator_build import (
+    Producer,
     SimulatorExecutable,
     describe_executable,
     same_executable,
@@ -147,6 +164,39 @@ _DRIFT_REASONS = {
     "source_modified_after_staging": "content changed",
     "source_unavailable_after_staging": "no longer readable",
 }
+
+_T = TypeVar("_T")
+
+#: The threads that launch a case (``_submit_case_under_cancel_gate``). The rule
+#: for every thread that waits on the event loop: it is never a thread of the
+#: loop's default pool, because the loop answers it with work that runs on that
+#: pool, and a pool whose every thread waited so would never run that work. A
+#: recoverable case's launch waits on the loop for its launch record, a write
+#: that runs on the default pool (``JobRegistry.persist_strict``), so launches
+#: run here. The loop never needs one of these threads to finish anything, so a
+#: launch past this many waits for a thread and nothing waits for ever.
+_LAUNCH_THREADS = concurrent.futures.ThreadPoolExecutor(thread_name_prefix="experiment-launch")
+
+
+async def _in_launch_thread(work: Callable[..., _T], *args: Any) -> _T:
+    """``work(*args)`` on one of ``_LAUNCH_THREADS``, awaited."""
+    loop = asyncio.get_running_loop()
+    # As ``asyncio.to_thread`` does, so the launch sees this request's context.
+    context = contextvars.copy_context()
+    return await loop.run_in_executor(_LAUNCH_THREADS, functools.partial(context.run, work, *args))
+
+
+def _launch_stopped(exc: BaseException) -> bool:
+    """Whether ``exc`` is a launch refused because its job was stopped while
+    the launch was being recorded (``ExperimentRunner._record_launch``)."""
+    cause = exc.__cause__ if isinstance(exc, NativePrelaunchRefused) else exc
+    return isinstance(cause, RecoveryError) and cause.code == "recovery_launch_cancelled"
+
+
+def _retrieve(task: asyncio.Task[None]) -> None:
+    """Mark a finished task's outcome read, for a write nobody awaits any more."""
+    if not task.cancelled():
+        task.exception()
 
 
 def cancel_receipt_row(
@@ -724,6 +774,11 @@ class ExperimentRunner(RunnerBase):
             sources=staged.sources,
             simulator=request.simulator,
             simulator_executable=request.simulator_executable,
+            # The selector of the class this runner launches: the one the
+            # request resolved to, or the default's when it named none.
+            simulator_selector=simulator_selector(
+                self.simulator_class, request.state.offered_simulators
+            ),
             deck_names_xvii=request.deck_names_xvii,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
@@ -888,10 +943,33 @@ class ExperimentRunner(RunnerBase):
         # Outside the gate: the per-circuit index is discovery, not identity,
         # so a slow directory here holds up nothing but this submission.
         try:
-            await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+            noted = await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+            if noted:
+                await self._record_index_note(request, candidate)
         except Exception as exc:
             raise SubmissionCommitted(request.request_id, exc) from exc
         return AdmissionResult(candidate, replayed=False)
+
+    @staticmethod
+    async def _record_index_note(request: ExperimentRunRequest, candidate: ExperimentJob) -> None:
+        """Write the note that the circuit index failed onto the job's record.
+
+        Through the registry's writes, which write a job's record one at a
+        time, in the order asked for (``JobRegistry._persist_locks``), so the
+        record has one writer and this write cannot land on top of a newer one.
+        Admission runs only with persistence on (``_submission_pipeline``).
+        Waited for, so the record carries the note when the submission
+        answers. A failure is logged by the registry: losing a note is no
+        reason to fail a job that exists and can run, and the note still
+        reaches this submission's receipt.
+        """
+        registry = request.state.job_registry
+        before = set(registry.pending_writes(candidate.job_id))
+        registry.persist_job(candidate)
+        # ``wait``, not ``gather``: a cancelled waiter must not cancel the
+        # registry's own write, which holds the job's write lock.
+        if note := set(registry.pending_writes(candidate.job_id)) - before:
+            await asyncio.wait(note)
 
     def discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
         """Remove the run tree of a submission that staged and then failed.
@@ -981,8 +1059,10 @@ class ExperimentRunner(RunnerBase):
         experiment_store.save_job(candidate)
 
     @staticmethod
-    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> None:
-        """Index the job under every circuit it ran; a failure is durable-but-noted."""
+    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> bool:
+        """Index the job under every circuit it ran; whether it failed, and so
+        added a note to the job that its record should carry
+        (``_record_index_note``)."""
         try:
             experiment_store.register_circuits(candidate, working_dir)
         except OSError as exc:
@@ -996,16 +1076,8 @@ class ExperimentRunner(RunnerBase):
                     ),
                 }
             )
-            try:
-                experiment_store.save_job(candidate)
-            except OSError:
-                # The note about the index could not be persisted either. It
-                # still reaches this submission's receipt, and the record the
-                # claim wrote is the durable one — losing a note is no reason
-                # to fail a job that exists and can run.
-                logger.warning(
-                    "could not record the circuit-index failure on %s", candidate.job_id
-                )
+            return True
+        return False
 
     def case_capacity(self, request: ExperimentRunRequest) -> int:
         """One job's share of the runner's cap.
@@ -1258,7 +1330,9 @@ class ExperimentRunner(RunnerBase):
         root = Store(execution.request.state.working_dir).lineage_run_dir(
             recovery.root_job_id, job.output_folder, self.simulator_class
         )
-        if case.recovery.inputs.lineage_root != root:
+        # By location, not spelling: the recorded root was spelled when the
+        # case was frozen, possibly by another process (``same_location``).
+        if not same_location(case.recovery.inputs.lineage_root, root):
             raise RecoveryError("recovery_path_escape", "Case inputs name a different lineage")
         verify_execution_policy(recorded, self.simulator_class)
         verify_case_inputs(
@@ -1311,12 +1385,44 @@ class ExperimentRunner(RunnerBase):
             adaptation,
         )
         case.recovery = replace(case.recovery, attempt=replace(attempt, launch=intent))
-        # The loop remains free for cancellation and the ordered registry lock;
-        # only this worker waits. Never hold launch_lock across this barrier.
-        asyncio.run_coroutine_threadsafe(self._persist_job(execution), self.loop).result()
+        # Only this launch thread waits; the loop stays free for a cancel and the
+        # ordered registry lock. Never hold launch_lock across this wait. This is a
+        # thread of ``_LAUNCH_THREADS``, never of the default pool the write runs
+        # on (see there), and a stop of the job ends the wait (``_record_launch``).
+        asyncio.run_coroutine_threadsafe(self._record_launch(execution), self.loop).result()
         self._verify_executed_copy(execution, case)
         if execution.cancel_event.is_set():
             raise RecoveryError("recovery_launch_cancelled", "Cancelled before simulator spawn")
+
+    async def _record_launch(self, execution: _Execution) -> None:
+        """Write the record of a launch that a launch thread waits for, unless
+        the job is stopped first.
+
+        Every stop of a job (a cancel, its deadline, the process stopping) sets
+        ``cancel_event`` through ``_request_stop``, so a stop ends the launch's
+        wait even while the write cannot get a thread. The write itself goes on
+        under the registry's per-job order and is this runner's to settle. A
+        launch that stops here was refused before spicelib created its run, so
+        no simulator starts, and the record it may leave (a launch intent with
+        no outputs) is the one a crash between the record and the start leaves.
+        """
+        job_id = execution.job.job_id
+        write = self._background.spawn(self._persist_job(execution), key=job_id)
+        stopped = self.loop.create_task(execution.cancel_event.wait())
+        try:
+            await asyncio.wait({write, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopped.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stopped
+            if not write.done():
+                # ``_persist_job`` keeps a failure as ``persistence_error``;
+                # nobody else awaits this write now.
+                write.add_done_callback(_retrieve)
+        if write.done():
+            write.result()
+            return
+        raise RecoveryError("recovery_launch_cancelled", "Cancelled before simulator spawn")
 
     def _verify_executed_copy(self, execution: _Execution, case: ExperimentCase) -> None:
         root = self._verify_recovery_case(execution, case)
@@ -1479,6 +1585,16 @@ class ExperimentRunner(RunnerBase):
             return load_logs_sync(source, execution.request.state)
 
         try:
+            # The gate: the decision and the stamp, and nothing that waits on a
+            # write or on the loop (``tests/test_loop_waits.py``). A cancel from
+            # another process writes its marker under this lock, so it either
+            # comes first and this case never passes, or comes after and finds
+            # the case stamped: its owner reads the marker and stops the job;
+            # a recoverable case is refused at its launch record, and a case
+            # whose simulator started is killed, as for a cancel made in this
+            # process. Held across the launch, the
+            # lock made every other launch of the job, and every cancel, wait
+            # for this launch's record write.
             with file_lock(Store(working_dir).cancellation_lock(job_id)):
                 if experiment_store.cancellation_requested(job_id, working_dir):
                     return False
@@ -1487,26 +1603,26 @@ class ExperimentRunner(RunnerBase):
                         return False
                     case.status = "submitted"
                     case.submitted_at = now()
-                self.submit_netlist(
-                    run_deck,
-                    # A sub-path, not a bare name: the simulator layer joins it onto
-                    # the runner's output folder, so this is what lands the run's
-                    # deck copy, raw and log in the job's own directory without the
-                    # runner (and its shared concurrency semaphore) ever moving.
-                    run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
-                    lambda outcome: self._handle_case_completion(
-                        execution.job.job_id,
-                        case.case_id,
-                        outcome,
-                    ),
-                    timeout_s=(
-                        run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
-                        if run_timeout is not None
-                        else None
-                    ),
-                    completion_logs=completion_logs,
-                    **native_args,
-                )
+            self.submit_netlist(
+                run_deck,
+                # A sub-path, not a bare name: the simulator layer joins it onto
+                # the runner's output folder, so this is what lands the run's
+                # deck copy, raw and log in the job's own directory without the
+                # runner (and its shared concurrency semaphore) ever moving.
+                run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
+                lambda outcome: self._handle_case_completion(
+                    execution.job.job_id,
+                    case.case_id,
+                    outcome,
+                ),
+                timeout_s=(
+                    run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
+                    if run_timeout is not None
+                    else None
+                ),
+                completion_logs=completion_logs,
+                **native_args,
+            )
         except NativePrelaunchRefused:
             # The stamp guarded cancellation while launch was in progress, but
             # this refusal happened before spicelib could create a RunTask.
@@ -1554,7 +1670,7 @@ class ExperimentRunner(RunnerBase):
                     except Exception as exc:
                         execution.persistence_error = exc
                         raise
-                submitted = await asyncio.to_thread(
+                submitted = await _in_launch_thread(
                     self._submit_case_under_cancel_gate,
                     execution,
                     case,
@@ -1574,13 +1690,20 @@ class ExperimentRunner(RunnerBase):
                 case.status = "running"
                 self._checkpoint_case_transition(execution)
             except Exception as exc:
-                self._mark_case(
-                    execution,
-                    case,
-                    "failed",
-                    code="submission_failed",
-                    error=f"Submission failed: {exc}",
-                )
+                if _launch_stopped(exc):
+                    # A stop of the job refused the launch before its simulator
+                    # started: the case is stopped, as one still queued is.
+                    self._terminalize_stopped_case(execution, case)
+                else:
+                    # A failed launch record is a failed submission even when a
+                    # stop lands at the same moment: the write's error wins.
+                    self._mark_case(
+                        execution,
+                        case,
+                        "failed",
+                        code="submission_failed",
+                        error=f"Submission failed: {exc}",
+                    )
                 self._release_slot(execution, case.case_id)
                 return
 
@@ -1591,9 +1714,7 @@ class ExperimentRunner(RunnerBase):
                 # The simulator has exited: its permit goes to the next case
                 # before the log is read, which waits on the one parser.
                 self._release_slot(execution, case.case_id)
-                outcome = await self._with_logs(execution, outcome)
-                self._apply_outcome(execution.job, case, outcome)
-                await self._check_raw_names(execution, case)
+                outcome = await self._end_of_run(execution, case, outcome, kept=True)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1735,12 +1856,9 @@ class ExperimentRunner(RunnerBase):
             return
 
         # Read before the stopped case's artifacts are removed below.
-        outcome = await self._with_logs(execution, outcome)
-        if execution.job.recovery is not None:
-            self._apply_outcome(execution.job, case, outcome)
-            await self._check_raw_names(execution, case)
-        else:
-            self._apply_stopped_outcome(execution.job, case, outcome)
+        outcome = await self._end_of_run(
+            execution, case, outcome, kept=_keeps_stopped_artifacts(execution.job)
+        )
         kept = await self._record_progress_then_remove(execution, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
@@ -1826,10 +1944,8 @@ class ExperimentRunner(RunnerBase):
         case = next((item for item in execution.job.cases if item.case_id == case_id), None)
         if case is None:
             return
-        if execution.job.recovery is not None:
-            self._apply_outcome(execution.job, case, outcome)
-        else:
-            self._apply_stopped_outcome(execution.job, case, outcome)
+        # Its artifacts and log are read off the loop, by the end-of-run
+        # checks every ending makes (``_retire_late_exit``).
         case.observations.append(
             {
                 "code": "late_simulator_exit",
@@ -1859,10 +1975,9 @@ class ExperimentRunner(RunnerBase):
     ) -> None:
         """Record late-exit progress and persist final artifact facts."""
         try:
-            # Off the loop, as for any run that ended: what its log said.
-            read = await self._with_logs(execution, outcome)
-            if read is not outcome:
-                case.log_diagnostics = self._classified(execution.job, case, read)
+            await self._end_of_run(
+                execution, case, outcome, kept=_keeps_stopped_artifacts(execution.job)
+            )
             kept = await self._record_progress_then_remove(execution, case)
             case.failure_evidence = _with_partial_raw(case.failure_evidence, kept)
         finally:
@@ -1932,6 +2047,54 @@ class ExperimentRunner(RunnerBase):
         )
         return fact, kept
 
+    async def _end_of_run(
+        self, execution: _Execution, case: ExperimentCase, outcome: RunOutcome, *, kept: bool
+    ) -> RunOutcome:
+        """Make the end-of-run checks on ``case``, whatever path ended its run:
+        the one place they run, so a run that completed, one stopped that
+        exited within its kill grace and one that exited after it are each
+        checked alike. ``kept`` says the run's files stay (a completed run, or
+        any run of a recoverable job): only then is the raw read, for its
+        names and its subcircuit nodes. Returns ``outcome`` with its log facts.
+        """
+        outcome = await self._with_logs(execution, outcome)
+        if kept:
+            self._apply_outcome(execution.job, case, outcome)
+        else:
+            self._apply_stopped_outcome(execution.job, case, outcome)
+        await self._read_measurements(execution.job, case, outcome)
+        if kept:
+            await self._read_steps(execution, case)
+            await self._check_raw_names(execution, case)
+            await self._check_subcircuit_nodes(execution, case)
+            await self._check_saves(execution, case)
+        return outcome
+
+    async def _read_steps(self, execution: _Execution, case: ExperimentCase) -> None:
+        """Keep on ``case`` how its results are stepped (``services.read_steps``),
+        unless the job is stopped first: a stop of the job (a cancel, its
+        deadline, the process stopping) sets ``cancel_event``, which ends the
+        read and its parse at once, and the case keeps its results with no
+        steps recorded."""
+        if execution.cancel_event.is_set():
+            return
+        read = self.loop.create_task(
+            services.read_steps(execution.job, case, execution.request.state)
+        )
+        stopped = self.loop.create_task(execution.cancel_event.wait())
+        try:
+            await asyncio.wait({read, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopped.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stopped
+            if not read.done():
+                read.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await read
+        if not read.cancelled():
+            case.steps = read.result()
+
     @staticmethod
     async def _with_logs(execution: _Execution, outcome: RunOutcome) -> RunOutcome:
         """``outcome`` with its log facts, read here when its completion did not
@@ -1970,6 +2133,76 @@ class ExperimentRunner(RunnerBase):
                 outcome.logs, services.run_producer(job, case), unread=outcome.logs is None
             )
         )
+
+    @staticmethod
+    async def _read_measurements(
+        job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome
+    ) -> None:
+        """Keep on ``case`` what its run's log says its measurements did not
+        give (``log_types.run_measurement_facts``), read as every reader of a
+        measurement reads it (``services.answer_measurements``), with the
+        build the run named and the deck it ran; or that the log's
+        measurements could not be read."""
+        unread = services.measurements_unread(
+            outcome.logs, dialect_for_simulator_name(job.simulator)
+        )
+        if unread is not None or outcome.logs is None:
+            case.measurement_facts = {"coverage": unread or "log_unread"}
+            return
+        section = outcome.logs.section("measurements")
+        requested, _ = await asyncio.to_thread(deck_observation_inputs, case.staged_deck)
+        names = requested["meas"] if requested is not None else None
+        if section["status"] != "parsed":
+            # The log printed no measurement: each the deck requests gave none.
+            case.measurement_facts = run_measurement_facts({}, names)
+            return
+        source = services.AnalysisSource(
+            raw=None,
+            log=case.log_file,
+            console=None,
+            netlist=case.staged_deck,
+            dialect=dialect_for_simulator_name(job.simulator),
+            identity=None,
+            trusted_job_artifact=True,
+        )
+        table = await services.answer_measurements(
+            source, section["value"], producer=services.run_producer(job, case)
+        )
+        case.measurement_facts = run_measurement_facts(table, names)
+
+    async def _check_subcircuit_nodes(self, execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` when its raw holds no node inside the deck's
+        subcircuits (``result_observations.subcircuit_nodes_not_saved``), read
+        off the raw's header and the deck as the run's simulator reads it."""
+        if case.raw_file is None:
+            return
+        found = await asyncio.to_thread(
+            _subcircuit_nodes_observation,
+            case.raw_file,
+            case.staged_deck,
+            services.run_producer(execution.job, case),
+            run_ngbehavior(self.simulator_class) if is_ngspice(self.simulator_class) else None,
+            case.circuit,
+        )
+        if found is not None:
+            case.observations.append(dict(found))
+
+    async def _check_saves(self, execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` which entries of its deck's ``.save`` list its raw
+        does not hold (``result_observations.saves_not_stored``), read as
+        the lint reads them before the run."""
+        if case.raw_file is None:
+            return
+        found = await asyncio.to_thread(
+            _saves_observation,
+            case.raw_file,
+            case.staged_deck,
+            services.run_producer(execution.job, case),
+            run_ngbehavior(self.simulator_class) if is_ngspice(self.simulator_class) else None,
+            case.circuit,
+        )
+        if found is not None:
+            case.observations.append(dict(found))
 
     @staticmethod
     async def _check_raw_names(execution: _Execution, case: ExperimentCase) -> None:
@@ -2112,7 +2345,17 @@ class ExperimentRunner(RunnerBase):
         # which is guarded on "not terminal" alone. Say which one happened
         # rather than assume the case never started: an accounting message that
         # can be false is how a completed run gets read as one that never ran.
-        launched = case.submitted_at is not None
+        # A case still ``submitted`` was stamped but its launch never returned:
+        # a recoverable launch a stop refused while its record was written. It
+        # keeps its stamp (the record may hold its launch intent), and it counts
+        # as submitted, but no simulator started. A case whose launch returned
+        # is ``running`` by the time anything can stop it.
+        if case.submitted_at is None:
+            stage = "unsubmitted"
+        elif case.status == "submitted":
+            stage = "launching"
+        else:
+            stage = "launched"
         if execution.stop_reason == OWNER_STOPPED:
             # The words a reader of the record writes when the process died
             # (``stop_for_owner``), which cannot tell a launched case from one
@@ -2126,11 +2369,14 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "failed",
                 code="job_deadline",
-                error=(
-                    "The experiment deadline elapsed while this case was running"
-                    if launched
-                    else "The experiment deadline elapsed before this case was submitted"
-                ),
+                error={
+                    "launched": "The experiment deadline elapsed while this case was running",
+                    "launching": (
+                        "The experiment deadline elapsed while this case's launch was "
+                        "being recorded; its simulator was not started"
+                    ),
+                    "unsubmitted": "The experiment deadline elapsed before this case was submitted",
+                }[stage],
             )
         else:
             self._mark_case(
@@ -2138,11 +2384,14 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "cancelled",
                 code="cancelled",
-                error=(
-                    "Cancelled after the simulator was launched"
-                    if launched
-                    else "Cancelled before submission"
-                ),
+                error={
+                    "launched": "Cancelled after the simulator was launched",
+                    "launching": (
+                        "Cancelled while its launch was being recorded; its simulator "
+                        "was not started"
+                    ),
+                    "unsubmitted": "Cancelled before submission",
+                }[stage],
             )
 
     def _reconcile_unfinished_cases(self, execution: _Execution) -> None:
@@ -2490,8 +2739,12 @@ def _progress_fact(
     }
 
 
-async def live_run_progress(job: ExperimentJob) -> dict[str, dict[str, Any]]:
-    """A ``run_progress`` observation for each case of ``job`` still running.
+async def live_run_progress(
+    job: ExperimentJob, *, case_ids: Collection[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    """A ``run_progress`` observation for each case of ``job`` still running,
+    or with ``case_ids``, for each of those cases still running (the refusal of
+    a read of one, ``services.case_refusal``).
 
     Keyed by case id, for a receipt to attach to the cases that are still
     running when it is built. Read when someone asks for the job, never on a
@@ -2512,7 +2765,7 @@ async def live_run_progress(job: ExperimentJob) -> dict[str, dict[str, Any]]:
             (moment - case.submitted_at).total_seconds() if case.submitted_at else None,
         )
         for case in job.cases
-        if case.status in ACTIVE_CASE_STATUSES
+        if case.status in ACTIVE_CASE_STATUSES and (case_ids is None or case.case_id in case_ids)
     ]
     if not targets:
         return {}
@@ -2533,3 +2786,61 @@ def _read_live_progress(
                 case_id, run_index, *read, code="run_progress", running_s=running_s
             )
     return observations
+
+
+def _saves_observation(
+    raw: Path, deck: Path, producer: Producer, ngbehavior: str | None, circuit: str
+) -> Observation | None:
+    """``saves_not_stored`` for a run: its deck's ``.save`` list as the lint
+    reads it for ``producer`` (``lint_rules.save_list``), against the traces
+    its raw's header holds. None for a deck with no ``.save`` list, and where
+    the raw or the deck cannot be read, which other observations report."""
+    from ltspice_mcp.lib.device_names import naming_for
+    from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.lint_rules import save_list
+    from ltspice_mcp.lib.raw_parser import first_plot_traces
+    from ltspice_mcp.lib.result_observations import saves_not_stored
+
+    traces = first_plot_traces(raw)
+    if traces is None:
+        return None
+    try:
+        text = read_spice_text(deck)
+    except OSError:
+        return None
+    saves = save_list(text, deck, producer, ngbehavior=ngbehavior)
+    if saves is None:
+        return None
+    return saves_not_stored(saves, traces, naming_for(producer), circuit=circuit)
+
+
+def _subcircuit_nodes_observation(
+    raw: Path, deck: Path, producer: Producer, ngbehavior: str | None, circuit: str
+) -> Observation | None:
+    """``subcircuit_nodes_not_saved`` for a run: the traces its raw's header
+    holds, and the deck flattened as ``producer`` reads it, with whether it
+    has a ``.save`` card. None for a run on another family, and where the raw
+    or the deck cannot be read, which other observations report."""
+    from ltspice_mcp.errors import NetlistError
+    from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+    from ltspice_mcp.lib.netlist_graph import (
+        NetlistGraphError,
+        flatten_graph,
+        parse_netlist_graph,
+    )
+    from ltspice_mcp.lib.raw_parser import first_plot_traces
+    from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head
+
+    if producer.family not in SUPPORTED_FAMILIES:
+        return None
+    traces = first_plot_traces(raw)
+    if traces is None:
+        return None
+    try:
+        profile = SemanticProfile.of(producer, ngbehavior)
+        graph = parse_netlist_graph(deck, reader=profile)
+        flat = flatten_graph(graph)
+    except (NetlistError, NetlistGraphError, SpiceLexError, OSError, ValueError):
+        return None
+    saves = any(directive_head(card) == ".save" for card in graph.directives)
+    return subcircuit_nodes_not_saved(flat, traces, profile.names, saves=saves, circuit=circuit)

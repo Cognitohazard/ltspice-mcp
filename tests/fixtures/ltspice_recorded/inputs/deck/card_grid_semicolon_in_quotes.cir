@@ -1,0 +1,5 @@
+* a semicolon inside the quoted name of an included file
+I01 0 n01 1
+.include "card_grid;quoted.inc"
+.op
+.end

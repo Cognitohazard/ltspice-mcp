@@ -29,8 +29,8 @@ import jsonschema
 import pytest
 
 from ltspice_mcp.errors import InvalidCursorError, RecipeInvalidError
-from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
+from ltspice_mcp.lib.presenter import open_record
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import _base, get_tools
 from ltspice_mcp.tools.experiments import (
@@ -39,7 +39,6 @@ from ltspice_mcp.tools.experiments import (
     _validate_attached_analysis,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from ltspice_mcp.tools.jobs import _decode_jobs_cursor
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
@@ -673,7 +672,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # ngspice per sample so the deck's own random functions, a PDK's
     # statistical models among them, vary from sample to sample, and lets an
     # entry's rules be empty. Measured 17,527.
-    "run_experiments": 17540,
+    # Raised by about 50 characters for a pointer from variations to the guide
+    # section that states a case's id and the order of cases, which a caller
+    # may write ids against before the job runs. Measured 17,587.
+    "run_experiments": 17590,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -735,7 +737,15 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 40 characters: thd's harmonics is held at its cap rather
     # than refused, so its description names the cap the dropped maximum
     # stated, and what the count is. Measured 21,321.
-    "analyze_results": 21330,
+    # Raised by about 165 characters for tone's frequency_param, which reads
+    # each case of a frequency sweep at its own frequency in one recipe instead
+    # of one recipe per frequency with case filters. Measured 21,494.
+    # Raised by about 615 characters for the time_steps recipe, which reports
+    # each run's smallest time step and where it falls, and the steps below a
+    # size, in one call instead of loading every run's time axis into numpy;
+    # its reduce, field and spec let a sweep be judged on its smallest step.
+    # Measured 22,110.
+    "analyze_results": 22150,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -784,7 +794,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # cursor: where a window's copy of a sheet differs from the file in more
     # than 25 entries a side, the listing counted the rest and no call read
     # them. Most of it is the three fields' structure. Measured 12,134.
-    "inspect": 12140,
+    # Raised by about 400 characters for the symbol query's rotation (its
+    # eight-name enum) and the guide query's heading, which ask for one
+    # placement's pins or one heading's part instead of all eight or the whole
+    # section. Measured 12,540.
+    "inspect": 12545,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -885,7 +899,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 320 characters so step takes the {axis, value} selector
     # analyze_results takes, and plot_index takes null, as in every other
     # tool. Measured 4,977.
-    "plot_waveform": 4980,
+    # Raised by about 390 characters for runs, which draws several cases of a
+    # job in one chart in the grammar an analyze_results source takes (its
+    # union with the {case_ids} object is most of it), and a clause in the
+    # description so a host asked to compare a sweep's cases finds it.
+    # Measured 5,366.
+    "plot_waveform": 5370,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
@@ -1082,12 +1101,22 @@ class TestCursorTamperOnEveryPaginatedInput:
 
     def test_jobs_cursor_rejects_garbage(self):
         with pytest.raises(InvalidCursorError) as exc:
-            _decode_jobs_cursor("not-a-cursor")
+            open_record("not-a-cursor", kind="job_runs")
         assert exc.value.code == "invalid_cursor"
 
-    def test_analyze_cursor_rejects_garbage(self):
+    def test_analyze_cursor_rejects_garbage(self, tmp_path):
+        from ltspice_mcp.lib import presenter
+        from ltspice_mcp.lib.store import Store
+        from ltspice_mcp.tools.analyze import OUTPUT_SCHEMA
+
         with pytest.raises(InvalidCursorError):
-            result_store.cursor_result_set_id("not-a-cursor")
+            presenter.open_page(
+                "not-a-cursor",
+                OUTPUT_SCHEMA,
+                tool="analyze_results",
+                store=Store(tmp_path),
+                gone="",
+            )
 
     def test_shared_view_paginator_rejects_garbage(self):
         # Backs both inspect (net/symbols/components/model) and edit_schematic

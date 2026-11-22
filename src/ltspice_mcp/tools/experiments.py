@@ -92,7 +92,8 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
-from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer
+from ltspice_mcp.lib.said_once import Delivery
+from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer, session_ltspice_builds
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
@@ -101,7 +102,6 @@ from ltspice_mcp.lib.simulator import (
     simulator_library_roots,
 )
 from ltspice_mcp.lib.simulator_build import Producer, SimulatorExecutable, executable_identity
-from ltspice_mcp.lib.spice_lex import definition_rule
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -138,6 +138,7 @@ from ltspice_mcp.tools._base import (
     failure_text,
     format_response,
     outcome_of,
+    present_job_answer,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -151,8 +152,8 @@ from ltspice_mcp.tools.analyze import (
 from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     finalize_receipt,
+    receipt_parts,
     render_receipt_snapshot,
-    render_run_receipt,
     resolve_run_fields,
     runs_page,
     snapshot_receipt,
@@ -233,8 +234,8 @@ class ExperimentExecution(StrictModel):
         default=False,
         strict=True,
         description=(
-            "When the runs finish, copy each sheet's results beside it, under its name, "
-            "for LTspice to open. One case per sheet; LTspice only; not with recoverable."
+            "When the runs finish, copy each sheet's or netlist's results beside it, under "
+            "its name. One case per results file; LTspice only; not with recoverable."
         ),
     )
 
@@ -587,7 +588,7 @@ class RunExperimentsInput(ToolInput):
             "holds a target fixed. At most one "
             "'random' entry adds Monte Carlo runs. Cases run in parallel — ask "
             "for the whole grid in one call. Empty runs each circuit as "
-            "authored."
+            "authored. Case ids and order: guide section 'variations'."
         ),
     )
     execution: ExperimentExecution = Field(
@@ -753,7 +754,8 @@ async def handle_run_experiments(
         )
         check_case_cap(projected, state.config.max_experiment_cases)
         if args.execution.results_beside_sheet:
-            check_request(
+            await asyncio.to_thread(
+                check_request,
                 [
                     (circuit.path, projected_case_count(circuit.circuit_id, args.variations))
                     for circuit in circuit_inputs
@@ -776,7 +778,7 @@ async def handle_run_experiments(
             )
         except DeckStagingError as exc:
             return await _routing_failure_response(
-                args, circuit_inputs, exc, projected, budget=budget
+                args, circuit_inputs, exc, projected, budget=budget, state=state
             )
         await asyncio.to_thread(route.output_folder.mkdir, parents=True, exist_ok=True)
 
@@ -1032,12 +1034,31 @@ async def handle_run_experiments(
 async def _render_static_run_receipt(
     data: dict[str, Any],
     budget: ResponseBudget,
+    state: SessionState,
     *,
     is_error: bool = False,
+    run_fields: list[str] | None = None,
+    delivery: Delivery = "run",
+    rows: list[dict[str, Any]] | None = None,
 ) -> types.CallToolResult:
-    return await render_run_receipt(
-        budget, lambda _limit, _rung: copy.deepcopy(data), is_error=is_error
+    """A receipt built without a snapshot (a failure's), through the
+    presenter: one with a job keeps its run rows behind the job's record, and
+    one with none stores its cut rows."""
+    reply = await present_job_answer(
+        lambda: copy.deepcopy(data),
+        receipt_parts(
+            run_fields,
+            rows=rows if rows is not None else data.get("runs", {}).get("items", []),
+        ),
+        tool="run_experiments",
+        schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
+        budget=budget,
+        state=state,
+        delivery=delivery,
     )
+    result = format_response(reply)
+    result.is_error = is_error
+    return result
 
 
 def _job_reader(
@@ -1127,6 +1148,7 @@ async def _prepare_circuit(
             # job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
             cp1252_reader=cp1252_reader,
+            stated_builds=await asyncio.to_thread(session_ltspice_builds, state),
         )
         findings = (
             []
@@ -1187,7 +1209,7 @@ async def _prepare_circuit(
             semantic_profile=(
                 SemanticProfile.of(reader, mode) if dialect in SUPPORTED_FAMILIES else None
             ),
-            definitions=definition_rule(reader),
+            family=reader.family,
             record_source_lineage=native is not None or args.execution.recoverable,
         )
         # A recoverable run records its cards' sources by the hierarchy
@@ -1578,16 +1600,13 @@ async def _dwell_and_respond(
         lint_by_circuit=lint_by_circuit,
     )
 
-    def build(limit: int, rung: response_budget.Rung | None) -> dict[str, Any]:
+    def build() -> dict[str, Any]:
         data = render_receipt_snapshot(
             snapshot,
             control_token=receipt.control_token,
             provenance=provenance,
             run_fields=run_fields,
-            runs_cap=limit,
             analysis_fields=analysis_fields,
-            analysis_answer_channel=rung is not None and rung.answer_channel,
-            analysis_rows_cap=limit if rung is not None and rung.shrink else None,
             analysis_served=frozenset(state.tool_dispatch),
         )
         data["replayed"] = receipt.replayed
@@ -1595,7 +1614,18 @@ async def _dwell_and_respond(
             data["warnings"] = [*warnings, *data.get("warnings", [])]
         return finalize_receipt(data)
 
-    return await render_run_receipt(budget, build)
+    return format_response(
+        await present_job_answer(
+            build,
+            receipt_parts(run_fields, snapshot, analysis_fields=analysis_fields),
+            tool="run_experiments",
+            schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
+            budget=budget,
+            state=state,
+            # A replay is how a caller recovers a reply it lost: sent in full.
+            delivery="replay" if receipt.replayed else "run",
+        )
+    )
 
 
 def _append_terminal_cases(
@@ -1668,6 +1698,7 @@ async def _routing_failure_response(
     projected: int,
     *,
     budget: ResponseBudget,
+    state: SessionState,
 ) -> types.CallToolResult:
     cases: list[ExperimentCase] = []
     for circuit in circuits:
@@ -1703,7 +1734,8 @@ async def _routing_failure_response(
             # completeness reconciliation did report.
             "outcome": outcome_of(failures),
             "completeness": completeness,
-            "lint": [{"circuit": circuit.circuit_id, "findings": []} for circuit in circuits],
+            # Lint lists only the circuits with findings, and this pass found none.
+            "lint": [],
             "failures": failures,
             "hint": (
                 "Configure an available Windows-native temp directory before "
@@ -1711,16 +1743,18 @@ async def _routing_failure_response(
             ),
         }
     )
+    data["runs"] = runs_page(cases, args.run_fields, warnings=data["warnings"])
     finalize_receipt(data)
-
-    def build(limit: int, _rung: response_budget.Rung | None) -> dict[str, Any]:
-        rendered = copy.deepcopy(data)
-        rendered["runs"] = runs_page(
-            cases, args.run_fields, cap=limit, warnings=rendered["warnings"]
-        )
-        return rendered
-
-    return await render_run_receipt(budget, build)
+    # No job holds these cases, so a cut of their rows is stored and named by
+    # its file, as every receipt is presented.
+    return await _render_static_run_receipt(
+        data,
+        budget,
+        state,
+        run_fields=args.run_fields,
+        # The facts on each case, which run_fields may project out of the rows.
+        rows=runs_page(cases)["items"],
+    )
 
 
 def submission_error_payload(
@@ -1780,7 +1814,7 @@ async def _error_response(
         commit_state=commit_state,
         hint=failure_text(failure, state),
     )
-    return await _render_static_run_receipt(data, budget, is_error=True)
+    return await _render_static_run_receipt(data, budget, state, is_error=True)
 
 
 async def _post_submit_error_response(
@@ -1858,7 +1892,13 @@ async def _post_submit_error_response(
     }
     finalize_receipt(data)
     try:
-        return await _render_static_run_receipt(data, budget, is_error=True)
+        return await _render_static_run_receipt(
+            data,
+            budget,
+            state,
+            is_error=True,
+            delivery="replay" if receipt.replayed else "run",
+        )
     except Exception as render_exc:
         # Non-recursive rescue boundary: no renderer or full payload builder is
         # called again after it fails. The minimum durable handles survive.

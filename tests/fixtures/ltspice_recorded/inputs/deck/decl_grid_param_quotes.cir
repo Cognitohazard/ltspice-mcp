@@ -1,0 +1,5 @@
+* a .param value in single quotes
+.op
+.param pq='8k'
+V01 n01 0 {pq}
+.end

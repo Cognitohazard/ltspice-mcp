@@ -116,8 +116,14 @@ class TestRelayObservations:
         assert len(obs) == 1
         assert obs[0]["code"] == "log_error"
         assert obs[0]["kind"] == "relay"
-        assert obs[0]["severity"] == "error"
+        # No condition names the line, so it carries no severity.
+        assert "severity" not in obs[0]
         assert obs[0]["evidence"]["log"] == "singular matrix"
+
+    def test_a_relayed_error_carries_the_simulators_own_word(self):
+        said = [{"code": "simulator_error", "first_text": "ERROR: x", "severity": "ERROR"}]
+        (obs,) = relay_observations({"errors": ["ERROR: x"]}, said)
+        assert obs["severity"] == "ERROR"
 
     def test_multiline_error_uses_first_line_as_detail(self):
         obs = relay_observations({"errors": ["file(3): bad\n.meas x\n^"]})
@@ -131,7 +137,7 @@ class TestRelayObservations:
     def test_meas_errors_surfaced(self):
         obs = relay_observations({"meas_errors": [{"directive": ".meas x vdb(o)"}]})
         assert obs[0]["code"] == "meas_parse_error"
-        assert obs[0]["severity"] == "error"
+        assert "severity" not in obs[0]
 
     def test_clean_summary_no_relay_observations(self):
         assert relay_observations({"measurements": {"vpp": 1.0}}) == []
@@ -173,13 +179,15 @@ class TestReconciliationObservations:
         assert obs[0]["evidence"]["reason"] == "failed"
 
     def test_ngspice_batch_skip_classified(self):
-        summary = {
-            "measurements": {},
-            "warnings": [
-                "ngspice does not evaluate .meas in batch mode when a rawfile is set (-b -r). Skipped: vpp"
-            ],
-        }
-        obs = reconciliation_observations(summary, {"meas": ["vpp"]})
+        """Read off the run's condition (ngspice-42: "No .measure possible in
+        batch mode (-b) with -r rawfile set!"), which carries no severity."""
+        said = [
+            {
+                "code": "measurement_skipped_batch",
+                "first_text": "No .measure possible in batch mode (-b) with -r rawfile set!",
+            }
+        ]
+        obs = reconciliation_observations({"measurements": {}}, {"meas": ["vpp"]}, said)
         assert obs[0]["evidence"]["reason"] == "skipped_in_batch_mode"
 
     def test_four_missing_when_no_fourier(self):
@@ -500,9 +508,76 @@ class TestSurfaceObservations:
         abort = [o for o in obs if o["code"] == "meas_batch_abort"]
         assert len(abort) == 1
         assert abort[0]["kind"] == "reconciliation"
-        assert "earlier" in abort[0]["detail"]
+        # No recording shows a build leaving the others unmeasured because one
+        # failed: the observation says so, and names what would settle it.
+        assert "is not established" in abort[0]["detail"]
+        assert "skips" not in abort[0]["detail"] and "abandon" not in abort[0]["detail"]
+        assert abort[0]["evidence"]["established"] is False
+        assert "settled_by" in abort[0]["evidence"]
         assert ".meas tran bad MAX I(Qnope)" in abort[0]["evidence"]["failed_directives"]
         assert set(abort[0]["evidence"]["missing"]) >= {"aaa_good", "zzz_good"}
+
+    def test_a_failed_directives_own_miss_is_no_batch_abort(self):
+        # LTspice XVII's log/meas_bad_syntax: the one .meas that cannot be
+        # taken is missing because of its own error; the others were measured.
+        # Its own miss is no phantom miss, so no batch abort is claimed.
+        summary = {
+            "meas_errors": [{"directive": ".meas tran broken find v(out at 0.5m"}],
+            "measurements": {"before": 1.0, "after": 0.0},
+        }
+        obs = surface_observations(
+            summary, requested={"meas": ["before", "Broken", "after"], "four": []}
+        )
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
+
+    def test_no_batch_abort_where_the_log_holds_a_measurement(self):
+        # Two .meas fail on XVII, which keeps one meas_errors entry for its one
+        # condition; the others were measured, so the batch was evaluated and
+        # the second failure's miss is no phantom either.
+        summary = {
+            "meas_errors": [{"directive": ".meas tran broken find v(out at 0.5m"}],
+            "measurements": {"before": 1.0, "after": 0.0},
+        }
+        obs = surface_observations(
+            summary, requested={"meas": ["before", "broken", "broken2", "after"], "four": []}
+        )
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
+
+    def test_an_error_naming_a_meas_is_relayed_once_as_the_meas(self):
+        block = ".meas tran broken find v(out at 0.5m\n  Error: FIND can not be evaluated."
+        summary = {
+            "errors": [block],
+            "meas_errors": [
+                {"directive": ".meas tran broken find v(out at 0.5m", "raw_block": block}
+            ],
+        }
+        said = [{"code": "measurement_error", "first_text": block, "severity": "Error"}]
+        relayed = [o for o in surface_observations(summary, said=said) if o["kind"] == "relay"]
+        assert [(o["code"], o.get("severity")) for o in relayed] == [("meas_parse_error", "Error")]
+
+    def test_an_ltspice_26_refusal_says_what_is_recorded(self):
+        # LTspice 26 refuses log/meas_bad_syntax with a deck message naming the
+        # card, with no word (a measurement_error condition): the observation
+        # says the deck was refused, which the recording establishes.
+        said = [
+            {
+                "code": "measurement_error",
+                "count": 1,
+                "first_text": 'x.cir(7): Expected ")" here.\n.meas tran broken FIND V(out AT 0.5m\n ^^^',
+                "channel": "log",
+            }
+        ]
+        obs = surface_observations(
+            {"measurements": {}},
+            requested={"meas": ["before", "broken", "after"], "four": []},
+            said=said,
+            reading="ltspice26",
+        )
+        (abort,) = [o for o in obs if o["code"] == "meas_batch_abort"]
+        assert "LTspice 26 refuses a deck" in abort["detail"]
+        assert abort["evidence"]["established"] is True
+        assert abort["evidence"]["failed_directives"] == [".meas tran broken FIND V(out AT 0.5m"]
+        assert abort["evidence"]["missing"] == ["before", "after"]
 
     def test_no_abort_link_without_parse_error(self):
         obs = surface_observations({"measurements": {}}, requested={"meas": ["vpp"], "four": []})
@@ -522,11 +597,9 @@ class TestSurfaceObservations:
         # ngspice batch-mode misses are classified skipped_in_batch_mode, a
         # different mechanism — a coincident parse error must not produce the
         # LTspice batch-abort causal claim.
-        summary = {
-            "meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}],
-            "warnings": ["ngspice batch mode skips .meas evaluation"],
-        }
-        obs = surface_observations(summary, requested={"meas": ["vpp"], "four": []})
+        summary = {"meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}]}
+        said = [{"code": "measurement_skipped_batch", "first_text": "No .measure possible"}]
+        obs = surface_observations(summary, requested={"meas": ["vpp"], "four": []}, said=said)
         assert all(o["code"] != "meas_batch_abort" for o in obs)
 
     def test_no_abort_link_when_misses_are_failed(self):

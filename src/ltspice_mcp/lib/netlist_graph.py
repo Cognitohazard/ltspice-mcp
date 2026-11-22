@@ -95,14 +95,14 @@ from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_nodes import GROUND, settled_node_kind
 from ltspice_mcp.lib.deck_staging import (
+    IncludeReference,
     card_sections,
     closure_depth,
-    in_other_section,
+    library_read,
     resolve_reference,
     scan_include_references,
 )
-from ltspice_mcp.lib.device_names import path_text
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.device_names import fold_name, path_text
 from ltspice_mcp.lib.format import (
     SAME_VALUE_RTOL,
     fold_micro_sign,
@@ -111,7 +111,6 @@ from ltspice_mcp.lib.format import (
 )
 from ltspice_mcp.lib.spice_lex import (
     Definition,
-    LexResult,
     SpiceCard,
     SpiceLexError,
     copies_by_name,
@@ -124,6 +123,12 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_ops import without_added_x, without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
+from ltspice_mcp.lib.stored_values import (
+    OtherReading,
+    StoredDeck,
+    read_stored_deck,
+    readings_of_cards,
+)
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.hierarchy import SemanticProfile
@@ -147,7 +152,7 @@ _GROUND = GROUND
 # Their pins share one role so a resistor authored "backwards" (b a instead of
 # a b) is still recognized as the same connection. Everything else keeps pin
 # order: a MOSFET's D/G/S/B, a source's +/-, a diode's anode/cathode all matter.
-_SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
+SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 
 # How deep the walk follows files that pull in other files. Which file and
 # section a directive names, whether a ``.lib`` inside a library declares a
@@ -344,6 +349,9 @@ class NetlistGraph:
     #: definitions' whose file (or section) defines subcircuits and nothing
     #: else, so what each brings is those definitions.
     definition_includes: tuple[SpiceCard, ...] = ()
+    #: Each value of the files read that a recorded LTspice build reads as
+    #: another number than the graph holds (``stored_values``).
+    readings: tuple[OtherReading, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -467,6 +475,10 @@ class NodePartitionDiff:
     reference_nets: tuple[str, ...]
     candidate_nets: tuple[str, ...]
     involved: tuple[str, ...]
+    #: Each pin in ``involved`` as ``(reference, pin number, its reference
+    #: net, its candidate net)``: the pin on one net that the correspondence
+    #: puts on another. Not part of the reply's mismatch row.
+    pins: tuple[tuple[str, int, str, str], ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -502,7 +514,7 @@ def _instance_port_detail(
         f"{ref} connects {len(nodes)} node(s) ({', '.join(nodes)}) but subcircuit "
         f"{subckt} declares {len(ports)} port(s) ({', '.join(ports)})."
     )
-    repeated = [node for node in nodes if node.casefold() == subckt.casefold()]
+    repeated = [node for node in nodes if fold_name(node) == fold_name(subckt)]
     if repeated:
         detail += (
             f" Node {repeated[0]!r} is the subcircuit's own name, so the card names "
@@ -605,8 +617,8 @@ class GraphComparison:
 def canon_net(name: str, reader: SemanticProfile, ports: Sequence[str] = ()) -> str:
     """Canonicalize a net name as a scope whose ports are ``ports`` reads it
     (none at the top level), to the deck's ``reader``: stripped and
-    lowercased, with ground (``deck_nodes``) as ``0``."""
-    n = name.strip().lower()
+    folded (``device_names.fold_name``), with ground (``deck_nodes``) as ``0``."""
+    n = fold_name(name.strip())
     kind = settled_node_kind(
         n, ports=ports, simulator=reader.simulator, ngbehavior=reader.ngbehavior
     )
@@ -615,8 +627,8 @@ def canon_net(name: str, reader: SemanticProfile, ports: Sequence[str] = ()) -> 
 
 def canon_ref(ref: str) -> str:
     """Canonicalize a reference for matching: drop the ``§`` marker
-    (``without_section_sign``), lowercase."""
-    return without_section_sign(ref).strip().lower()
+    (``without_section_sign``), folded (``device_names.fold_name``)."""
+    return fold_name(without_section_sign(ref).strip())
 
 
 def _normalize_value_text(text: str) -> str:
@@ -656,7 +668,7 @@ def _tokens_equal(a: str, b: str, rtol: float) -> bool:
 def _pin_role(type_letter: str, index: int) -> int:
     """Structural role of a terminal: collapse symmetric passive pins, else keep
     order. Two-terminal R/C/L pins share role 0; every other device is ordered."""
-    if type_letter in _SYMMETRIC_TWO_TERMINAL:
+    if type_letter in SYMMETRIC_TWO_TERMINAL:
         return 0
     return index
 
@@ -666,7 +678,7 @@ def _pin_role(type_letter: str, index: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
+def _load_cards(path_or_text: str | Path | StoredDeck) -> tuple[StoredDeck, Path | None]:
     """The cards a simulator reads from a netlist given as a filesystem path or
     as raw text (``spice_lex.lex_deck``: not its title line, nor a card after
     ``.END``).
@@ -674,12 +686,16 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
     A :class:`~pathlib.Path` is always read as a file. A ``str`` is treated as
     raw netlist text when it spans multiple lines or is long; otherwise, if it
     names an existing file, it is read — else it is lexed as text. The second
-    element is the file read (``None`` for bare text).
+    element is the file read (``None`` for bare text); text has no stored
+    bytes, so no reading of its values by another build.
 
     An ``.asc`` schematic is refused: lexed as SPICE, its ``SYMBOL``/``WIRE``
     lines read as element cards and the graph describes nothing. Its LTspice
     export is the netlist to compare.
     """
+    if isinstance(path_or_text, StoredDeck):
+        # A deck its caller already read, so both read the same bytes.
+        return path_or_text, path_or_text.path
     if isinstance(path_or_text, Path):
         return _cards_from_netlist_path(path_or_text), path_or_text
     text = path_or_text
@@ -690,15 +706,15 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
                 return _cards_from_netlist_path(candidate), candidate
         except OSError:
             pass
-    return lex_deck(text), None
+    return StoredDeck(text, "text", lex_deck(text), ()), None
 
 
-def _cards_from_netlist_path(path: Path) -> LexResult:
+def _cards_from_netlist_path(path: Path) -> StoredDeck:
     if is_asc(path):
         raise NetlistGraphError(
             f"{path.name} is an .asc schematic, not a netlist; compare its LTspice export"
         )
-    return lex_deck(read_spice_text(path))
+    return read_stored_deck(path)
 
 
 # Lex warnings that indicate the netlist structure itself is broken (as opposed
@@ -708,7 +724,7 @@ _STRUCTURAL_WARNING_MARKERS = ("unclosed", ".ends", "no preceding card")
 
 
 def parse_netlist_graph(
-    path_or_text: str | Path,
+    path_or_text: str | Path | StoredDeck,
     *,
     reader: SemanticProfile,
     base_dir: Path | None = None,
@@ -748,7 +764,8 @@ def parse_netlist_graph(
     ``.global`` net is its reading (``deck_nodes``), and which definition of
     a name defined twice it keeps in force.
     """
-    result, source = _load_cards(path_or_text)
+    stored, source = _load_cards(path_or_text)
+    result = stored.lexed
     cards = result.cards
 
     structural = [
@@ -771,6 +788,7 @@ def parse_netlist_graph(
         source=_DECK_SOURCE,
         strict=True,
         include_resolver=include_resolver,
+        encoding=stored.encoding if source is not None else None,
     )
     registry.settle()
 
@@ -798,6 +816,7 @@ def parse_netlist_graph(
         global_nets=frozenset(registry.global_nets),
         directives=directives,
         definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
+        readings=tuple(registry.readings),
     )
 
 
@@ -825,6 +844,8 @@ class _SubcktRegistry:
     #: section) read so far does.
     definitions_only: list[SpiceCard] = field(default_factory=list)
     files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
+    #: The readings of the values of every file read (``stored_values``).
+    readings: list[OtherReading] = field(default_factory=list)
 
     def register(self, definition: SubcktDef, source: str, scope: tuple[str, ...]) -> None:
         self.candidates.append((definition, source, scope))
@@ -930,7 +951,9 @@ def _collect_subckts(
     source: str,
     strict: bool,
     include_resolver: IncludeResolver | None = None,
-    section: str | None = None,
+    reference: IncludeReference | None = None,
+    referrer: str | None = None,
+    encoding: str | None = None,
 ) -> bool:
     """Walk ``cards`` in textual order, registering definitions and following
     includes; return whether they define subcircuits and nothing else.
@@ -938,8 +961,11 @@ def _collect_subckts(
     Order is what makes first-wins precedence correct: an include contributes its
     definitions at the position its directive appears, exactly as textual
     substitution would. ``cards`` are the ones a simulator reads, read from
-    ``origin``; ``section`` names the library section a ``.lib <file>
-    <section>`` selected, and a card in any other section is skipped. With
+    ``origin``; ``reference`` is the card that pulled the file in (None for
+    the deck), held in ``referrer`` (None for the deck), and of the file only
+    the cards the reader reads for it are walked
+    (``deck_staging.library_read``): one section's, every card, or none, and
+    then the record of what was not read says why. With
     ``strict`` the caller's own malformed card raises; for an included file
     it is downgraded to a :class:`MissingInclude` record so a third-party library
     cannot break the comparison.
@@ -957,8 +983,13 @@ def _collect_subckts(
             raise error
         sections = card_sections(cards, origin, closure_depth(depth))
         references = {
-            id(reference.card): reference
-            for reference in scan_include_references(cards, origin, depth=closure_depth(depth))
+            id(found.card): found
+            for found in scan_include_references(
+                cards,
+                origin,
+                family=registry.reader.library_reader.family,
+                depth=closure_depth(depth),
+            )
         }
     except SpiceLexError as exc:
         if strict:
@@ -970,16 +1001,35 @@ def _collect_subckts(
             MissingInclude(target=source, reason=f"malformed directive: {exc}")
         )
         return False
+    read = library_read(reference, sections, registry.reader.library_reader)
+    if read.unread is not None and reference is not None:
+        registry.missing.append(
+            MissingInclude(
+                reference.raw_path, read.unread, line=reference.card.line_start, source=referrer
+            )
+        )
+        return False
+    if encoding is not None:
+        # The values of the cards the reader reads, from a file with stored
+        # bytes (``encoding``, the codec it decoded as; None for text).
+        registry.readings.extend(
+            readings_of_cards(
+                [card for card, at in zip(cards, sections, strict=True) if read.reads(at)],
+                encoding,
+                file=origin,
+            )
+        )
+    section = reference.section if reference is not None else None
     wanted = section.casefold() if section is not None else None
     # A section the file does not declare: what the line brings is not known.
     only_definitions = wanted is None or wanted in {
         name.casefold() for name in sections if name is not None
     }
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
-        if in_other_section(card_section, section):
+        if not read.reads(card_section):
             continue
         # Every directive here could be split into parts (checked above).
-        registry.global_nets.update(name.lower() for name in global_names(card))
+        registry.global_nets.update(fold_name(name) for name in global_names(card))
         if card.kind == "subckt":
             try:
                 registry.register(
@@ -1006,14 +1056,13 @@ def _collect_subckts(
                 )
                 only_definitions = False
             continue
-        reference = references.get(id(card))
-        if reference is None:
+        included = references.get(id(card))
+        if included is None:
             if not card.scope and not _definition_neutral(card):
                 only_definitions = False
             continue
         defines_only = _follow_include(
-            reference.raw_path,
-            section=reference.section,
+            included,
             base_dir=base_dir,
             depth=depth,
             registry=registry,
@@ -1040,9 +1089,8 @@ def _definition_neutral(card: SpiceCard) -> bool:
 
 
 def _follow_include(
-    target: str,
+    reference: IncludeReference,
     *,
-    section: str | None,
     base_dir: Path | None,
     depth: int,
     registry: _SubcktRegistry,
@@ -1051,14 +1099,17 @@ def _follow_include(
     line: int,
     source: str | None,
 ) -> bool:
-    """Load one include target's definitions (only ``section``'s, when the
-    reference selects one), or record why it contributed none; return whether
-    it defines subcircuits and nothing else (False for one not read).
+    """Load the definitions of the file ``reference`` names (those of the
+    cards the reader reads for it, ``deck_staging.library_read``), or record
+    why it contributed none; return whether it defines subcircuits and
+    nothing else (False for one not read).
 
     ``line`` is the line of the directive that names it, and ``source`` the
     included file holding that directive (None for the deck itself), which a
     record of why it contributed nothing carries.
     """
+
+    target, section = reference.raw_path, reference.section
 
     def missing(reason: str) -> bool:
         registry.missing.append(MissingInclude(target, reason, line=line, source=source))
@@ -1092,14 +1143,20 @@ def _follow_include(
         # still being read is taken as doing more, since that is not known yet.
         return registry.files.get(selected, False)
     seen.add(selected)
+    if not path.is_file():
+        # What the reader reads instead, and why it is nothing.
+        why = library_read(reference, None, registry.reader.library_reader).unread
+        return missing(why or "not found")
     try:
-        included = lex_deck(read_spice_text(path), title=False)
+        stored = read_stored_deck(path, root=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         return missing(f"unreadable: {exc}")
+    included = stored.lexed
     registry.files[selected] = _collect_subckts(
         included.cards,
         origin=path,
-        section=section,
+        reference=reference,
+        referrer=source,
         base_dir=path.parent,
         depth=depth + 1,
         registry=registry,
@@ -1107,6 +1164,7 @@ def _follow_include(
         source=str(path),
         strict=False,
         include_resolver=include_resolver,
+        encoding=stored.encoding,
     )
     return registry.files[selected]
 
@@ -1174,7 +1232,8 @@ def _flatten(
 ) -> tuple[FlatNetlist, list[ArityError]]:
     """``flatten_graph``, or with ``arity`` a list, the lenient flattening
     ``compare_graphs`` falls back to, which records each port-arity mismatch
-    there and keeps that instance as a black box (see ``_expand``)."""
+    there and keeps that instance as a black box (see ``_expand``). A
+    recursive definition raises in either mode."""
     leaves: list[FlatComponent] = []
     calls: list[FlatCall] = []
     unresolved: set[str] = set()
@@ -1224,9 +1283,9 @@ def _expand(
     internal-net keys). ``unresolved`` collects the names of subcircuits an ``X``
     asked for but nothing defined.
 
-    With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`
-    and a recursive definition raises; with a list, the mismatch is recorded
-    there, and the instance, or one that recurses, is kept as a black-box leaf.
+    With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`;
+    with a list, the mismatch is recorded there and the instance is kept as a
+    black-box leaf. A recursive definition raises in either mode.
     """
 
     def resolve(net: str) -> str:
@@ -1265,10 +1324,12 @@ def _expand(
             )
             is_expandable = False
         elif model_key in stack:
-            if arity is None:
-                chain = " -> ".join((*stack, model_key))
-                raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
-            is_expandable = False
+            # Raised in both modes: a black box here would leave the part of the
+            # circuit under it uncompared with nothing to say so, and whether a
+            # recursive definition is an error would depend on whether an arity
+            # mismatch came first.
+            chain = " -> ".join((*stack, model_key))
+            raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
 
     if not is_expandable:
         out.append(
@@ -1319,8 +1380,8 @@ def _build_child_net_map(
     net, given a unique ``<prefix>/<net>`` name (prefix lowercased to stay
     consistent with canonical net names).
     """
-    key = f"{prefix.lower()}/"
-    bound = {port.casefold(): bound_ports[i] for i, port in enumerate(sub.ports)}
+    key = f"{fold_name(prefix)}/"
+    bound = {fold_name(port): bound_ports[i] for i, port in enumerate(sub.ports)}
     net_map: dict[str, str] = {}
     for child in sub.components:
         for net in child.nodes:
@@ -1338,7 +1399,7 @@ def _build_child_net_map(
             elif kind == "global":
                 net_map[net] = net
             elif kind == "port":
-                net_map[net] = bound[net.casefold()]
+                net_map[net] = bound[fold_name(net)]
             else:
                 net_map[net] = f"{key}{net}"
     return net_map
@@ -1855,6 +1916,8 @@ def _propagate_partition(
     fan_out: dict[str, tuple[set[str], set[str]]] = {}
     # shorts: candidate net -> (reference nets merged onto it, witnessing pins)
     shorts: dict[str, tuple[set[str], set[str]]] = {}
+    # Each witnessing pin's two nets, for NodePartitionDiff.pins.
+    pin_nets: dict[str, tuple[str, int, str, str]] = {}
 
     def equate(rnet: str, cnet: str, pin_ref: str, pin_idx: int) -> None:
         pin = f"{pin_ref}.{pin_idx + 1}"
@@ -1863,6 +1926,7 @@ def _propagate_partition(
             cand_nets, involved = fan_out.setdefault(rnet, (set(), set()))
             cand_nets.update({existing, cnet})
             involved.add(pin)
+            pin_nets[pin] = (pin_ref, pin_idx + 1, rnet, cnet)
             return
         other = bwd.get(cnet)
         if other is not None and other != rnet:
@@ -1871,6 +1935,7 @@ def _propagate_partition(
             ref_nets, involved = shorts.setdefault(cnet, (set(), set()))
             ref_nets.update({other, rnet})
             involved.add(pin)
+            pin_nets[pin] = (pin_ref, pin_idx + 1, rnet, cnet)
             return
         fwd[rnet] = cnet
         bwd[cnet] = rnet
@@ -1884,11 +1949,12 @@ def _propagate_partition(
     # resolved iteratively once one of their two nets is pinned down.
     ordered: list[tuple[FlatComponent, FlatComponent]] = []
     symmetric: list[tuple[FlatComponent, FlatComponent]] = []
-    for key in shared:
+    # In a fixed order, so which pins witness a mismatch is the same each time.
+    for key in sorted(shared):
         rc, cc = ref_by_ref[key], cand_by_ref[key]
         if len(rc.nodes) != len(cc.nodes):
             continue
-        if rc.type_letter in _SYMMETRIC_TWO_TERMINAL and len(rc.nodes) == 2:
+        if rc.type_letter in SYMMETRIC_TWO_TERMINAL and len(rc.nodes) == 2:
             symmetric.append((rc, cc))
         else:
             ordered.append((rc, cc))
@@ -1930,6 +1996,7 @@ def _propagate_partition(
             reference_nets=(rnet,),
             candidate_nets=tuple(sorted(cand_nets)),
             involved=tuple(sorted(involved)),
+            pins=tuple(pin_nets[pin] for pin in sorted(involved)),
         )
         for rnet, (cand_nets, involved) in sorted(fan_out.items())
     ]
@@ -1938,6 +2005,7 @@ def _propagate_partition(
             reference_nets=tuple(sorted(ref_nets)),
             candidate_nets=(cnet,),
             involved=tuple(sorted(involved)),
+            pins=tuple(pin_nets[pin] for pin in sorted(involved)),
         )
         for cnet, (ref_nets, involved) in sorted(shorts.items())
     ]

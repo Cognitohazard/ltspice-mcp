@@ -6,6 +6,7 @@ import asyncio
 import os
 import secrets
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -61,7 +62,13 @@ from ltspice_mcp.lib.recovery_records import (
     ProcessIdentity,
     RecoveryError,
 )
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, run_ngbehavior
+from ltspice_mcp.lib.redirect import same_location
+from ltspice_mcp.lib.simulator import (
+    dialect_for_simulator_name,
+    is_ngspice,
+    run_ngbehavior,
+    simulator_selector,
+)
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
 from ltspice_mcp.lib.store import OwnerLiveness, Store, path_digest, this_process_start_marker
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -271,7 +278,9 @@ def _verify_execution(job: ExperimentJob, store: Store, simulator: type) -> None
     for case in job.cases:
         if case.recovery is None:
             raise RecoveryError("recovery_record_invalid", "Case has no frozen input snapshot")
-        if case.recovery.inputs.lineage_root != root:
+        # By location, not spelling: the recorded root was spelled when the
+        # case was frozen, possibly by another process (``same_location``).
+        if not same_location(case.recovery.inputs.lineage_root, root):
             raise RecoveryError("recovery_record_invalid", "Case belongs to a different lineage")
         verify_case_inputs(
             case.recovery.inputs,
@@ -544,6 +553,7 @@ def _make_child(
     selected: set[str],
     store: Store,
     simulator: type,
+    offered: Mapping[str, type],
 ) -> ExperimentJob:
     recovery = _required_recovery(parent)
     child = experiment_store.deserialize_job(
@@ -551,6 +561,9 @@ def _make_child(
     )
     child.job_id = generate_id("exp")
     child.request_id, child.fingerprint = request_id, fingerprint
+    # The simulator this attempt runs on, which a record written before the
+    # selector was recorded does not name.
+    child.simulator_selector = simulator_selector(simulator, offered)
     child.control_token = secrets.token_urlsafe(32)
     child.store_path = store.job_record(child.job_id)
     owner = _current_owner()
@@ -589,7 +602,10 @@ def _make_child(
         case.submitted_at = case.completed_at = None
         case.simulator_version = None
         case.log_diagnostics = None
+        case.measurement_facts = None
         case.result_digest = None
+        # The steps its new run's results hold are read when that run ends.
+        case.steps = None
         case.observations = []
         prepare_seeded_driver(case, recovery.execution, store, recovery.root_job_id, simulator)
         prepare_case_startup(case, recovery.execution, store, recovery.root_job_id, simulator)
@@ -737,7 +753,14 @@ async def resume_experiment(
                 )
                 return ResumeReceipt(parent, False, None, False)
             child = await asyncio.to_thread(
-                _make_child, parent, resume_request_id, fingerprint, selected, store, simulator
+                _make_child,
+                parent,
+                resume_request_id,
+                fingerprint,
+                selected,
+                store,
+                simulator,
+                state.offered_simulators,
             )
             await asyncio.to_thread(
                 save_journal, store, add_child(journal, resume_request_id, fingerprint, child)

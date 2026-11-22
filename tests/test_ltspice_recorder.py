@@ -28,6 +28,7 @@ import pytest
 from ltspice_mcp.lib import pe_menu
 from tests import ltspice_recorder as recorder
 from tests._ltspice_recorded import installed_counterpart
+from tests._recorded_grids import grids, named_code_exists
 from tests.ltspice_recorder import (
     BEHAVIOUR_KEYS,
     FIXTURES,
@@ -307,7 +308,10 @@ class TestCaseList:
         unexplained = [
             key
             for key, behaviour in CASES.behaviours.items()
-            if not CASES.of(key) and not behaviour.evidence and not behaviour.unrecordable
+            if not CASES.of(key)
+            and not behaviour.evidence
+            and not behaviour.unrecordable
+            and not behaviour.pending
         ]
         assert not unexplained, (
             "every LTspice behaviour the server models needs a recording, or a written "
@@ -315,9 +319,14 @@ class TestCaseList:
         )
 
     def test_a_pending_behaviour_has_the_inputs_it_waits_to_record(self):
+        """Or, for one only a window shows, names the recorder that asks a
+        window (which has no inputs here): a file that is there."""
+        repo = Path(__file__).resolve().parent.parent
         for key, behaviour in CASES.behaviours.items():
-            if behaviour.pending:
-                assert CASES.of(key), f"{key} is pending but names no input to record"
+            if behaviour.pending and not CASES.of(key):
+                named = re.findall(r"tests/\w+\.py", behaviour.pending)
+                assert named, f"{key} is pending but names no input or recorder"
+                assert all((repo / name).is_file() for name in named), named
 
     def test_a_source_deck_names_the_case_folder_where_it_writes_dir(self, tmp_path: Path):
         """A deck can name a file of its own case by an absolute path; the
@@ -337,10 +346,16 @@ class TestCaseList:
                 assert "Nothing in the server models this yet" in behaviour.summary, key
             assert behaviour.model or behaviour.summary, f"{key} names no code"
             for name in behaviour.model:
-                path = (
-                    REPO / name if name.startswith("tests/") else REPO / "src/ltspice_mcp" / name
-                )
-                assert path.exists(), f"{key}: {name} is not in the repository"
+                # A module, or a name it defines that the recording is
+                # evidence for, beside it (``lib/log_parser.py:printed_form``).
+                module, _, function = name.partition(":")
+                assert named_code_exists(name), f"{key}: {name} is not in the repository"
+                if function:
+                    assert module in behaviour.model, f"{key}: {name} without its module"
+        # Every function a grid names is evidence of some behaviour's recording.
+        modelled = {name for behaviour in CASES.behaviours.values() for name in behaviour.model}
+        for key, grid in grids().items():
+            assert set(grid.functions) <= modelled, (key, set(grid.functions) - modelled)
 
     def test_a_case_can_start_the_build_in_a_folder_of_its_own(self, tmp_path: Path):
         """``cwd`` names a folder under the case's directory, which the

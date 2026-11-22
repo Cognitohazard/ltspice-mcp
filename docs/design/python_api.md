@@ -159,26 +159,44 @@ api.verify_circuit(**args)
 **Fields left out.** A result leaves out the fields that say nothing (an
 empty list or object, a null, a false flag), by the same rule and with the
 same kept fields as the tool's reply (`docs/design/mcp_surface.md`, §2,
-"Fields left out"), so a script and a tool call read one shape. Read a field
-that may be empty with a default, such as `row.get("assignments", {})`.
+"Fields left out"), so a script and a tool call read one shape. Reading a
+field the operation's output schema declares and the result left out gives the
+value the rule left out: an empty list, an empty object, `False`, or `None` for
+anything else, a field whose schema names no type among them. A sub-answer the
+answer beside it implies reads as that answer (`structurally_equivalent` is
+true beside `equivalent: true`). So `row["assignments"]` is `{}` for a run with
+no variation, and `result.get("failures")` is `[]`. The rule holds in nested
+objects and rows, a field one branch of the schema declares counts as declared
+(a `jobs` result answers `timed_out` for every action), and a raw page and an
+`ApiCallError`'s `payload` answer the same way. `get(key, default)` gives your
+default. Two kinds of key still raise `KeyError`: a key the schema does not
+declare, so a misspelt name fails, and a field the tool keeps even when empty
+(§2's kept fields, such as `export.diff_vs_prior`), whose absence means
+something else and is not answered. Everything else is the result as sent:
+`in`, `len`, iteration, equality, `repr` and `json.dumps` see only the fields
+the reply carried, so `"failures" in result` still tells whether the reply
+carried the field. `dict(result)`, `result.copy()` and `copy.copy(result)` give
+a plain dict at the top level, whose nested objects still answer;
+`copy.deepcopy` and `pickle` give plain dicts throughout.
 
 **Complete results.** Where an MCP tool pages or caps a result, the method
 returns all of it:
 
-- `analyze_results` runs the evaluation to completion in passes of up to
-  `[analysis] analysis_budget_s` each. Where the MCP tool would return partial
-  results and a `result_set_id`, the method starts the next pass. If reading
-  the sources and recording their content hashes and log diagnostics does not
-  finish within the first pass, the call raises `AnalysisDeadlineExceeded` and
-  creates no result set or cursor; retry the original request with fewer
-  sources or a larger `analysis_budget_s`. `result["results"]` has an entry
+- `analyze_results` returns the evaluation the MCP tool presents, whole: every
+  row and every failure, with no page or cursor. It has the tool's bound,
+  `[analysis] analysis_budget_s` over the whole call, and the same answer
+  when the bound ends it: each recipe left unevaluated fails alone with
+  `analysis_deadline`. If reading the sources and recording their content
+  hashes and log diagnostics does not finish within the bound, the call
+  raises `AnalysisDeadlineExceeded` and creates no result set; retry the
+  original request with fewer sources or a larger `analysis_budget_s`. `result["results"]` has an entry
   for every recipe, so `result["results"][key]` never raises for a recipe
   that failed: its rows are empty and a `No rows:` warning names the
   `failures` places that explain it.
-- `verify_circuit` returns every finding for each rule. The MCP tool lists at
-  most 25 findings of a rule and gives a rule with more a `findings_omitted`
-  entry, whose cursor `findings_cursor` takes to list the next ones; the
-  method takes `findings_cursor` only with `raw_page=True`.
+- `verify_circuit` returns every finding. The MCP tool sends them all when
+  its reply fits the reply target, and otherwise stores the complete answer
+  and cuts the findings, read on with `findings_cursor`; the method takes
+  `findings_cursor` only with `raw_page=True`.
 - `edit_schematic` applies the batch once and returns its views whole. The
   views are built inside the edit from the sheet it wrote, whose hash is the
   returned `sha256`, so a later edit by another session cannot appear in them.
@@ -381,10 +399,13 @@ example. It contains no JSON Schema syntax or `$ref` chains. It is a
 opened. It renders from the Pydantic models the call validates against, so it
 always matches them.
 
-**`Api.guide(section=None) -> str`** returns the guide the MCP server serves.
-With no argument it returns the core, which a session reads first, and the
-core's index of topic sections and task playbooks. Given a name from that
-index, it returns that part. It is a staticmethod for the same reason as
+**`Api.guide(section=None, heading=None) -> str`** returns the guide the MCP
+server serves. With no argument it returns the core, which a session reads
+first, and the core's index of topic sections and task playbooks. Given a name
+from that index, it returns that part. Given a `heading` of that section too,
+it returns that heading's part, as `inspect(kind: "guide")` does with its
+`heading`. An unknown heading raises a `ValueError` listing the section's
+headings, and a `heading` with no `section` raises a `ValueError` too. It is a staticmethod for the same reason as
 `reference()`, and returns the same text as `inspect(kind: "guide")` and the
 `spice://guide` resources. Its `python` section covers this interface.
 
@@ -473,7 +494,7 @@ raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
-raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform
+raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform, compressed_transient, subcircuit_nodes_not_saved, raw_names_disagree, saves_not_stored
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements("result.log")  # XOR: path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
@@ -521,10 +542,18 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   `partial_raw` for a stopped case's raw kept with
   `execution.keep_partial_raw`, whose values end where the run was stopped,
   and `coarse_compressed_waveform` for an LTspice transient that waveform
-  compression left with few points, as `analyze_results` reports it. It is
-  empty for a whole result. `measurements` and `device_op_points` return a
+  compression left with few points, as `analyze_results` reports it,
+  `compressed_transient` for a transient LTspice XVII saved with compression
+  on that is not that coarse, and `subcircuit_nodes_not_saved` for a job's run
+  whose raw holds no node inside the deck's subcircuits, and
+  `raw_names_disagree` for a job's run whose raw spells subcircuit members
+  otherwise than its deck was read, and `saves_not_stored` for a job's run
+  whose results hold nothing for a `.save` entry (with the entries it could
+  not check). It is empty for a whole result.
+  `measurements` and `device_op_points` return a
   `LogResult`, a plain `dict` that has the same `observations` for the log it
-  read.
+  read; `measurements` refuses a run whose measurements were not read, with
+  the reason its run row gives (`simulator_unsupported`, `log_unread`).
 - `step_count` counts a plot's steps as the tools count them, 1 for a run that
   is not stepped, and `steps` holds one parameter dict a step. A plot whose
   steps cannot be told apart is loaded, so its `signals`, `descriptor` (with
@@ -547,6 +576,15 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   results hold except the axis. It pairs signals by name, ignoring case; a
   node or device inside subcircuits is matched by its path, however each
   build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
+  Two results of one build's spelling and one kind of run (both a
+  schematic's, or both a deck's) name an instance alike, so a name both
+  write pairs first. The traces left pair by every instance path their names
+  may stand for: on a run of a schematic an instance written `s` is a part
+  the sheet names `S` or a card a directive writes, named `s` or `xs`. A
+  trace pairs with another when a reading of each is the same and neither
+  meets another trace so. One that meets more than one trace, or meets one
+  that another trace meets too, is not compared: it is listed under
+  `ambiguous` with the traces it meets, whether or not `signals` was given.
   `other_step` defaults to the step of `other` whose parameters match this
   step's, each value matched as a step selector matches it
   (`step_values.step_with`; step 0 of a result that is not stepped); a step
@@ -571,7 +609,15 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   builds). A device in a subcircuit is keyed by its path (`x1.m1`), where the
   table names it `x1:m1` on LTspice 26 and `m:1:1` on XVII (the device's
   letter, the instance's name without its X, and the device's name without
-  its letter). A value the log did not print as a finite number is `None`.
+  its letter). A block LTspice 26 exports as `X§U1` and XVII as `XU1` is
+  `xu1` on both (`xu1.d1`), where LTspice 26's table writes `u1:d1`. The
+  table's own name for each device is in `.table_names` (the result is a
+  `DeviceOpPoints`, a `LogResult` that adds it), by key, for a
+  caller quoting the log. Which build wrote the table is read from the job
+  case's record or, for a bare path, from the build the log's first line
+  names; a log whose first line names none was written by a build before 24,
+  which every log of LTspice 24 and later names. A value the log did not
+  print as a finite number is `None`.
   The result is empty when the log has no table. An ngspice log never has
   one, because ngspice writes the same parameters as traces of its raw; read
   them with `raw.value("@m1[gm]")`.
@@ -639,8 +685,13 @@ that name fails. A WHEN threshold written as a parameter, an expression
 or, on LTspice 26, a braced expression is the level a WHEN with no FIND
 searched for, not its result: `measurements()` marks the entry
 `unreadable`, and the row reads the crossing. Where it
-printed a number that is not finite (a gain margin of `infdB`),
-`row["value"]["not_finite"]` lists it. Where which field holds the result
+printed a number that is not finite (a gain margin of `infdB`), the value is
+null and `unreadable` quotes what it printed, on the row and on the entry,
+with the steps it concerns where that is not every step. Where the log
+printed a value once for a run of several steps (a stepped `.op`),
+`row["value"]["printed_once"][name]` and the entry's `printed_once` give how
+many steps the run had, the step whose value it is where that is
+established, and how to read the others. Where which field holds the result
 is not known, `row["value"]["answer_unknown"][name]` says why. Where what it
 printed is not established as the result (LTspice XVII prints `0` in a
 stepped table both for a failed step and for a crossing at 0 s),
@@ -685,8 +736,8 @@ cannot detect). Under `include.provenance`, each source reports
 `producing_dialect`, the simulator the records show produced the files.
 In a whole-log row, the dialect of the producing simulator can be absent.
 A log alone does not show that a simulator solve completed or that a case was
-produced; reads by job still check that the job is terminal and the case was
-produced.
+produced; a read by job still checks that the case's own run has finished
+and produced (`services.case_unreadable`), whatever the job's status.
 
 `ltspice_mcp.api` exports the AC and transient metric functions listed below.
 They take arrays and return dict- or TypedDict-shaped mappings; AC
@@ -701,6 +752,16 @@ functions take complex `H`, and axes are real.
   `analyze_disturbance_response`, `analyze_timing_between`, `analyze_periodic`,
   `analyze_thd`, `analyze_tone`, `compute_signal_stats`,
   `time_weighted_quantiles`, `compute_measurement_stats`.
+- `no_number_reasons(table, name)` gives, for each step of a measurement of
+  the table `Api.measurements()` returns, why it has no number: the name of
+  the row field that gives the reason (`failed_measurements`, `unreadable`,
+  `answer_unknown`, `not_established`), or None. `compute_measurement_stats`
+  takes these as `reasons={name: [...]}`, beside `result_numbers(entry)`,
+  each entry's results as the server reads them (the field its `answer`
+  names, nulls where the answer is unknown): its `failure_count` counts the
+  steps whose reason is `failed_measurements`, and its `no_number` counts the
+  rest by reason. A null it is given no reason for is counted under
+  `no_number.reason_not_given`, never as a failure.
 - `parse_spice_value` parses a SPICE literal such as `'5p'`. Variation values
   are passed and returned as SPICE literals, and no other function in
   `ltspice_mcp.api` parses one.
@@ -721,7 +782,8 @@ are the shapes the MCP tools return, so they change only when the tools'
 outputs change and are versioned with them. The docstrings of the §8
 functions fix their signatures, units and array conventions.
 
-`__all__` contains `Api`, `RawResult`, the exception types, the §8 functions,
+`__all__` contains `Api`, `RawResult`, `LogResult`, `DeviceOpPoints`, the
+exception types, the §8 functions,
 and these typing names:
 
 - aliases: `Quantity`, `SearchDirection`, `CrossingDirection` (defined
@@ -869,9 +931,14 @@ a call selects it with `execution={"simulator": "ltspice:xvii"}`
 (`docs/design/mcp_surface.md`, "Selecting a build"). A second process on the
 same working directory with its own `simulator_exe` also works; use it when
 the two builds must not share a process. Either way, each job records the
-executable its cases launched (`simulator_executable`) and each run records
-the build it reported (`simulator_version`), so the shared records show which
-build produced each result. A `request_id` reused from the other process, or
+selector it ran with and the executable its cases launched
+(`simulator_executable`), and each run records the build it reported
+(`simulator_version`), so the shared records show which build produced each
+result. A receipt, `wait()` and every `jobs()` reply name the job's simulator
+as that selector (`simulator`, `"ltspice:xvii"`), which a later call passes
+back as `execution={"simulator": ...}` to run the same executable; a session
+that has no simulator under that name says so in `simulator_notes`
+(`docs/design/mcp_surface.md`, "Selecting a build"). A `request_id` reused from the other process, or
 under another simulator name, replays only when it would launch the same build;
 otherwise the call fails with `idempotency_conflict`
 (`docs/design/mcp_surface.md`, "Replay is scoped to the simulator build").

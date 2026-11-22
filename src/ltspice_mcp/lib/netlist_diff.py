@@ -1,20 +1,28 @@
-"""Structural (node-blind) comparison of two netlists.
+"""Structural comparison of two netlists, element by element in each scope.
 
-What ``verify_circuit``'s ``structural_diff`` mode and the sidecar export's
+What ``verify_circuit``'s ``structural_diff`` mode and the export's
 ``diff_vs_prior`` report: components added, removed or changed, and directives
 added or removed. Both sides are netlists — an ``.asc`` is compared as its LTspice
 export — read with the foundation lexer, so a ``+`` continuation belongs to the
 card it continues and an inline comment is not part of it. The equivalence mode
 reads each directive with the same reader (:func:`parse_directive`,
-:func:`directive_delta`), so the two modes read a card the same way. What they
-compare differs, on purpose. A structural diff compares every directive card of
-the two files as written, a subcircuit body's among them and an included file's
-not. Equivalence compares the circuit as its wiring comparison resolves it,
-scope by scope (:func:`circuit_directive_delta`): a ``.param`` moved from a
-body to the top level is a difference there and not here, a definition moved
-into an include that only defines subcircuits is one here and not there, and a
-subcircuit the circuit does not call is compared here only. Tests named for each
-difference pin them (``tests/test_verify_circuit.py``).
+:func:`directive_delta`), so the two modes read a card the same way.
+
+An element or directive is its scope plus itself: the top level, or the
+``.subckt`` definition it sits in, a nested definition a scope of its own
+(:func:`read_deck`). A hierarchical sheet's export has a definition per block,
+and blocks reuse references (recorded: ``blocks/nested_sheet_beside_both``),
+so a reader keyed by bare reference merges them; the source scan in
+``tests/test_deck_reading_owners.py`` holds every such key to its scope. Both
+modes compare directives scope by scope, so a ``.param`` moved from a body to
+the top level is a difference in each. What they compare differs, on purpose.
+A structural diff compares the two files as written: every definition in them,
+a subcircuit the circuit does not call among them, and an included file's
+cards not at all. Equivalence compares the circuit its wiring comparison
+resolves (:func:`circuit_directive_delta`): a definition moved into an include
+that only defines subcircuits is a difference here and not there, and a
+subcircuit the circuit does not call is compared here only. Tests named for
+each difference pin them (``tests/test_verify_circuit.py``).
 
 Two rules keep the delta quiet when nothing changed:
 
@@ -26,14 +34,18 @@ Two rules keep the delta quiet when nothing changed:
   (at a path that differs per machine), and a parameterless default model such as
   ``.model NMOS NMOS`` per device class. The first two are left out of both sides;
   a default model is left out of the compared deck while the baseline declares no
-  model of that name — once it does, the two disagree about what the model is.
+  model of that name, in that scope or one around it — once it does, the two
+  disagree about what the model is.
 
-Components are matched by reference the way the equivalence mode matches them
-(``netlist_graph.canon_ref``), and across the ``X`` LTspice puts before a
-subcircuit instance's name on export (``netlist_graph.rekey_across_added_x``),
-which is listed as a rename and is not a difference. They are compared on their
-model or value plus their instance parameters. Nodes are left out on purpose:
-equivalence is the mode that compares wiring.
+Components are matched by reference within a scope the way the equivalence mode
+matches them (``netlist_graph.canon_ref``), and across the ``X`` LTspice puts
+before a subcircuit instance's name on export
+(``netlist_graph.rekey_across_added_x``), which is listed as a rename and is not
+a difference. They are compared on their model or value plus their instance
+parameters. Nodes are left out: equivalence is the mode that compares wiring,
+and the delta's ``not_compared`` says so. The export's ``diff_vs_prior`` adds
+the pins moved to another net, read from that wiring comparison
+(:func:`connection_delta`).
 """
 
 from __future__ import annotations
@@ -44,24 +56,36 @@ from dataclasses import dataclass, field
 from itertools import takewhile
 from pathlib import Path
 
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.deck_nodes import GROUND
+from ltspice_mcp.lib.device_names import fold_name
+from ltspice_mcp.lib.export_nets import named_by_export
 from ltspice_mcp.lib.format import fold_micro_sign
 from ltspice_mcp.lib.netlist_graph import (
     DIRECTIVE_CARD_KINDS,
+    SYMMETRIC_TWO_TERMINAL,
     FlatCall,
     NetlistGraph,
     canon_ref,
+    compare_graphs,
     rekey_across_added_x,
 )
 from ltspice_mcp.lib.spice_lex import (
+    INCLUDE_HEADS,
+    Definition,
+    DefinitionRule,
     SpiceCard,
     SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
+    find_matching_ends,
     lex_deck,
+    settle_definitions,
+    subckt_children,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
+from ltspice_mcp.lib.stored_values import OtherReading, StoredDeck, read_stored_deck
 
 # Directive cards whose assignments are a set: ``.param a=1 b=2`` and
 # ``.param b=2 a=1`` define the same thing. (A ``.model`` is read through its
@@ -86,9 +110,10 @@ _DIRECTIVE_KINDS = (DIRECTIVE_CARD_KINDS - {"control"}) | {"subckt", "ends"}
 
 
 def comparable(text: str) -> str:
-    """The equality form of a signature or directive: SPICE is case-insensitive,
-    and the micro signs mean the same ``u`` suffix."""
-    return fold_micro_sign(text).casefold()
+    """The equality form of a signature or directive: SPICE is case-insensitive
+    in ASCII (``device_names.fold_name``), and the micro signs mean the same
+    ``u`` suffix."""
+    return fold_name(fold_micro_sign(text))
 
 
 def instance_signature(card: SpiceCard) -> str:
@@ -190,24 +215,82 @@ def parse_directive(card: SpiceCard) -> Directive | None:
     return Directive(comparable(" ".join(words)), text)
 
 
-@dataclass(frozen=True)
-class Deck:
-    """A netlist as a structural diff reads it.
+#: A scope's key: the names of the definitions it is inside, outermost first,
+#: case-folded (empty for the top level).
+ScopeKey = tuple[str, ...]
 
+
+@dataclass
+class Scope:
+    """One scope of a deck as written: the top level, or one ``.subckt``
+    definition, nested ones each their own.
+
+    ``names`` are the definitions it is inside as written, outermost first.
     ``components`` maps a reference as the equivalence mode matches it
-    (``canon_ref``: LTspice's ``§`` instance marker dropped, case folded) to the
-    reference as written and its signature.
+    (``canon_ref``: LTspice's ``§`` instance marker dropped, case folded) to
+    the reference as written and its signature. ``directives`` are its own
+    directive cards. ``definitions`` holds the opener and closer of each
+    definition in it, by its name case-folded: they are compared with its
+    directives unless that name is not compared (``Deck.unread``).
     """
 
+    names: tuple[str, ...] = ()
     components: dict[str, tuple[str, str]] = field(default_factory=dict)
     directives: list[Directive] = field(default_factory=list)
+    definitions: dict[str, list[Directive]] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        """How a delta names the scope: the definitions it is inside, joined
+        with ``/`` (``OUTER/INNER``)."""
+        return "/".join(self.names)
 
 
-def _cards(source: str | Path) -> list[SpiceCard]:
+@dataclass(frozen=True)
+class Deck:
+    """A netlist as a structural diff reads it: its elements and directives,
+    each in its scope.
+
+    ``scopes`` holds the top level under ``()`` and each definition under its
+    :data:`ScopeKey`. ``unread`` holds the key and the name as written of
+    each definition the file gives more than once in one scope
+    (:func:`read_deck`), whose cards are in no scope.
+    ``includes`` is whether the file includes another (``.include``, or a
+    ``.lib`` other than the install's own), whose cards are not read.
+    """
+
+    scopes: dict[ScopeKey, Scope] = field(default_factory=lambda: {(): Scope()})
+    unread: tuple[tuple[ScopeKey, str], ...] = ()
+    includes: bool = False
+    #: Each value of the file that a recorded LTspice build reads as another
+    #: number than the diff compares (``stored_values``).
+    readings: tuple[OtherReading, ...] = ()
+
+
+#: A rule for :func:`spice_lex.settle_definitions` that keeps no definition
+#: of a name given more than once: a structural diff compares files as
+#: written and asks only which definitions share a scope and a name.
+_AS_WRITTEN = DefinitionRule(
+    "a structural diff", "unestablished", "unestablished", "unestablished"
+)
+
+#: The name the lexer gives the scope of a ``.subckt`` with no name.
+_NAMELESS = "<anon>"
+
+
+def _cards(
+    source: str | Path | StoredDeck,
+) -> tuple[list[SpiceCard], tuple[OtherReading, ...]]:
     """The cards a simulator reads of a netlist, a path or its text
-    (``spice_lex.lex_deck``): not its title line, nor a card after ``.END``."""
-    text = read_spice_text(source) if isinstance(source, Path) else source
-    return lex_deck(text).cards
+    (``spice_lex.lex_deck``): not its title line, nor a card after ``.END``;
+    and, for a file, the readings of its values another build makes
+    (``stored_values``). Text has no stored bytes, so none."""
+    if isinstance(source, StoredDeck):
+        return source.lexed.cards, source.readings
+    if isinstance(source, Path):
+        stored = read_stored_deck(source)
+        return stored.lexed.cards, stored.readings
+    return lex_deck(source).cards, ()
 
 
 def _directive_of(card: SpiceCard) -> Directive | None:
@@ -223,21 +306,69 @@ def _directive_of(card: SpiceCard) -> Directive | None:
     return None
 
 
-def read_deck(source: str | Path) -> Deck:
+def read_deck(source: str | Path | StoredDeck) -> Deck:
     """Read a netlist (a path, or its text) for a structural diff: the cards a
     simulator reads (``spice_lex.lex_deck``), so not its title line, nor a
-    card after ``.END``.
+    card after ``.END``, each in its scope.
+
+    A definition's body is read by span (``spice_lex.subckt_children``), as
+    the netlist graph reads one, so a definition nested in another is a scope
+    of its own and a definition of one name in another scope is another
+    scope. A name the file defines more than once in one scope is not read:
+    which of them stands for which on the other side is not known (a
+    simulator keeps one in force, ``spice_lex.settle_definitions``, but a
+    structural diff compares files as written), so its cards are in no scope
+    and ``Deck.unread`` names it.
 
     Raises what reading the file raises; a caller decides what an unreadable
     deck means for its comparison.
     """
-    deck = Deck()
-    for card in _cards(source):
-        if card.kind == "instance" and card.name:
-            deck.components[canon_ref(card.name)] = (card.name, instance_signature(card))
-        elif (directive := _directive_of(card)) is not None:
-            deck.directives.append(directive)
-    return deck
+    cards, readings = _cards(source)
+    openers = [(i, card) for i, card in enumerate(cards) if card.kind == "subckt"]
+    # Which definitions share a scope and a name: settle_definitions' groups.
+    settled = settle_definitions(
+        [Definition(card.scope, card.name or _NAMELESS, "", True) for _i, card in openers],
+        _AS_WRITTEN,
+    )
+    twice = {answer.key: answer.name for answer in settled if len(answer.members) > 1}
+    scopes: dict[ScopeKey, Scope] = {(): Scope()}
+    includes = False
+
+    def read(children: list[tuple[int, SpiceCard]], key: ScopeKey, scope: Scope) -> None:
+        nonlocal includes
+        bounds: dict[int, str] = {}
+        for i, card in children:
+            if card.kind != "subckt":
+                continue
+            name = card.name or _NAMELESS
+            folded = name.casefold()
+            closer = find_matching_ends(cards, i)
+            bounds.update({i: folded, **({closer: folded} if closer is not None else {})})
+            if (key, folded) in twice:
+                continue
+            inner = Scope((*scope.names, name))
+            scopes[(*key, folded)] = inner
+            read(list(subckt_children(cards, i)), (*key, folded), inner)
+        for i, card in children:
+            if i in bounds:
+                if (key, bounds[i]) not in twice and (directive := _directive_of(card)):
+                    scope.definitions.setdefault(bounds[i], []).append(directive)
+            elif card.kind == "instance" and card.name:
+                scope.components[canon_ref(card.name)] = (card.name, instance_signature(card))
+            elif (directive := _directive_of(card)) is not None:
+                scope.directives.append(directive)
+                if card.kind == "directive" and directive_head(card) in INCLUDE_HEADS:
+                    includes = True
+
+    read([(i, c) for i, c in enumerate(cards) if not c.scope], (), scopes[()])
+    paths = {(*key[0], key[1]): name for key, name in twice.items()}
+    # One inside a definition already left out is no news of its own.
+    unread = tuple(
+        (path, name)
+        for path, name in paths.items()
+        if not any(path[:depth] in paths for depth in range(1, len(path)))
+    )
+    return Deck(scopes, unread, includes, readings)
 
 
 def circuit_directive_delta(
@@ -326,26 +457,195 @@ def directive_delta(
     return added, removed
 
 
-def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
-    """The added/removed/changed component and directive delta, baseline → compared.
+#: What a structural diff never compares: which net each pin is on.
+CONNECTIONS_NOT_COMPARED = (
+    "connections: which net each pin is on is not compared; compare in "
+    "equivalence mode to compare wiring"
+)
 
-    ``components_renamed`` lists the components matched only across LTspice's
-    added ``X``; it is the one list here that is not a difference.
+#: What a structural diff does not read: the files a deck includes.
+INCLUDES_NOT_COMPARED = (
+    "included files: the cards of a file a deck includes (.include, .lib) are "
+    "not read; only the line that includes it is compared"
+)
+
+
+def _in(scope: Scope) -> str:
+    """The suffix an entry for an element or directive in ``scope`` carries."""
+    return f" (in .subckt {scope.label})" if scope.names else ""
+
+
+def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
+    """The added/removed/changed component and directive delta, baseline →
+    compared, scope by scope.
+
+    An element or directive is its scope plus itself: the top level, or the
+    definition it sits in, paired with the definition of the same name in the
+    same scope on the other side (a definition only one side has is all
+    added or removed). An entry inside a definition says which: a string ends
+    in ``(in .subckt NAME)``, an object carries ``subckt``, nested
+    definitions joined with ``/``. ``components_renamed`` lists the
+    components matched only across LTspice's added ``X``; it is the one list
+    here that is not a difference. ``not_compared`` says what was not
+    compared: a definition either deck gives more than once in one scope, and
+    included files' cards.
     """
-    a = baseline.components
-    b, renamed = rekey_across_added_x(a, compared.components)
-    directives_added, directives_removed = directive_delta(
-        baseline.directives, compared.directives
-    )
+    added: list[str] = []
+    removed: list[str] = []
+    renamed: list[dict[str, str]] = []
+    changed: list[dict[str, str]] = []
+    directives_added: list[str] = []
+    directives_removed: list[str] = []
+    # A definition either deck gives more than once in one scope is compared
+    # on neither side: which stands for which is not known.
+    unread = {key for deck in (baseline, compared) for key, _name in deck.unread}
+    for key in sorted(baseline.scopes.keys() | compared.scopes.keys()):
+        if any(key[:depth] in unread for depth in range(1, len(key) + 1)):
+            continue
+        before = baseline.scopes.get(key)
+        after = compared.scopes.get(key)
+        scope = after or before
+        assert scope is not None
+        suffix = _in(scope)
+        where = {"subckt": scope.label} if scope.names else {}
+        a = before.components if before else {}
+        b, paired = rekey_across_added_x(a, after.components if after else {})
+        added += sorted(b[ref][0] + suffix for ref in b.keys() - a.keys())
+        removed += sorted(a[ref][0] + suffix for ref in a.keys() - b.keys())
+        renamed += [{"before": a[ref][0], "after": b[ref][0], **where} for ref in paired]
+        changed += [
+            {"reference": b[ref][0], **where, "before": a[ref][1], "after": b[ref][1]}
+            for ref in sorted(a.keys() & b.keys())
+            if comparable(a[ref][1]) != comparable(b[ref][1])
+        ]
+        # A model the baseline declares in a scope around this one is seen
+        # in it, so a default model declared here stands in for it.
+        visible = {
+            d.model
+            for depth in range(len(key))
+            for d in baseline.scopes.get(key[:depth], Scope()).directives
+            if d.model is not None
+        }
+        more, fewer = directive_delta(
+            _own_directives(before, key, unread),
+            _own_directives(after, key, unread),
+            visible=visible,
+        )
+        directives_added += [text + suffix for text in more]
+        directives_removed += [text + suffix for text in fewer]
+    sides: dict[ScopeKey, tuple[str, list[str]]] = {}
+    for side, deck in (("baseline", baseline), ("compared", compared)):
+        for key, name in deck.unread:
+            sides.setdefault(key, ("/".join((*_names(deck, key[:-1]), name)), []))[1].append(side)
+    not_compared = [
+        f".subckt {label} is defined more than once in one scope in the "
+        f"{' and '.join(where)} deck{'s' if len(where) > 1 else ''}, so no definition of that name there was "
+        "compared on either side"
+        for _key, (label, where) in sorted(sides.items())
+    ]
+    if baseline.includes or compared.includes:
+        not_compared.append(INCLUDES_NOT_COMPARED)
     return {
-        "components_added": sorted(b[key][0] for key in b.keys() - a.keys()),
-        "components_removed": sorted(a[key][0] for key in a.keys() - b.keys()),
-        "components_renamed": [{"before": a[key][0], "after": b[key][0]} for key in renamed],
-        "components_changed": [
-            {"reference": b[key][0], "before": a[key][1], "after": b[key][1]}
-            for key in sorted(a.keys() & b.keys())
-            if comparable(a[key][1]) != comparable(b[key][1])
-        ],
+        "components_added": added,
+        "components_removed": removed,
+        "components_renamed": renamed,
+        "components_changed": changed,
         "directives_added": directives_added,
         "directives_removed": directives_removed,
+        "not_compared": not_compared,
     }
+
+
+def _names(deck: Deck, key: ScopeKey) -> tuple[str, ...]:
+    """The names as written of the definitions scope ``key`` is inside."""
+    scope = deck.scopes.get(key)
+    return scope.names if scope is not None else key
+
+
+def _own_directives(scope: Scope | None, key: ScopeKey, unread: set[ScopeKey]) -> list[Directive]:
+    """``scope``'s directives, with the opener and closer of each definition
+    in it that is compared."""
+    if scope is None:
+        return []
+    bounds = [
+        directive
+        for name, directives in scope.definitions.items()
+        if (*key, name) not in unread
+        for directive in directives
+    ]
+    return [*scope.directives, *bounds]
+
+
+def definitions_unread(baseline: Deck, compared: Deck) -> bool:
+    """Whether either deck gives a definition more than once in one scope, so
+    a structural delta between them did not compare it."""
+    return bool(baseline.unread or compared.unread)
+
+
+def connection_delta(
+    baseline: NetlistGraph, compared: NetlistGraph
+) -> tuple[list[dict[str, str | int]], list[str]]:
+    """``(moved, not_compared)``: each pin the two exports of one sheet put on
+    nets that do not correspond, and what about connections was not compared.
+
+    Asks the wiring comparison the equivalence mode runs (``compare_graphs``)
+    and reads its net correspondence, so a net the exporter numbered
+    (``N001``, ``NC_01``, ``export_nets.named_by_export``), which another
+    export may number otherwise, is matched by the parts on it and not by
+    its name. A net both exports name the same (ground among them) is the
+    same net: it anchors the correspondence. A pin is named only where it is
+    on such a net on one side and not on it on the other, which holds
+    whatever order the correspondence was built in. A move between two nets
+    the exporter numbered is not named, since which pin the correspondence
+    reports there depends on the order it read the parts, and
+    ``not_compared`` says the wiring differs there. An entry is the part (its
+    path in the flattened circuit, ``X1.M2`` inside a block), its pin by
+    position on the card, counting from 1, and the net before and after, in
+    lower case as the comparison reads a net name. A resistor, capacitor or
+    inductor on the same named nets with its card's two nodes in the other
+    order has not moved; on a numbered net, it may have, and
+    ``not_compared`` says the wiring differs there. Parts only one side has are the component delta's.
+    """
+    named = {
+        net for comp in baseline.components for net in comp.nodes if not named_by_export(net)
+    } & {net for comp in compared.components for net in comp.nodes}
+    comparison = compare_graphs(baseline, compared, reader=None, anchors=sorted(named))
+    anchored = named | {GROUND}
+    rows = [
+        (ref, pin, before, after)
+        for mismatch in comparison.node_partition_mismatches
+        for ref, pin, before, after in mismatch.pins
+    ]
+    # A part whose two terminals are interchangeable, on the same nets with
+    # its card's node order reversed, has moved nowhere.
+    nets: dict[str, tuple[list[str], list[str]]] = {}
+    for ref, _pin, before, after in rows:
+        nets.setdefault(ref, ([], []))[0].append(before)
+        nets[ref][1].append(after)
+    turned = {
+        ref
+        for ref, (before, after) in nets.items()
+        if canon_ref(ref).rsplit(".", 1)[-1][:1].upper() in SYMMETRIC_TWO_TERMINAL
+        and sorted(before) == sorted(after)
+    }
+    moved = {
+        (canon_ref(ref), pin): {"reference": ref, "pin": pin, "before": before, "after": after}
+        for ref, pin, before, after in rows
+        if before != after and (before in anchored or after in anchored) and ref not in turned
+    }
+    not_compared: list[str] = []
+    # Only a turned part whose nets are all named is known to have moved
+    # nowhere; one on a numbered net may have moved between such nets.
+    certain = {ref for ref in turned if all(net in anchored for net in nets[ref][0])}
+    unnamed = len(moved) < len([row for row in rows if row[0] not in certain]) or (
+        not moved
+        and not comparison.structurally_equivalent
+        and not (comparison.added or comparison.removed or comparison.arity_errors)
+    )
+    if unnamed:
+        not_compared.append(
+            "connections: the two exports are wired otherwise among nets the exporter "
+            "numbered (N001), where no pin can be named as moved; label those nets to "
+            "have their pins named"
+        )
+    return [moved[key] for key in sorted(moved)], not_compared

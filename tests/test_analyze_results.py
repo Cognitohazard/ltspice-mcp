@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import threading
-import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -17,13 +16,10 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import (
-    AnalysisDeadlineExceeded,
     InvalidCursorError,
-    ResultError,
     compact_validation_error,
 )
 from ltspice_mcp.lib import (
-    atomic_write,
     cursor_codec,
     experiment_store,
     metrics,
@@ -47,7 +43,7 @@ from ltspice_mcp.tools import experiments, inspect_tools
 from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
-    evaluate_analysis_results,
+    evaluate_analysis,
     handle_analyze_results,
 )
 from tests import _ltspice_recorded as recorded_ltspice
@@ -59,6 +55,7 @@ from tests.conftest import (
     stage_recorded_fixture,
     staged_raw_result,
 )
+from tests.test_analyze_results_call_bound import _slow_csv, _slow_read
 from tests.test_measurement_aggregation import TCROSS_AT as SWEEP_TCROSS
 from tests.test_measurement_aggregation import VFINAL as SWEEP_VFINAL
 
@@ -88,24 +85,6 @@ async def _analyze(
     result = await handle_analyze_results(_args(raw, recipes, **extra), state)
     assert result.structured_content is not None
     return result.structured_content
-
-
-async def _analyze_initialized(
-    state: SessionState,
-    raw: Path,
-    recipes: list[dict[str, Any]],
-    **extra: Any,
-) -> dict[str, Any]:
-    """Start recipe policy checks from an actual captured set and public cursor."""
-    request = _args(raw, recipes, **extra)
-    item = await analyze_mod._create_result_set(request, state, time.monotonic() + 30)
-    cursor = result_store.encode_cursor(item, 0, view_fields=request.include.fields)
-    continued = AnalyzeResultsInput.model_validate(
-        {"continue": {"result_set_id": item.result_set_id, "cursor": cursor}}
-    )
-    response = await handle_analyze_results(continued, state)
-    assert response.structured_content is not None
-    return response.structured_content
 
 
 @pytest.mark.asyncio
@@ -448,19 +427,21 @@ async def test_spec_fail_counts_and_pages_cases(
     assert verdict["outliers"][0]["run_index"] == 0
 
 
-def _defer_csv_estimate(recipe, runs):
+def _large_csv_estimate(recipe, runs):
     del runs
     return 61.0 if getattr(recipe, "metric", None) == "waveform" else 0.0
 
 
 @pytest.mark.asyncio
-async def test_oversized_artifact_defers_whole_after_progress_then_continues(
+async def test_a_large_artifact_is_evaluated_in_the_first_call(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Every recipe is evaluated in the call that asks for it: one whose
+    artifact is estimated over the call's budget gets a budget of its own."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", _defer_csv_estimate)
+    monkeypatch.setattr(analyze_mod, "_artifact_estimate", _large_csv_estimate)
     first = await _analyze(
         state_no_sim,
         raw,
@@ -474,22 +455,16 @@ async def test_oversized_artifact_defers_whole_after_progress_then_continues(
             },
         ],
     )
-    assert set(first["results"]) == {"v"}
-    assert first["next"] is not None
-
-    continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
-    resumed = await handle_analyze_results(continuation, state_no_sim)
-    assert resumed.structured_content is not None
-    assert "csv" in resumed.structured_content["results"]
-    artifact = resumed.structured_content["results"]["csv"]["values"][0]["value"]["artifact"]
+    assert set(first["results"]) == {"v", "csv"}
+    artifact = first["results"]["csv"]["values"][0]["value"]["artifact"]
     assert artifact["sha256"]
     artifact_size = await asyncio.to_thread(lambda: Path(artifact["path"]).stat().st_size)
     assert artifact["bytes"] == artifact_size
-    assert "next" not in resumed.structured_content
+    assert "next" not in first
 
 
 class _NeutralWork(NamedTuple):
-    """Unprojected work produced for one recipe during one evaluator drive."""
+    """Unprojected work produced for one recipe by the evaluation."""
 
     key: str
     position: int
@@ -501,12 +476,7 @@ class _NeutralWork(NamedTuple):
 
 
 def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWork]:
-    """The drive's complete unprojected rows and derived facts, per recipe.
-
-    This is the identity a resumed sequence of drives must reproduce exactly:
-    the same rows, reductions and facts the one-shot evaluation computes, with
-    every MCP cap lifted (spec fail cases uncapped, outliers always included).
-    """
+    """The evaluation's complete unprojected rows and derived facts, per recipe."""
     work: list[_NeutralWork] = []
     for unit in evaluation.processed:
         recipe = unit.recipe
@@ -523,7 +493,6 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
             len(rows),
             incomplete=bool(unit.failures or relevant_missing),
             include_outliers=True,
-            fail_case_limit=max(1, len(rows)),
         )
         if spec is not None:
             fail_cases = spec["fail_cases"]["items"]
@@ -551,51 +520,6 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
 
 
 @pytest.mark.asyncio
-async def test_neutral_evaluator_resumes_to_the_same_work_as_one_shot(
-    state_no_sim: SessionState,
-    work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    args = _args(
-        raw,
-        [
-            {"key": "first", "metric": "value", "expr": "V(out)", "at": "800u"},
-            {"key": "second", "metric": "value", "expr": "V(out)", "at": "900u"},
-            {"key": "summary", "metric": "summary"},
-        ],
-    )
-    item = await analyze_mod._create_result_set(args, state_no_sim, time.monotonic() + 30)
-    state_no_sim.config.analysis_budget_s = 2.0
-    monkeypatch.setattr(
-        analyze_mod,
-        "_artifact_estimate",
-        lambda recipe, _runs: 2.0 if recipe.key != "first" else 0.0,
-    )
-
-    accumulated: list[tuple[Any, ...]] = []
-    position = analyze_mod.AnalysisContinuationPosition(item.result_set_id, 0)
-    drives = 0
-    while True:
-        evaluation = await evaluate_analysis_results(
-            args,
-            state_no_sim,
-            continuation=position,
-        )
-        accumulated.extend(_neutral_work(evaluation))
-        drives += 1
-        position = evaluation.continuation
-        if position is None:
-            break
-    assert drives > 1, "the bounded drive budget must exercise internal resumption"
-
-    state_no_sim.config.analysis_budget_s = 60.0
-    one_shot = await evaluate_analysis_results(args, state_no_sim)
-    assert one_shot.continuation is None
-    assert accumulated == _neutral_work(one_shot)
-
-
-@pytest.mark.asyncio
 async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
     state_no_sim: SessionState,
     work_dir: Path,
@@ -619,7 +543,7 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
         return [], list(failures), []
 
     monkeypatch.setattr(analyze_mod, "_evaluate_item", fail_many)
-    neutral = await evaluate_analysis_results(args, state_no_sim)
+    neutral = await evaluate_analysis(args, state_no_sim)
     assert list(neutral.failure_inventory) == failures
     assert list(_neutral_work(neutral)[0].failures) == failures
 
@@ -657,7 +581,7 @@ async def test_neutral_rows_are_unprojected_before_mcp_paging_and_fields(
         all_steps=True,
         include={"per_run": {"limit": 1}, "fields": ["step_index"]},
     )
-    neutral = await evaluate_analysis_results(args, state_no_sim)
+    neutral = await evaluate_analysis(args, state_no_sim)
     rows = [record.wire() for record in _neutral_work(neutral)[0].rows]
     assert len(rows) == 3
     assert all("value" in row and "source" in row for row in rows)
@@ -680,7 +604,7 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 1.0
     monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 10.0)
-    data = await _analyze_initialized(
+    data = await _analyze(
         state_no_sim,
         raw,
         [
@@ -697,31 +621,20 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
 
 
 @pytest.mark.asyncio
-async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
+@pytest.mark.parametrize("slow", [False, True], ids=["read", "slow_read"])
+async def test_a_slow_csv_fails_its_recipe_and_removes_its_temp(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    slow: bool,
 ):
-    from ltspice_mcp.tools import analysis
-
+    """A recipe that runs out of the call's bound fails with
+    ``analysis_deadline``, the recipe after it fails alone, and no temp is
+    left behind (``test_analyze_results_call_bound.py`` pins the bound)."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 1.0
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 0.0)
-
-    def slow_writer(*args):
-        out_path = args[8]
-        should_abort = args[9]
-        with atomic_write(out_path) as handle:
-            handle.write("partial\n")
-            while not should_abort():
-                # timing: a fake writer spinning until its abort callback fires
-                time.sleep(0.002)
-            # What the real writer raises when its abort callback fires: the
-            # deadline is carried by the exception type, not its wording.
-            raise AnalysisDeadlineExceeded("CSV artifact exceeded its analysis item deadline")
-
-    monkeypatch.setattr(analysis, "build_waveform_csv", slow_writer)
-    data = await _analyze_initialized(
+    _slow_csv(monkeypatch)
+    _slow_read(monkeypatch, slow)
+    data = await _analyze(
         state_no_sim,
         raw,
         [
@@ -734,32 +647,29 @@ async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
             {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"},
         ],
     )
-    assert any(failure["code"] == "analysis_deadline" for failure in data["failures"])
-    assert data["next"] is not None
+    failures = data.get("failures", [])
+    assert {(failure["code"], failure["where"]) for failure in failures} == {
+        ("analysis_deadline", "dut:0"),
+        ("analysis_deadline", "v"),
+    }, failures
+    assert not data["results"]["v"].get("values")
+    assert "next" not in data
     assert not list((work_dir / ".ltspice-mcp" / "results").rglob("*.pending"))
 
 
+def _stepped_request(raw: Path, **include: Any) -> dict[str, Any]:
+    return {
+        "sources": [_source(raw)],
+        "recipes": [{"key": "values", "metric": "value", "expr": "V(out)", "at": "900u"}],
+        "all_steps": True,
+        "include": {"per_run": {"limit": 1}, **include},
+    }
+
+
 @pytest.mark.asyncio
-async def test_continuation_is_pure_and_simultaneous_reads_match(
-    state_no_sim: SessionState,
-    work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", _defer_csv_estimate)
-    first = await _analyze(
-        state_no_sim,
-        raw,
-        [
-            {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"},
-            {
-                "key": "csv",
-                "metric": "waveform",
-                "signals": ["V(out)"],
-                "format": "csv",
-            },
-        ],
-    )
+async def test_pages_read_at_once_match(state_no_sim: SessionState, work_dir: Path):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    first = await _analyze_request(state_no_sim, _stepped_request(raw))
     continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
     left, right = await asyncio.gather(
         handle_analyze_results(continuation, state_no_sim),
@@ -769,198 +679,114 @@ async def test_continuation_is_pure_and_simultaneous_reads_match(
 
 
 @pytest.mark.asyncio
-async def test_per_run_page_cursor_replays_same_immutable_request(
+async def test_per_run_page_cursor_reads_the_stored_answer_of_the_same_request(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-    request = {
-        "sources": [_source(raw)],
-        "recipes": [
-            {
-                "key": "values",
-                "metric": "value",
-                "expr": "V(out)",
-                "at": "900u",
-            }
-        ],
-        "all_steps": True,
-        "include": {"per_run": {"limit": 1}},
-    }
-    first_args = AnalyzeResultsInput.model_validate(request)
-    first = await handle_analyze_results(first_args, state_no_sim)
-    assert first.structured_content is not None
-    cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
+    request = _stepped_request(raw)
+    first = await _analyze_request(state_no_sim, request)
+    cursor = first["results"]["values"]["per_run"]["next_cursor"]
+    assert cursor is not None
+    second = await _analyze_request(
+        state_no_sim, {**request, "include": {"per_run": {"limit": 1, "cursor": cursor}}}
+    )
+    assert second["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_per_run_cursor_refuses_another_request(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A cursor reads the answer to the request that gave it, row view
+    included: another view is another request."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    request = _stepped_request(raw, fields=["step_index"])
+    first = await _analyze_request(state_no_sim, request)
+    cursor = first["results"]["values"]["per_run"]["next_cursor"]
     assert cursor is not None
 
-    second_args = AnalyzeResultsInput.model_validate(
+    for include in (
+        {"per_run": {"limit": 1, "cursor": cursor}, "fields": ["value"]},
+        {"per_run": {"limit": 1, "cursor": cursor}},
+    ):
+        with pytest.raises(InvalidCursorError, match="another request"):
+            await handle_analyze_results(
+                AnalyzeResultsInput.model_validate({**request, "include": include}), state_no_sim
+            )
+
+    same = await _analyze_request(
+        state_no_sim,
         {
             **request,
-            "include": {"per_run": {"limit": 1, "cursor": cursor}},
+            "include": {"per_run": {"limit": 1, "cursor": cursor}, "fields": ["step_index"]},
+        },
+    )
+    assert set(same["results"]["values"]["per_run"]["items"][0]) == {"step_index"}
+
+
+@pytest.mark.asyncio
+async def test_a_cursor_of_an_earlier_release_is_refused(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    first = await _analyze_request(state_no_sim, _stepped_request(raw))
+    old = cursor_codec.encode_cursor(
+        {
+            "result_set_id": first["result_set_id"],
+            "position": 0,
+            "intra_item": 1,
+            "missing_offset": 0,
+            "view": {"fields": None},
         }
     )
-    second = await handle_analyze_results(second_args, state_no_sim)
-    assert second.structured_content is not None
-    assert second.structured_content["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
-
-
-@pytest.mark.asyncio
-async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
-    state_no_sim: SessionState,
-    work_dir: Path,
-):
-    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-    request = {
-        "sources": [_source(raw)],
-        "recipes": [
-            {
-                "key": "values",
-                "metric": "value",
-                "expr": "V(out)",
-                "at": "900u",
-            }
-        ],
-        "all_steps": True,
-        "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
-    }
-    first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    assert first.structured_content is not None
-    cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
-    assert cursor is not None
-
-    with pytest.raises(InvalidCursorError, match="replay page 1"):
+    with pytest.raises(InvalidCursorError, match="is not a cursor this tool returned"):
         await handle_analyze_results(
             AnalyzeResultsInput.model_validate(
-                {
-                    **request,
-                    "include": {
-                        "per_run": {"limit": 1, "cursor": cursor},
-                        "fields": ["value"],
-                    },
-                }
-            ),
-            state_no_sim,
-        )
-
-    inherited = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                **request,
-                "include": {"per_run": {"limit": 1, "cursor": cursor}},
-            }
-        ),
-        state_no_sim,
-    )
-    assert inherited.structured_content is not None
-    inherited_row = inherited.structured_content["results"]["values"]["per_run"]["items"][0]
-    assert set(inherited_row) == {"step_index"}
-
-
-@pytest.mark.asyncio
-async def test_a_cursor_without_a_row_view_is_rejected(
-    state_no_sim: SessionState,
-    work_dir: Path,
-):
-    """Every cursor this build mints names the row view it was paged under, so
-    one that carries no view is malformed and is refused like any other."""
-    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-    request = {
-        "sources": [_source(raw)],
-        "recipes": [
-            {
-                "key": "values",
-                "metric": "value",
-                "expr": "V(out)",
-                "at": "900u",
-            }
-        ],
-        "all_steps": True,
-        "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
-    }
-    first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    assert first.structured_content is not None
-    cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
-    assert cursor is not None
-
-    body = cursor_codec.decode_cursor(cursor)
-    body.pop("view")
-    viewless = cursor_codec.encode_cursor(body)
-
-    with pytest.raises(InvalidCursorError, match="Invalid analyze_results cursor"):
-        await handle_analyze_results(
-            AnalyzeResultsInput.model_validate(
-                {
-                    **request,
-                    "include": {"per_run": {"limit": 1, "cursor": viewless}},
-                }
+                {"continue": {"result_set_id": first["result_set_id"], "cursor": old}}
             ),
             state_no_sim,
         )
 
 
-def test_invalid_and_expired_cursor_errors(work_dir: Path):
-    item = result_store.create(
-        working_dir=work_dir,
-        inputs={"working_dir": str(work_dir)},
-        work=[{"index": 0, "recipe": {"key": "x", "metric": "summary"}}],
-        source_manifests=[],
-        source_jobs={},
-        ttl_hours=24,
-    )
-    with pytest.raises(InvalidCursorError, match="Invalid"):
-        result_store.decode_cursor("tampered", item)
+@pytest.mark.asyncio
+async def test_an_expired_stored_answer_says_how_to_start_again(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    first = await _analyze_request(state_no_sim, _stepped_request(raw))
+    path = Path(first["stored_answer"]["path"])
 
-    path = result_store.result_path(item.result_set_id, work_dir)
-    data = json.loads(path.read_text())
-    data["expires_at"] = (now() - timedelta(hours=1)).isoformat()
-    path.write_text(json.dumps(data))
-    with pytest.raises(ResultError, match="expired"):
-        result_store.load(item.result_set_id, work_dir)
+    def expire() -> None:
+        data = json.loads(path.read_text())
+        data["expires_at"] = (now() - timedelta(hours=1)).isoformat()
+        path.write_text(json.dumps(data))
 
-
-async def _deferred_value_set(
-    state: SessionState,
-    raw: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> dict[str, Any]:
-    monkeypatch.setattr(
-        analyze_mod,
-        "_artifact_estimate",
-        lambda recipe, runs: 61.0 if getattr(recipe, "key", "") == "later" else 0.0,
-    )
-    return await _analyze(
-        state,
-        raw,
-        [
-            {"key": "now", "metric": "value", "expr": "V(out)", "at": "900u"},
-            {
-                "key": "later",
-                "metric": "waveform",
-                "signals": ["V(out)"],
-                "format": "csv",
-            },
-        ],
-    )
+    await asyncio.to_thread(expire)
+    with pytest.raises(InvalidCursorError, match="without the cursor to evaluate it again"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate({"continue": first["next"]}), state_no_sim
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutate", ["raw", "log"])
-async def test_continuation_detects_raw_or_log_only_drift(
+async def test_a_page_after_a_raw_or_log_changed_is_the_stored_answer(
     mutate: str,
     state_no_sim: SessionState,
     work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    first = await _analyze_request(state_no_sim, _stepped_request(raw))
     target = raw if mutate == "raw" else raw.with_suffix(".log")
     target.write_bytes(target.read_bytes() + b"\nchanged")
-    continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
-    result = await handle_analyze_results(continuation, state_no_sim)
-    assert result.structured_content is not None
-    assert any(
-        failure["code"] == "source_drift" for failure in result.structured_content["failures"]
-    )
+    page = await _analyze_request(state_no_sim, {"continue": first["next"]})
+    assert page["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
+    assert page["stored_answer"]["snapshot"] == first["stored_answer"]["snapshot"]
+    assert "failures" not in page
 
 
 @pytest.mark.asyncio
@@ -988,7 +814,7 @@ async def test_mutation_during_adapter_read_is_caught_by_postcheck(
 
 
 @pytest.mark.asyncio
-async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
+async def test_a_call_reads_no_source_for_a_digest(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1015,44 +841,46 @@ async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
 
 
 @pytest.mark.asyncio
-async def test_a_continuation_handed_out_records_the_sources_digests(
+async def test_a_result_set_records_the_sources_digests(
     state_no_sim: SessionState,
     work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    """The call that resumes a set compares content, so the set records it."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
-    assert first["next"] is not None
-
-    stored = result_store.load(first["result_set_id"], work_dir)
-    (manifest,) = stored.source_manifests
+    data = await _analyze(
+        state_no_sim, raw, [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
+    )
+    stored = json.loads(Store(work_dir).result_set(data["result_set_id"]).read_text())
+    (manifest,) = stored["source_manifests"]
     assert manifest["raw_sha256"] == result_store.sha256_file(raw)
     assert manifest["composite_sha256"]
 
 
 @pytest.mark.asyncio
-async def test_a_resumed_set_catches_a_rewrite_that_kept_size_and_timestamp(
+async def test_the_precheck_catches_a_rewrite_that_kept_size_and_timestamp(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A worker snapshot detects rewrites even when metadata is unchanged."""
+    """A worker snapshot detects rewrites even when metadata is unchanged: a
+    source rewritten after its manifest was captured is not read."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    first = await _deferred_value_set(state_no_sim, raw, monkeypatch)
-    before = os.stat(raw)
-    data = bytearray(raw.read_bytes())
-    data[-1] ^= 0xFF
-    raw.write_bytes(bytes(data))
-    os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
-    assert os.stat(raw).st_size == before.st_size
+    create = analyze_mod._create_result_set
 
-    continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
-    result = await handle_analyze_results(continuation, state_no_sim)
-    assert result.structured_content is not None
-    assert any(
-        failure["code"] == "source_drift" for failure in result.structured_content["failures"]
+    async def rewrite_after_capture(*args, **kwargs):
+        item = await create(*args, **kwargs)
+        before = os.stat(raw)
+        data = bytearray(raw.read_bytes())
+        data[-1] ^= 0xFF
+        raw.write_bytes(bytes(data))
+        os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert os.stat(raw).st_size == before.st_size
+        return item
+
+    monkeypatch.setattr(analyze_mod, "_create_result_set", rewrite_after_capture)
+    data = await _analyze(
+        state_no_sim, raw, [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}]
     )
+    assert any(failure["code"] == "source_drift" for failure in data["failures"])
 
 
 def test_multi_source_job_invalidation_and_raw_only_ttl(work_dir: Path):
@@ -1068,11 +896,12 @@ def test_multi_source_job_invalidation_and_raw_only_ttl(work_dir: Path):
         source_jobs={"j1": str(first_record), "j2": str(second_record)},
         ttl_hours=0.0001,
     )
+    path = result_store.result_path(item.result_set_id, work_dir)
     # Job ownership overrides the raw-only TTL while every source job exists.
-    assert result_store.load(item.result_set_id, work_dir).result_set_id == item.result_set_id
+    assert result_store.cleanup(work_dir) == 0
+    assert path.exists()
     assert result_store.invalidate_for_job(work_dir, "j2") == 1
-    with pytest.raises(ResultError, match="missing or expired"):
-        result_store.load(item.result_set_id, work_dir)
+    assert not path.exists()
 
     raw_only = result_store.create(
         working_dir=work_dir,
@@ -1351,14 +1180,17 @@ async def test_raw_path_run_selection_reports_nonzero_outer_runs_missing(
 
 
 @pytest.mark.asyncio
-async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
+async def test_a_case_not_finished_is_not_read_even_with_a_raw_on_disk(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
-    """A job still running is not readable, even when a raw is already on disk.
+    """A case whose run has not finished is not read, even when a raw is
+    already on disk at its path.
 
-    Half a sweep's artifacts exist long before the job is done; analyzing them
-    as if they were the whole answer is the failure this gate exists for.
+    A running case's raw exists long before its run ends; analyzing it as
+    though it were the case's result is the failure this refusal exists for.
+    The refusal is the case's own, and the coverage says how many of the runs
+    asked for have not finished.
     """
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     job = make_experiment_job(state_no_sim, job_id="exp_running", status="running", raw=raw)
@@ -1372,9 +1204,11 @@ async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
     data = result.structured_content
     assert data is not None
     assert data["coverage"]["runs_analyzed"] == 0
+    assert data["coverage"]["runs_running"] == 1
     (missing,) = data["coverage"]["missing_cases"]["items"]
-    assert missing["code"] == "job_not_terminal"
-    assert "no readable runs yet" in missing["detail"]
+    assert missing["code"] == "run_not_finished"
+    assert missing["case_id"] == job.cases[0].case_id
+    assert "has not started yet" in missing["detail"]
 
 
 _UNVERIFIED_INOISE_UNIT = "Could not verify the input-referred noise unit"
@@ -1504,7 +1338,7 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
     await services.load_raw(services.source_for_raw_path(raw, state_no_sim), state_no_sim)
     parser_requests.clear()
     try:
-        summary = await _analyze_initialized(
+        summary = await _analyze(
             state_no_sim,
             raw,
             [{"key": "summary", "metric": "summary"}],
@@ -1533,7 +1367,7 @@ async def test_summary_and_measurement_resident_processing_respects_item_deadlin
     await services.load_raw(services.source_for_raw_path(second, state_no_sim), state_no_sim)
     parser_requests.clear()
     try:
-        measurements = await _analyze_initialized(
+        measurements = await _analyze(
             state_no_sim,
             second,
             [{"key": "measurements", "metric": "measurements"}],
@@ -1820,7 +1654,7 @@ async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.config.analysis_budget_s = 1.0
     monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 10.0)
-    data = await _analyze_initialized(
+    data = await _analyze(
         state_no_sim,
         raw,
         [{"key": "csv", "metric": "waveform", "signals": ["V(out)"], "format": "csv"}],
@@ -1859,6 +1693,8 @@ async def test_continuation_accepts_an_echo_and_refuses_a_change(
     the original fields again with it was refused although they changed
     nothing; a field that does change the request is still refused rather than
     silently dropped."""
+    del changed
+    state_no_sim.config.default_budget = 0
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     original = {
         "sources": [{"path": str(raw), "label": "dut", "runs": list(range(121))}],
@@ -1881,7 +1717,7 @@ async def test_continuation_accepts_an_echo_and_refuses_a_change(
     assert echoed.structured_content is not None
     assert echoed.structured_content["coverage"]["missing_cases"]["returned"] == 20
 
-    with pytest.raises(ResultError, match=f"{changed} differ"):
+    with pytest.raises(InvalidCursorError, match="another request"):
         await handle_analyze_results(
             AnalyzeResultsInput.model_validate({**original, **extra, **resume}), state_no_sim
         )
@@ -1894,6 +1730,7 @@ async def test_truncated_missing_cases_page_is_followable(
 ):
     """coverage.missing_cases advertises truncation, so it must hand back a
     cursor that actually reaches the rest."""
+    state_no_sim.config.default_budget = 0
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     args = AnalyzeResultsInput.model_validate(
         {
@@ -1927,17 +1764,13 @@ async def test_truncated_missing_cases_page_is_followable(
 
 
 @pytest.mark.asyncio
-async def test_work_and_coverage_cursors_advance_independently(
+async def test_each_cut_lists_cursor_reads_its_own_list(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
-    """One call pages two lists; either cursor must advance its own view without
-    resetting or discarding the other.
-
-    They share one encoded resume point, so a cursor that drops the work
-    position strands un-analyzed work, and one that drops the coverage offset
-    re-serves missing cases the caller has already read.
-    """
+    """One reply cuts two lists; each cursor reads its own list from where
+    the reply left it, and names the other's from its start."""
+    state_no_sim.config.default_budget = 0
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     request = {
         "sources": [{"path": str(raw), "label": "dut", "runs": list(range(121))}],
@@ -1952,36 +1785,29 @@ async def test_work_and_coverage_cursors_advance_independently(
         "all_steps": True,
         "include": {"per_run": {"limit": 1}},
     }
-    first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    assert first.structured_content is not None
-    coverage_cursor = first.structured_content["coverage"]["missing_cases"]["next_cursor"]
-    assert coverage_cursor is not None
-    assert first.structured_content["next"] is not None
-    result_set_id = first.structured_content["result_set_id"]
+    first = await _analyze_request(state_no_sim, request)
+    coverage_cursor = first["coverage"]["missing_cases"]["next_cursor"]
+    rows_cursor = first["results"]["values"]["per_run"]["next_cursor"]
+    assert coverage_cursor is not None and rows_cursor is not None
+    result_set_id = first["result_set_id"]
 
-    # Following the coverage cursor advances the missing list AND keeps the
-    # work resume point, so there is still a `next` to follow.
-    by_coverage = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {"continue": {"result_set_id": result_set_id, "cursor": coverage_cursor}}
-        ),
-        state_no_sim,
+    by_coverage = await _analyze_request(
+        state_no_sim, {"continue": {"result_set_id": result_set_id, "cursor": coverage_cursor}}
     )
-    assert by_coverage.structured_content is not None
-    rest = by_coverage.structured_content["coverage"]["missing_cases"]
+    rest = by_coverage["coverage"]["missing_cases"]
     assert rest["items"][0]["run_index"] == 101
-    assert by_coverage.structured_content["next"] is not None
+    assert "truncated" not in rest
+    # A page holds its own list only: the rows are the first reply's to give.
+    assert by_coverage["page_of"] == "/coverage/missing_cases/items"
+    assert "results" not in by_coverage
+    assert set(by_coverage["cut"]) == {"/coverage/missing_cases/items"}
 
-    # Following the work cursor advances the work AND carries the coverage
-    # offset, so the missing cases already served are not replayed.
-    by_work = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate({"continue": first.structured_content["next"]}),
-        state_no_sim,
+    by_rows = await _analyze_request(
+        state_no_sim, {"continue": {"result_set_id": result_set_id, "cursor": rows_cursor}}
     )
-    assert by_work.structured_content is not None
-    carried = by_work.structured_content["coverage"]["missing_cases"]
-    assert carried["items"][0]["run_index"] == 101
-    assert "truncated" not in carried
+    assert by_rows["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
+    assert by_rows["page_of"] == "/results/values/per_run/items"
+    assert "missing_cases" not in by_rows.get("coverage", {})
 
 
 @pytest.mark.asyncio
@@ -1990,8 +1816,9 @@ async def test_truncated_fail_cases_names_the_route_to_the_rest(
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """spec.fail_cases is a per-call projection with no cursor of its own, so a
-    truncated page must name the view that does page every value."""
+    """spec.fail_cases has no next_cursor of its own, so a cut page names the
+    call that reads the rest from the stored answer."""
+    state_no_sim.config.default_budget = 0
     monkeypatch.setattr(analyze_mod, "_FAIL_CASE_PAGE_CAP", 1)
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     data = await _analyze(
@@ -2011,7 +1838,17 @@ async def test_truncated_fail_cases_names_the_route_to_the_rest(
     fail_cases = data["results"]["vout"]["spec"]["fail_cases"]
     assert fail_cases["truncated"] is True
     # Beside the flag, where a caller holding the cut list looks for the rest.
-    assert "include.per_run" in fail_cases["hint"]
+    assert "continue" in fail_cases["hint"]
+    rest = await _analyze_request(
+        state_no_sim,
+        {
+            "continue": {
+                "result_set_id": data["result_set_id"],
+                "cursor": data["cut"]["/results/vout/spec/fail_cases/items"]["next"],
+            }
+        },
+    )
+    assert rest["results"]["vout"]["spec"]["fail_cases"]["items"]
 
 
 # ---------------------------------------------------------------------------
@@ -2208,6 +2045,8 @@ async def test_projection_shrinks_a_wide_sweep_payload(
 ):
     """The whole justification, measured: a 45-row table an agent wants three
     numbers from must not cost the full nested value dict of every row."""
+    # Every row of each, as a reply with no target holds them.
+    state_no_sim.config.default_budget = 0
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     full = await handle_analyze_results(_wide_args(raw), state_no_sim)
     projected = await handle_analyze_results(
@@ -2649,6 +2488,7 @@ async def test_identical_record_warnings_collapse_but_keep_their_reach(
     characters of a 59,268-character response saying one thing. It collapses to
     a single line, and the line still says how many records raised it, because
     45-of-45 and 3-of-45 are different facts."""
+    state_no_sim.config.default_budget = 0
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     result = await handle_analyze_results(_wide_args(raw), state_no_sim)
     assert result.structured_content is not None
@@ -3220,7 +3060,7 @@ async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
     stored = await analyze_mod.capture_attached_analysis(
         AnalyzeResultsInput.model_validate(request), state_no_sim
     )
-    attached = analyze_mod.render_attached_analysis(stored, fields=None)
+    attached = analyze_mod.render_attached_analysis(stored)
     # As the receipt sends them: without the fields that say nothing.
     sent = as_sent(attached["results"]["m"]["per_run"]["items"], "run_experiments")
     assert sent == rows

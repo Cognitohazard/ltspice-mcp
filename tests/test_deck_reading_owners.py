@@ -135,9 +135,8 @@ _PLAIN_LEX: dict[str, str] = {
     "lib/montecarlo.py:render_variant_model_card": "one .model card",
     "lib/montecarlo.py:parse_model_params": "one .model card",
     "lib/spice_lex_ops.py:inject_card_before_end": "the one card to insert",
+    "lib/spice_lex_ops.py:strip_instance_section_signs": "the comment lines it adds, naming what it renamed",
     "lib/spice_validator.py:validate_directive": "one directive",
-    "lib/subckt_mismatch.py:_render_clone": "one subcircuit block, copied out of a file",
-    "lib/subckt_mismatch.py:render": "a patched subcircuit block the plan rendered",
     "lib/variations.py:_validate_write_sets": "one card the hierarchy resolved",
     "lib/instance_targeting.py:TargetEditor._copy_includes": "one include card, rewritten",
     "lib/instance_targeting.py:TargetEditor.clone_model": "one .model card",
@@ -217,6 +216,8 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "code_worker.py:execute": "not a deck card: a Python syntax tree's body",
     "errors.py:UnreadableCardError.__init__": "the refusal keeps the tokenizer error's fields",
     "lib/asc_document.py:Text.format": "not a deck card: a schematic TEXT line",
+    "lib/guide.py:headings": "not a deck card: a guide section's Markdown body",
+    "lib/stored_values.py:_sheet_texts": "not a deck card: a parsed sheet's TEXT directive",
     "lib/component_value.py:_apply_b_source": (
         "moves to a view in a follow-up: an element card's fields (a B source's value)"
     ),
@@ -287,6 +288,9 @@ _CARD_TEXT_READERS: dict[str, str] = {
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
     "lib/lint_rules.py:_lib_section_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_lib_read_nothing_ngspice": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
     "lib/lint_rules.py:_lib_section_ngspice": (
@@ -412,16 +416,6 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/spice_validator.py:validate_netlist_duplicate_params": (
         "moves to a view in a follow-up: free-text scan of a body"
     ),
-    "lib/subckt_mismatch.py:_append_to_code": (
-        "an edit writing a card back: where its comment starts"
-    ),
-    "lib/subckt_mismatch.py:_deck_scale": (
-        "moves to a view in a follow-up: a directive's arguments (.options scale, and "
-        ".opt, which no recording covers)"
-    ),
-    "lib/subckt_mismatch.py:_render_clone": (
-        "an edit writing cards back: a subcircuit block copied as written"
-    ),
     "lib/symbol_file.py:SymbolFile.bbox": "not a deck card: a symbol drawing",
     "lib/variations.py:_closure_model_card": (
         "a model card copied as written, for a per-device variant"
@@ -433,6 +427,18 @@ _CARD_TEXT_READERS: dict[str, str] = {
         "moves to a view in a follow-up: an element card's fields (a key=value left over)"
     ),
     "tools/verify.py:_meas_angle_findings": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_meas_subckt_node_unsaved_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_node_non_ascii_ngspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_save_meas_spelling_unestablished": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_save_name_not_stored": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
     "tools/verify.py:_syntax_findings": (
@@ -583,3 +589,55 @@ def test_the_probe_pattern_rule_catches_what_it_names():
     missed = [r're.compile(r"\.save\s+(all)")', r're.compile(r"(\w+)\(")']
     assert [_probe_patterns_in(ast.parse(source)) for source in caught] == [True] * 3
     assert [_probe_patterns_in(ast.parse(source)) for source in missed] == [False] * 2
+
+
+# --------------------------------------------------------------------------
+# An instance card is matched by its reference in its scope
+# --------------------------------------------------------------------------
+
+#: The functions that key a lexed card by its reference (``canon_ref`` of its
+#: ``name``), each with what keeps the scope in the key. Two elements of one
+#: reference in two definitions are two elements; a reader that keys every
+#: card of a deck by its bare reference merges them, the last one read
+#: winning, and once answered "no change" for a real one.
+_REFERENCE_KEYS: dict[str, str] = {
+    "lib/netlist_diff.py:read_deck.read": (
+        "reads one scope's cards, by span, into that scope's own table"
+    ),
+    "lib/export_nets.py:exported_pin_nodes": (
+        "reads only the top level's cards (iter_by_kind with scope=())"
+    ),
+}
+
+
+def _keys_a_card_by_reference(function: ast.AST) -> bool:
+    return any(
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "canon_ref"
+        and call.args
+        and isinstance(call.args[0], ast.Attribute)
+        and call.args[0].attr in ("name", "instance_ref")
+        for call in ast.walk(function)
+        if call is not function
+    )
+
+
+def test_a_card_keyed_by_its_reference_is_keyed_in_its_scope():
+    found = {
+        f"{path}:{name}"
+        for path, tree in modules().items()
+        for name, function in _functions(tree)
+        if _keys_a_card_by_reference(function)
+        and not any(
+            _keys_a_card_by_reference(inner) for _inner_name, inner in _functions(function)
+        )
+    }
+    assert found <= _REFERENCE_KEYS.keys(), (
+        "A card keyed by its bare reference merges elements of one reference in "
+        "different scopes; key it with its scope (netlist_diff.read_deck), or list "
+        f"it in _REFERENCE_KEYS with what keeps the scope: {sorted(found - _REFERENCE_KEYS.keys())}"
+    )
+    assert _REFERENCE_KEYS.keys() <= found, (
+        f"No longer keys a card by reference: {sorted(_REFERENCE_KEYS.keys() - found)}"
+    )

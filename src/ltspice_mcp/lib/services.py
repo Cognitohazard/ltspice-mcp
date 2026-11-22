@@ -14,10 +14,10 @@ import contextvars
 import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 import numpy as np
 
@@ -26,23 +26,26 @@ from ltspice_mcp.errors import (
     JobNotFoundError,
     OtherRawNotWritten,
     ResultError,
+    RunNotFinishedError,
 )
-from ltspice_mcp.lib import recent
+from ltspice_mcp.lib import recent, stored_values
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, steps_held
 from ltspice_mcp.lib.experiment_types import (
+    TERMINAL_CASE_STATUSES,
+    CaseSteps,
     ExperimentCase,
     ExperimentJob,
     failure_summary,
     partial_raw,
 )
-from ltspice_mcp.lib.job_lifecycle import runs_done
 from ltspice_mcp.lib.log_parser import (
     LogDiagnostics,
     MeasurementsOutput,
     answered_measurements,  # noqa: TID251 - answer_measurements is the readers' door to it
     measurement_cards,
 )
+from ltspice_mcp.lib.log_types import MEASUREMENTS_UNREAD
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -50,14 +53,19 @@ from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
     OtherRawKind,
+    first_plot_traces,
     get_step_count,
     other_raw_path,
     points_reached,
+    run_log_path,
 )
 from ltspice_mcp.lib.result_observations import (
+    READ_BY_JOB,
     coarse_compressed_waveform,
     coarse_waveform_observation,
     compressed_transient,
+    compressed_xvii_observation,
+    deck_ngspice_interp,
     deck_tran_max_step,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
@@ -65,6 +73,8 @@ from ltspice_mcp.lib.simulator_build import (
     Producer,
     SimulatorExecutable,
     executable_identity,
+    log_head_build,
+    reported_build,
     same_executable,
     which_ltspice,
 )
@@ -175,6 +185,10 @@ class RunContext:
     observations: tuple[dict[str, Any], ...] = ()
     #: Who wrote the case's log (``run_producer``).
     producer: Producer | None = None
+    #: The case's ``logopinfo_withheld`` observation, where its run was made
+    #: without the option that prints the log's device table: a read of that
+    #: table gives it (:func:`device_table_unread`), not every read.
+    device_table_withheld: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +219,9 @@ class AnalysisSource:
     #: Who wrote the log, for a job's case (``run_producer``); None for a bare
     #: path, whose producer is what ``source_producer`` says.
     producer: Producer | None = None
+    #: The case's ``logopinfo_withheld`` observation (``RunContext``); None for
+    #: a bare path, and for a case whose run was not made without the option.
+    device_table_withheld: dict[str, Any] | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -218,18 +235,22 @@ def source_for_raw_path(
     authorized independently on load, where a file the capture needs and does
     not find is refused (``parser_service``); only the contained capture worker
     reads writer evidence. Session simulator defaults are not provenance.
+    The log and console output are the run's (``raw_parser.run_log_path``),
+    beside an other raw of the run (``.op.raw``, ``.fra_1.raw``) too. Blocking:
+    it looks for a log of the file's own name, so a coroutine calls it, and
+    :func:`resolve_analysis_source`, in a thread.
     """
-    sibling = raw.with_suffix(".log")
+    log = run_log_path(raw)
     return AnalysisSource(
         raw=raw,
-        log=sibling,
+        log=log,
         netlist=None,
         dialect=None,
         identity=None,
         trusted_job_artifact=False,
         explicit_dialect=dialect,
         plot_index=plot_index,
-        console=raw.with_suffix(".exe.log"),
+        console=log.with_suffix(".exe.log"),
     )
 
 
@@ -256,6 +277,247 @@ def source_for_run(
         simulator_version=run.simulator_version,
         observations=run.observations,
         producer=run.producer,
+        device_table_withheld=run.device_table_withheld,
+    )
+
+
+#: The families whose logs the server reads ``.meas`` results from
+#: (``docs/design/mcp_surface.md``): a QSPICE or Xyce run's measure output is
+#: not read.
+MEASURING_FAMILIES = frozenset({"ltspice", "ngspice"})
+
+
+def measurements_unread(logs: DecodedLog | None, family: str | None) -> str | None:
+    """Why a run's log says nothing of its measurements that can be trusted,
+    or None when its measurements section was read: ``simulator_unsupported``
+    for a family whose measure output the server does not read,
+    ``log_unread`` for a log that was not captured or whose section could not
+    be decoded. A family not known (a bare log path) is read as the log
+    decoder read it. The one answer the run row and the analysis both ask before
+    they take an empty section to mean "printed nothing"."""
+    if family is not None and family not in MEASURING_FAMILIES:
+        return "simulator_unsupported"
+    if logs is None or not any(item.role == "log" for item in logs.captured.files):
+        return "log_unread"
+    if logs.section("measurements")["status"] == "error":
+        return "log_unread"
+    return None
+
+
+def source_measurements_unread(
+    source: AnalysisSource, logs: DecodedLog | None, producer: Producer | None = None
+) -> str | None:
+    """:func:`measurements_unread` for a read of ``source``: its family is
+    the dialect the caller named, else the one the source was read in, else
+    the family of who wrote it (``producer``, which a reader of the raw has
+    from its header). A raw read by its path with no dialect named is read by
+    a log-only reader as the log decoder reads it: the parser worker does not
+    read the raw for a log, so its writer is not known there."""
+    family = (
+        source.explicit_dialect
+        or source.dialect
+        or (producer.family if producer is not None else None)
+    )
+    return measurements_unread(logs, family)
+
+
+def _unread_detail(source: AnalysisSource, logs: DecodedLog, unread: str) -> str:
+    """What made a log's measurements unread, for the refusal that names why:
+    the case with no log, or the decoder's own error."""
+    if unread != "log_unread":
+        return ""
+    if source.log is None:
+        case_id = (source.identity or {}).get("case_id")
+        return f". Experiment case {case_id!r} has no log file" if case_id else ""
+    error = logs.section("measurements").get("error")
+    return f". {error['message']}" if isinstance(error, Mapping) else ""
+
+
+def require_measurements_read(
+    source: AnalysisSource, logs: DecodedLog, producer: Producer | None = None
+) -> None:
+    """Refuse a read of ``source``'s measurements with why they say nothing
+    that can be trusted (:func:`measurements_unread`), the run row's reason;
+    for a reader that shows the section whole, such as ``inspect``'s results
+    page, as :func:`read_measurements` does for one that reads its values."""
+    unread = source_measurements_unread(source, logs, producer)
+    if unread is not None:
+        raise ResultError(
+            f"The run's measurements were not read ({unread}): "
+            f"{MEASUREMENTS_UNREAD[unread]}{_unread_detail(source, logs, unread)}"
+        )
+
+
+def read_measurements(source: AnalysisSource, logs: DecodedLog) -> MeasurementsOutput:
+    """The decoded measurements section of ``source``'s log, refused with why
+    it says nothing that can be trusted (:func:`measurements_unread`): the one
+    read of a log's measurements every reader of their values makes, so each
+    gives the run row's reason."""
+    require_measurements_read(source, logs)
+    decoded = logs.value("measurements")
+    if decoded is None:
+        raise ResultError("source has no log artifact for .MEAS results")
+    return decoded
+
+
+def compression_drops_points(source: AnalysisSource, raw: DecodedRaw) -> bool:
+    """Whether ``raw`` is a transient that LTspice XVII saved with waveform
+    compression on, so its stored samples leave out points the run computed
+    (recorded: ``raw/compress_1mv``, 13 points where ``raw/compress_1mv_off``
+    stores 1078). The build is the source's producer
+    (:func:`source_producer`), with the build its files name for a bare path.
+    LTspice 26 stored every point of the same run, and a build not shown is
+    not claimed. The one answer every read and recipe that takes samples
+    asks. Blocking: it may read the run's log and raw headers."""
+    if not compressed_transient(raw):
+        return False
+    producer = source.producer or source_producer(
+        source, read_dialect="ltspice", reported=reported_build(source.log, source.raw)
+    )
+    found = which_ltspice(producer.program, producer.build)
+    return found is not None and found.generation == "xvii"
+
+
+class CaseIds(Protocol):
+    """A selection of a job's cases by id (``{case_ids: [...]}``)."""
+
+    @property
+    def case_ids(self) -> list[str]: ...
+
+
+#: Which of its solver's time points a transient's file holds, as
+#: :func:`stored_time_points` answers: every point the solver accepted, points
+#: on the print step, fewer points than it accepted, or not checked.
+StoredTimePoints = Literal["accepted", "print_step", "reduced", "not_checked"]
+
+
+@dataclass(frozen=True)
+class TimePointsStored:
+    """:func:`stored_time_points`' answer: what the file holds, and, for any
+    answer but ``accepted``, the sentence that says what that leaves out."""
+
+    stored: StoredTimePoints
+    why: str | None = None
+
+
+#: What the recordings show of LTspice XVII under waveform compression: the
+#: one that stores fewer points than the solver accepted
+#: (``raw/compress_1mv``, ``raw/compress_1mv_off``).
+_XVII_REDUCED = (
+    "LTspice XVII saved this run with waveform compression on, which stores fewer "
+    "points than its solver accepted (in the recorded raw/compress_1mv, 13 of the 1078 "
+    "its log counts as accepted), so these steps are between stored points, not the "
+    "solver's own. Whether the smallest of them bounds the solver's smallest step from "
+    "above is not established: some stored times are not times the solver accepted in "
+    "the same run uncompressed. '.options plotwinsize=0' stores every accepted point."
+)
+
+
+def _saved_from(raw: DecodedRaw) -> float | None:
+    """The time a transient's first step starts storing at, when it is after
+    zero: a ``.tran`` start time leaves out every point before it. None when
+    the run stores from zero, or its axis cannot be read."""
+    try:
+        axis = np.asarray(raw.get_axis(0))
+    except (ResultError, ValueError, IndexError):
+        return None
+    if axis.size == 0 or not np.isfinite(axis[0]):
+        return None
+    first = float(np.real(axis[0]))
+    return first if first > 0 else None
+
+
+def stored_time_points(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
+    """Which of its solver's time points the transient ``raw`` from ``source``
+    holds. The one answer every reader of a transient's steps asks.
+
+    - A run whose first stored point is after zero (a ``.tran`` start time)
+      holds none of the points before it: every answer says so, and one that
+      would be ``accepted`` is ``not_checked``.
+    - LTspice: XVII with waveform compression on stores fewer than it accepted
+      (:func:`compression_drops_points`). XVII with it off stores as many as
+      its log counts as accepted (``raw/compress_1mv_off``,
+      ``raw/tran_uncompressed``). LTspice 26 logs no count to compare with, and
+      a build not shown is not claimed: both are not checked.
+    - ngspice: every accepted time point, and none it rejected (measured on
+      ngspice-42 with ``.options acct``), or under ``.options interp`` points on
+      the print step, read from the run's deck
+      (``result_observations.deck_ngspice_interp``); not checked without a
+      deck, or where the deck holds a card that answer does not read.
+    - Any other simulator: not checked.
+
+    Blocking: it may read the run's deck, log and raw headers."""
+    found = _stored_points_by_simulator(source, raw)
+    start = _saved_from(raw)
+    if start is None:
+        return found
+    late = (
+        f"This run's first stored point is at t = {start:.6g} s, as a .tran start time "
+        "leaves it, so no point before then is in the file and no step before it is read."
+    )
+    if found.stored == "accepted":
+        return TimePointsStored(
+            "not_checked",
+            f"{late} Whether it holds every point its solver accepted after it is not checked.",
+        )
+    return TimePointsStored(found.stored, f"{found.why} {late}")
+
+
+def _stored_points_by_simulator(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
+    """:func:`stored_time_points` for a run that stores from zero."""
+    producer = source.producer or source_producer(
+        source, read_dialect=raw.dialect, reported=reported_build(source.log, source.raw)
+    )
+    family = producer.family or raw.dialect
+    if family == "ltspice":
+        if compression_drops_points(source, raw):
+            return TimePointsStored("reduced", _XVII_REDUCED)
+        found = which_ltspice(producer.program, producer.build)
+        if found is not None and found.generation == "xvii" and not compressed_transient(raw):
+            return TimePointsStored("accepted")
+        if found is None:
+            why = (
+                "the build that wrote it is not known, so neither whether waveform "
+                "compression dropped points nor the solver's count is known. LTspice XVII "
+                "stores fewer points than it accepts with compression on, and "
+                "'.options plotwinsize=0' turns it off"
+            )
+        elif found.generation == "xvii":
+            why = "this LTspice XVII run's points could not be compared with its solver's"
+        else:
+            why = (
+                f"this build ({found.evidence}) logs no count of the steps its solver "
+                "accepted, so the stored points cannot be compared with one"
+            )
+        return TimePointsStored(
+            "not_checked",
+            f"Whether this file holds every step LTspice's solver accepted is not checked: {why}.",
+        )
+    if family == "ngspice":
+        if source.netlist is None:
+            interp, unread = None, "the run's deck is not known to the server"
+        else:
+            interp, unread = deck_ngspice_interp(source.netlist)
+        if interp:
+            return TimePointsStored(
+                "print_step",
+                "The deck sets '.options interp', so ngspice stored this run interpolated "
+                "onto the print step instead of at the time points its solver accepted: "
+                "these steps are the print step's and say nothing of the solver's. Drop "
+                "the option to store every accepted point.",
+            )
+        if interp is None:
+            return TimePointsStored(
+                "not_checked",
+                "Whether ngspice stored every time point its solver accepted or, under "
+                f"'.options interp', points on the print step is not checked: {unread}.",
+            )
+        return TimePointsStored("accepted")
+    name = family or "the simulator that wrote it"
+    return TimePointsStored(
+        "not_checked",
+        f"Which of its solver's time points {name} stores in a transient's file is not "
+        "established, so whether these are every step it accepted is not checked.",
     )
 
 
@@ -282,10 +544,12 @@ def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str
     """
     observations = list(source.observations)
     found = None if source.window is not None else coarse_waveform(source, raw)
+    case_id = (source.identity or {}).get("case_id")
+    label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
     if found is not None:
-        case_id = (source.identity or {}).get("case_id")
-        label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
         observations.append(dict(coarse_waveform_observation([(label, found)], run_cap=1)))
+    elif compression_drops_points(source, raw):
+        observations.append(dict(compressed_xvii_observation([label], run_cap=1)))
     if source.signals is not None:
         observations.append(
             {
@@ -387,7 +651,7 @@ def run_selectors_beside_path(
     )
 
 
-def resolve_experiment_run(
+async def resolve_experiment_run(
     job_id: str,
     state: SessionState,
     *,
@@ -395,9 +659,9 @@ def resolve_experiment_run(
     case_id: str | None = None,
     require_raw: bool = True,
 ) -> RunContext:
-    """Resolve a produced case from any experiment job whose runs are terminal."""
-    job = resolve_job(job_id, state)
-    return experiment_run_context(
+    """Resolve a case of an experiment job that can be read (``case_unreadable``)."""
+    job = await resolve_job_async(job_id, state)
+    return await experiment_run_context(
         job, state, run_index=run_index, case_id=case_id, require_raw=require_raw
     )
 
@@ -430,32 +694,138 @@ def partial_raw_observation(case: ExperimentCase, held: dict[str, Any]) -> dict[
     }
 
 
-def runs_unready(job: ExperimentJob) -> str | None:
-    """Why ``job``'s runs cannot be read yet, or None once they can.
+CaseUnreadableCode = Literal["run_not_finished", "raw_not_produced"]
 
-    The one readiness rule for everything that reads a job's runs by its id:
-    ``analyze_results``, ``inspect``, ``plot_waveform``, the Python API's
-    reads and ``jobs(place_beside_sheet)``. A job's runs are read once every
-    run has finished (``job_lifecycle.runs_done``), which is the moment
-    ``jobs(wait, wait_for="runs")`` returns, and not before: a case read while
-    its siblings still run would be the answer to a different question than
-    the job's. Which of them can be read is then the case's own answer
-    (``case_unreadable``).
+
+@dataclass(frozen=True, kw_only=True)
+class CaseUnreadable:
+    """Why a case of a job cannot be read now (``case_unreadable``).
+
+    ``run_not_finished``: its run has not ended, so wait for it.
+    ``raw_not_produced``: its run ended without results a read takes;
+    ``detail`` is its failure summary. Only a case whose simulator's exit was
+    not confirmed may have them later, and its detail says so. ``evidence`` is what a
+    running case's simulator has written so far (``run_progress``' fields),
+    when ``case_refusal`` read it."""
+
+    code: CaseUnreadableCode
+    detail: str
+    evidence: dict[str, Any] | None = None
+
+    def error(self, job: ExperimentJob, case: ExperimentCase) -> ResultError:
+        """The error a read of one case raises with this reason."""
+        if self.code == "run_not_finished":
+            return RunNotFinishedError(self.detail)
+        return ResultError(_no_raw_result(job.job_id, case))
+
+
+def case_unreadable(
+    job: ExperimentJob, case: ExperimentCase, *, require_raw: bool = False
+) -> CaseUnreadable | None:
+    """Why ``case`` of ``job`` cannot be read now, or None when it can.
+
+    The one answer to "can this case be read, and if not, why", for every read
+    of a job's case: ``inspect(kind="results")``, ``plot_waveform``,
+    ``analyze_results``, the Python API's raw and log reads, and
+    ``jobs(place_beside_sheet)``. It is the case's own answer, whatever its
+    job's status or its sibling cases: a case that produced, or that was
+    stopped and kept what its run wrote (``partial_raw``), is read.
+
+    A case is final once its status is terminal. The coordinator sets a
+    produced status last, after the end-of-run checks
+    (``ExperimentRunner._end_of_run``) have read the log, set ``raw_file`` and
+    ``log_file`` and checked the raw, and after the result digest; a stopped
+    case gets its terminal status after its kept raw is cut and recorded. Until
+    then the case reads ``submitted`` or ``running`` here and in its record,
+    so a case whose files may still change is never read. On WSL the run files
+    are on the Windows side and the reads take them over ``/mnt``; the
+    simulator has exited before its outcome reaches the coordinator, and no
+    copy follows, so a terminal case's files are final there too.
+
+    A case stopped with its exit unconfirmed (``kill_unconfirmed``) is terminal
+    with no raw; a late exit may then keep its partial raw, and the case is
+    read from then on. That holds whatever the job's status, as it did when
+    this gate was the job's.
+
+    ``require_raw``: the read takes the case's raw (a chart, a raw read), so a
+    case that has none is not read, as one that produced none is not; a read
+    of its log alone (False) takes it.
     """
-    if runs_done(job):
-        return None
-    return f"Experiment job {job.job_id!r} has no readable runs yet (status={job.status!r})"
+    if case.status not in TERMINAL_CASE_STATUSES:
+        return CaseUnreadable(
+            code="run_not_finished", detail=_not_finished(job, case, None, read=False)
+        )
+    if case.status == "produced" or partial_raw(case) is not None:
+        if not require_raw or case.raw_file is not None:
+            return None
+        detail = _no_raw_result(job.job_id, case)
+    else:
+        detail = _failure_detail(case)
+    return CaseUnreadable(code="raw_not_produced", detail=detail)
 
 
-def case_unreadable(case: ExperimentCase) -> str | None:
-    """Why a read of ``case``, of a job whose runs are done, takes no raw, or
-    None when it does: the case produced one, or was stopped and kept what its
-    run wrote (``partial_raw``). The answer is the case's failure summary."""
-    readable = case.status == "produced" or partial_raw(case) is not None
-    return None if readable else failure_summary(case)
+def _failure_detail(case: ExperimentCase) -> str:
+    """Why a case whose run ended without results has none: its failure
+    summary, and when its simulator's exit was not confirmed, that a late exit
+    may still keep its raw."""
+    detail = failure_summary(case)
+    if case.failure_code == "kill_unconfirmed" and not any(
+        item.get("code") == "late_simulator_exit" for item in case.observations
+    ):
+        detail += (
+            ". Its simulator's exit was not confirmed: if the run keeps a stopped "
+            "case's raw (execution.keep_partial_raw), the case is read once the "
+            "simulator exits"
+        )
+    return detail
 
 
-def experiment_run_context(
+async def case_refusal(
+    job: ExperimentJob, case: ExperimentCase, *, require_raw: bool = False
+) -> CaseUnreadable | None:
+    """``case_unreadable``, with what a running case's simulator has written so
+    far (``experiment_runner.live_run_progress``), read off the loop. The
+    answer is ``case_unreadable``'s; only the refusal's wording gains the
+    facts."""
+    refusal = case_unreadable(job, case, require_raw=require_raw)
+    if refusal is None or refusal.code != "run_not_finished" or case.status == "queued":
+        return refusal
+    from ltspice_mcp.lib.experiment_runner import live_run_progress
+
+    progress = (await live_run_progress(job, case_ids={case.case_id})).get(case.case_id)
+    return CaseUnreadable(
+        code="run_not_finished",
+        detail=_not_finished(job, case, progress, read=True),
+        evidence=progress["evidence"] if progress is not None else None,
+    )
+
+
+def _not_finished(
+    job: ExperimentJob, case: ExperimentCase, progress: dict[str, Any] | None, *, read: bool
+) -> str:
+    """The refusal of a read of a case whose run has not finished: the case,
+    what its simulator has written so far (``progress``, when ``read`` read
+    it), and the wait."""
+    head = f"Case {case.case_id!r} of job {job.job_id!r} "
+    if case.status == "queued":
+        written = "has not started yet (queued), so its results cannot be read yet."
+    else:
+        written = "has not finished, so its results cannot be read yet. " + (
+            progress["detail"]
+            if progress is not None
+            else "What its simulator has written so far could not be read."
+            if read
+            else "Its run_progress in jobs(action='status') says what its simulator has "
+            "written so far."
+        )
+    return (
+        f"{head}{written} It is read once its run ends and the checks made then have "
+        f"run: wait for it with jobs(action='wait', job_id='{job.job_id}', "
+        "wait_for='runs'). The job's cases that have finished can be read now."
+    )
+
+
+async def experiment_run_context(
     job: ExperimentJob,
     state: SessionState,
     *,
@@ -473,11 +843,44 @@ def experiment_run_context(
     as its run row's ``other_raws`` lists it, and raises
     :class:`OtherRawNotWritten` when the run wrote none.
     """
-    job_id = job.job_id
-    # Per-case readiness is still gated case by case below.
-    unready = runs_unready(job)
-    if unready is not None:
-        raise ResultError(unready)
+    _, context = await readable_case(
+        job,
+        state,
+        run_index=run_index,
+        case_id=case_id,
+        require_raw=require_raw,
+        other_raw=other_raw,
+    )
+    return context
+
+
+async def readable_case(
+    job: ExperimentJob,
+    state: SessionState,
+    *,
+    run_index: int | None = None,
+    case_id: str | None = None,
+    require_raw: bool = True,
+    other_raw: OtherRawKind | None = None,
+) -> tuple[ExperimentCase, RunContext]:
+    """The case of ``job`` that ``case_id``, else ``run_index``, names, and what
+    a read of it takes, once it can be read (``case_refusal``). Raises
+    ``RunNotFinishedError`` for a case whose run has not finished, else
+    ``ResultError``."""
+    case = experiment_case(job, run_index=run_index, case_id=case_id)
+    refusal = await case_refusal(job, case, require_raw=require_raw)
+    if refusal is not None:
+        raise refusal.error(job, case)
+    return case, case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+
+
+def experiment_case(
+    job: ExperimentJob, *, run_index: int | None = None, case_id: str | None = None
+) -> ExperimentCase:
+    """The case of ``job`` that ``case_id``, else ``run_index`` (default 0),
+    names. Whether it can be read is its own answer (``case_unreadable``).
+    Raises ``ResultError``.
+    """
     if case_id is None and run_index is None:
         run_index = 0
     matches = [
@@ -488,8 +891,49 @@ def experiment_run_context(
     ]
     if not matches:
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
-        raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
-    return case_run_context(job, matches[0], state, require_raw=require_raw, other_raw=other_raw)
+        raise ResultError(f"Experiment job {job.job_id!r} has no case matching {selector}")
+    return matches[0]
+
+
+@dataclass(frozen=True, kw_only=True)
+class UnmatchedRun:
+    """A run a selection named that its job does not hold: a case id
+    (``case_not_found``) or a run index (``run_not_found``)."""
+
+    case_id: str | None
+    run_index: int | None
+    code: Literal["case_not_found", "run_not_found"]
+
+
+def select_cases(
+    job: ExperimentJob, runs: Literal["all"] | Sequence[int] | CaseIds
+) -> tuple[list[ExperimentCase], list[UnmatchedRun]]:
+    """The cases of ``job`` that a ``runs`` value names, in the job's order,
+    and each run it names that the job does not hold.
+
+    The one reading of the ``runs`` grammar of a job's source: ``"all"``, a
+    list of run indices, or ``{case_ids: [...]}`` (any object with a
+    ``case_ids`` list). ``analyze_results`` and ``plot_waveform`` both select
+    a job's cases through it, so one selection reads the same cases in both.
+    Whether each selected case can be read is the case's own answer
+    (``case_unreadable``), asked by the caller.
+    """
+    if isinstance(runs, str):
+        return list(job.cases), []
+    if isinstance(runs, Sequence):
+        wanted_indices = set(runs)
+        selected = [case for case in job.cases if case.run_index in wanted_indices]
+        found_indices = {case.run_index for case in selected}
+        return selected, [
+            UnmatchedRun(case_id=None, run_index=index, code="run_not_found")
+            for index in sorted(wanted_indices - found_indices)
+        ]
+    wanted = set(runs.case_ids)
+    selected = [case for case in job.cases if case.case_id in wanted]
+    found = {case.case_id for case in selected}
+    return selected, [
+        UnmatchedRun(case_id=case_id, run_index=None, code="case_not_found") for case_id in sorted(wanted - found)
+    ]
 
 
 def case_run_context(
@@ -500,13 +944,13 @@ def case_run_context(
     require_raw: bool = True,
     other_raw: OtherRawKind | None = None,
 ) -> RunContext:
-    """``experiment_run_context`` for a caller already holding the case, of a
-    job whose runs it has checked are done (``runs_unready``). A caller reading
-    every case of a job takes each this way rather than finding it again by
-    its id."""
+    """``experiment_run_context`` for a caller already holding the case, which
+    it has asked can be read (``case_refusal``). A caller reading every case of
+    a job takes each this way rather than finding it again by its id."""
     job_id = job.job_id
-    if case_unreadable(case) is not None or (require_raw and case.raw_file is None):
-        raise ResultError(_no_raw_result(job_id, case))
+    refusal = case_unreadable(job, case, require_raw=require_raw)
+    if refusal is not None:
+        raise refusal.error(job, case)
     raw = case.raw_file
     if other_raw is not None:
         if raw is None or other_raw not in case.other_raws:
@@ -523,8 +967,6 @@ def case_run_context(
         "assignments": dict(case.assignments),
         "circuit": case.circuit,
         "deck_sha256": case.deck_sha256,
-        "step_index": case.step_index,
-        "step_values": dict(case.step_values),
     }
     if case.native_statistics is not None:
         identity["native_statistics"] = case.native_statistics.public()
@@ -547,9 +989,55 @@ def case_run_context(
         identity=identity,
         console=console,
         simulator_version=case.simulator_version,
-        observations=(partial_raw_observation(case, held),) if held is not None else (),
+        observations=(
+            *((partial_raw_observation(case, held),) if held is not None else ()),
+            *(item for item in case.observations if item.get("code") in READ_BY_JOB),
+        ),
         producer=run_producer(job, case),
+        device_table_withheld=next(
+            (item for item in case.observations if item.get("code") == "logopinfo_withheld"),
+            None,
+        ),
     )
+
+
+@dataclass(frozen=True, kw_only=True)
+class CaseUnread:
+    """Why a selected case of a job is not read: ``case_refusal``'s reason
+    (``run_not_finished`` or ``raw_not_produced``, with what a running case's
+    simulator has written so far as ``evidence``), or
+    ``other_raw_not_written``."""
+
+    code: str
+    detail: str
+    evidence: dict[str, Any] | None = None
+
+
+async def read_selected_case(
+    job: ExperimentJob,
+    case: ExperimentCase,
+    state: SessionState,
+    *,
+    require_raw: bool,
+    other_raw: OtherRawKind | None = None,
+) -> RunContext | CaseUnread:
+    """What a read of ``case``, selected from ``job`` by ``select_cases``,
+    takes, or why it is not read. The one answer ``analyze_results`` and
+    ``plot_waveform`` give each case a ``runs`` selection names. Whether the
+    case can be read is its own answer (``case_refusal``), whatever its job's
+    status.
+
+    ``require_raw`` is where the two differ: analyze_results reads a case
+    without a raw (False), because a log recipe reads its log alone, and a
+    chart draws only a raw (True), so a case without one is not drawn.
+    """
+    refusal = await case_refusal(job, case, require_raw=require_raw)
+    if refusal is not None:
+        return CaseUnread(code=refusal.code, detail=refusal.detail, evidence=refusal.evidence)
+    try:
+        return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+    except OtherRawNotWritten as exc:
+        return CaseUnread(code=exc.code, detail=str(exc))
 
 
 def resolve_analysis_source(
@@ -641,6 +1129,91 @@ def source_producer(
     )
 
 
+#: What a read of a log's device table by path says of an empty one, for an
+#: .op run: LTspice 24 and later print the table for one under the option
+#: (recorded: log/device_op, and log/device_op_numdgt_off without it).
+DEVICE_TABLE_REQUEST_UNKNOWN = (
+    "The log holds no device operating-point table (gm, vth, vdsat of each "
+    "semiconductor). LTspice 24 and later print it for an .op run only under "
+    "'.options logopinfo', and it is not known whether this run asked for it: a log "
+    "read by its path has no job record that says so, so an empty table here is not "
+    "evidence that the circuit has no semiconductor devices. Read the run by its "
+    "job_id, which says whether the option was withheld, or rerun it with the "
+    "option. On LTspice add '.options logopinfo' to the deck (run_experiments adds "
+    "it to an .op run on a build it knows to be LTspice 24 or later); on ngspice "
+    ".save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
+)
+
+
+#: The same for a run whose analysis is not known to be an .op. With the option,
+#: a .tran run prints no table on either build (recorded: log/device_op_tran);
+#: no recording shows whether a .dc sweep or another analysis prints one, so no
+#: rerun of this analysis is promised to give it.
+DEVICE_TABLE_NOT_OP = (
+    "The log holds no device operating-point table (gm, vth, vdsat of each "
+    "semiconductor). LTspice 24 and later print it for an .op run under "
+    "'.options logopinfo'; with the option, a .tran run prints none, and no "
+    "recording shows whether {analysis} prints one. It is not known whether this "
+    "run asked for it either: a log read by its path has no job record that says "
+    "so. So an empty table here is not evidence that the circuit has no "
+    "semiconductor devices. For the table, run the circuit's bias point as an .op "
+    "with '.options logopinfo'."
+)
+
+
+async def device_table_unread(
+    source: AnalysisSource,
+    *,
+    family: str | None,
+    devices: bool | None = None,
+    analysis: str | None = None,
+) -> dict[str, Any] | None:
+    """Why a read of ``source``'s log found its device operating-point table
+    empty, where the reason is not "the circuit has no such device"; None
+    where an empty table means that, or no table was ever to be printed.
+
+    The one answer every route that reads the table gives with an empty one
+    (the operating-point recipe, a device parameter's value, the Python API's
+    ``device_op_points``). LTspice 24 and later print the table only under
+    ``.options logopinfo``, and LTspice XVII always (recorded:
+    log/device_op_numdgt_off). By job, the case's run says whether the server
+    withheld the option (``logopinfo_withheld``, relayed as the run gave it);
+    a case without it was given the option, or ran on a build that needs none.
+    By path no job record says whether the run asked for the table, so that
+    is said where the log's first line names an LTspice 24 or later, the
+    builds that print it only when asked. A log with no such banner is not
+    one: LTspice 26 opens every log with it, XVII prints the table unasked,
+    and an ngspice log never holds one (its device values are traces of its
+    raw). ``family`` is the dialect the caller read the run in; a simulator
+    that is not LTspice gets no reason. ``devices`` is what the caller knows
+    of the run's semiconductors (an LTspice raw's terminal currents): False,
+    an empty table means none, and no reason is given; None, not known.
+    ``analysis`` is the run's, where the caller has its raw (``"op"``,
+    ``"dc"``): only an .op is recorded printing the table, so the reason for
+    any other analysis, or one not known, promises no rerun of it."""
+    if family not in (None, "ltspice") or devices is False:
+        return None
+    if source.trusted_job_artifact:
+        withheld = source.device_table_withheld
+        return dict(withheld) if withheld is not None else None
+    build = await asyncio.to_thread(log_head_build, source.log) if source.log is not None else None
+    found = which_ltspice(None, build)
+    if found is None or found.generation != "current":
+        return None
+    detail = (
+        DEVICE_TABLE_REQUEST_UNKNOWN
+        if analysis == "op"
+        else DEVICE_TABLE_NOT_OP.format(
+            analysis="this run's analysis"
+            if analysis is None
+            else "a .dc sweep"
+            if analysis == "dc"
+            else f"a {analysis} run"
+        )
+    )
+    return {"code": "device_table_request_unknown", "kind": "coverage", "detail": detail}
+
+
 async def answer_measurements(
     source: AnalysisSource, table: MeasurementsOutput, *, producer: Producer | None = None
 ) -> MeasurementsOutput:
@@ -712,6 +1285,42 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     if found is None or not found.before_24:
         found = which_ltspice(executable.path, reported_build_of(state, executable))
     return found.evidence if found is not None and found.before_24 else None
+
+
+def session_ltspice_builds(state: SessionState) -> dict[str, str | None]:
+    """The recorded LTspice builds this session may run, by the name
+    ``stored_values`` gives them, each with the note a statement about it
+    carries: its detected LTspice and each named executable of the LTspice
+    family, identified as ``cp1252_ltspice`` identifies one
+    (``simulator_build.which_ltspice``, from the executable and the build its
+    latest run reported). One before 24 is LTspice XVII and a later one
+    LTspice 26, each with no note. One whose build nothing shows is not known
+    to read alike: it stands for every recorded build, with the note
+    ``stored_values.UNIDENTIFIED``. A session with no LTspice may run none, so
+    a reply states no build's reading to it.
+
+    Blocking: identifying an executable may read its program file."""
+    identified: set[str] = set()
+    unidentified = False
+    # Keyed by family, and a named executable by its selector (ltspice:xvii),
+    # as every other reader of the session's LTspice keys them.
+    for selector, simulator in state.offered_simulators.items():
+        if selector.partition(":")[0] != "ltspice":
+            continue
+        executable = executable_identity(simulator)
+        program = executable.path if executable is not None else None
+        found = which_ltspice(program, None)
+        if found is None or not found.before_24:
+            found = which_ltspice(program, reported_build_of(state, executable)) or found
+        if found is None:
+            unidentified = True
+        else:
+            identified.add(stored_values.CP1252_BUILD if found.before_24 else "LTspice 26")
+    builds: dict[str, str | None] = dict.fromkeys(sorted(identified))
+    if unidentified:
+        for build in stored_values.BUILDS:
+            builds.setdefault(build, stored_values.UNIDENTIFIED)
+    return builds
 
 
 def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
@@ -921,7 +1530,7 @@ async def load_artifacts(
 
 async def load_raw(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     """Load a selected resident plot and its same-capture log facts."""
-    return select_raw(await load_artifacts(source, state, require_raw=True), source.plot_index)
+    return source_raw(source, await load_artifacts(source, state, require_raw=True))
 
 
 def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
@@ -929,8 +1538,62 @@ def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     deadline = _raw_deadline()
     captured = _resident_artifacts(source, require_raw=True, deadline=deadline)
     if captured is not None:
-        return select_raw(captured, source.plot_index)
-    return _parse_raw_sync(source, state, deadline=deadline)
+        return source_raw(source, captured)
+    return _as_read_from(source, _parse_raw_sync(source, state, deadline=deadline))
+
+
+def source_raw(source: AnalysisSource, artifacts: ParsedArtifacts) -> DecodedRaw:
+    """The plot ``source`` selects of ``artifacts``, as ``source`` reads it
+    (:func:`_as_read_from`): what every reader of a source's results takes."""
+    return _as_read_from(source, select_raw(artifacts, source.plot_index))
+
+
+def _as_read_from(source: AnalysisSource, raw: DecodedRaw) -> DecodedRaw:
+    """``raw`` as ``source`` reads it: where the read found no log under the
+    name the source gives it (``raw_parser.run_log_path``), a plot whose steps
+    cannot be told apart names that log in its refusal. The capture, which a
+    cache shares between sources, holds no file name."""
+    if source.log is None or raw.logs is None or "log" not in raw.logs.captured.absent:
+        return raw
+    return raw.without_log(source.log.name)
+
+
+async def read_steps(
+    job: ExperimentJob, case: ExperimentCase, state: SessionState
+) -> CaseSteps | None:
+    """How ``case``'s results are stepped (``decoded_raw.steps_held``), read
+    once when its run ends (``ExperimentRunner._end_of_run``) and kept on its
+    record. The raw is read through the parse service for its first plot's
+    last trace alone, which keeps its axis and step parameters too (the name
+    is read off the header's first bytes; a header too long to read there is
+    read whole), with its log's ``.step`` lines.
+
+    None, and nothing recorded, for a run that left no raw and for a raw that
+    could not be read: a failed read says nothing of how the results are
+    stepped, and the case's row says its steps were not recorded. As for the
+    log read at the end of a run (``ExperimentRunner._with_logs``, which keeps
+    the failure as ``logs_error``), a file still locked when the read is made,
+    as on Windows for a moment after the simulator exits, is not read again.
+    A cancel of the read (the job stopped, the process shutting down) ends
+    its parse through the parse service's cancel."""
+    if case.raw_file is None:
+        return None
+    traces = await asyncio.to_thread(first_plot_traces, case.raw_file)
+    source = AnalysisSource(
+        raw=case.raw_file,
+        log=case.log_file,
+        netlist=None,
+        dialect=dialect_for_job(job, state),
+        identity=None,
+        trusted_job_artifact=True,
+        console=(case.log_file or case.raw_file).with_suffix(".exe.log"),
+        signals=(traces[-1][0],) if traces else None,
+    )
+    try:
+        raw = await load_raw(source, state)
+    except ResultError:
+        return None
+    return steps_held(raw.descriptor)
 
 
 async def load_logs(source: AnalysisSource, state: SessionState) -> DecodedLog:

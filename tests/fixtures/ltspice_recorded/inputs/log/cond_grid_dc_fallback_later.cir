@@ -1,0 +1,7 @@
+* a .dc sweep whose first point has no current to find and whose later points need more than Newton iteration
+V1 vcc 0 0
+R1 vcc a 1k
+B1 y 0 I=(exp(40*V(y))-1e3)*V(vcc)
+R2 y 0 1G
+.dc V1 0 12 6
+.end

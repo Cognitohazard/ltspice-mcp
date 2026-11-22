@@ -23,6 +23,8 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib import ltspice_window, plot_settings
+from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.lib.plot_settings import (
@@ -506,8 +508,23 @@ def a_job_of(state: SessionState, sheet: Path, work_dir: Path) -> Path:
     kept.mkdir(parents=True)
     raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
     job = make_experiment_job(state, job_id="shown", raw=raw)
-    job.cases[0].circuit_path = sheet
+    ran(job, sheet)
     return raw
+
+
+def includes_not_compared(sheet: Path) -> str:
+    """What a placement says it did not compare, for a sheet compared by its digest."""
+    return (
+        f"The files {sheet.name} includes or uses (libraries, models, symbols) were not "
+        f"compared with the ones the run read: only {sheet.name} itself was."
+    )
+
+
+def ran(job: ExperimentJob, sheet: Path) -> None:
+    """Make ``job``'s one case a run of ``sheet`` as it is now."""
+    job.cases[0].circuit_path = sheet
+    job.sources[0].path = sheet
+    job.sources[0].sha256 = sha256_file(sheet)
 
 
 async def plot_the_job(state: SessionState) -> dict[str, Any]:
@@ -540,6 +557,7 @@ async def test_a_sheets_run_is_opened_from_the_sheet(
         "pid": PID,
         "version": "26.1.1",
         "note": TIED,
+        "not_checked": [includes_not_compared(sheet)],
     }
     # The job's results and log are the sheet's now, and its own are as they were.
     assert read(sheet.with_suffix(".raw")) == read(raw)
@@ -841,6 +859,8 @@ async def test_a_sheet_with_changes_nobody_saved_is_left_open_and_the_plot_stand
     # Saved there, the window holds what the file does, and the next showing
     # ties the plot: the pane that stood alone is closed for it.
     write(sheet, held.encode("cp1252"))
+    # Run again: the earlier run's results are not the saved sheet's.
+    ran(state_no_sim.all_jobs["shown"], sheet)
     put_windows(
         state_no_sim,
         world,
@@ -1208,7 +1228,7 @@ async def test_a_sheets_stepped_operating_point_is_opened_from_the_sheet_without
     sheet = a_sheet(work_dir)
     raw = rec.stage_run(build, "raw/step_op", work_dir / "runs" / "stepped")
     job = make_experiment_job(state_no_sim, job_id="stepped", raw=raw)
-    job.cases[0].circuit_path = sheet
+    ran(job, sheet)
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
@@ -1222,6 +1242,7 @@ async def test_a_sheets_stepped_operating_point_is_opened_from_the_sheet_without
         "pid": PID,
         "version": "26.1.1",
         "note": f"{TIED} {NO_TRACES_NAMED}",
+        "not_checked": [includes_not_compared(sheet)],
     }
     assert read(sheet.with_suffix(".raw")) == read(raw)
     assert read(sheet.with_suffix(".log")) == read(raw.with_suffix(".log"))

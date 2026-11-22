@@ -382,11 +382,30 @@ class ResultFileNotFoundError(ResultError):
     code = "result_file_not_found"
 
 
+class RunNotFinishedError(ResultError):
+    """A read named a case of a job whose run has not finished: it is queued,
+    or its simulator is running, or the checks made when its run ends have not
+    run yet. Its own code, so a caller can tell a case to wait for from one
+    that will never be read; the message names the case, what its simulator
+    has written so far and the wait (``services.case_unreadable``)."""
+
+    code = "run_not_finished"
+    takes_family_hint = False
+
+
 class OtherRawNotWritten(ResultError):
     """A read asked for an experiment case's other raw (an FRA's results, a
     transient's operating point) of a kind its run did not write."""
 
     code = "other_raw_not_written"
+    takes_family_hint = False
+
+
+class PlotNotFoundError(ResultError):
+    """A read named a plot (``plot_index``) its results file does not hold:
+    the file can be read, and the request is what does not fit it."""
+
+    code = "plot_not_found"
     takes_family_hint = False
 
 

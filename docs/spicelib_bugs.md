@@ -4736,7 +4736,7 @@ def test_a_measurement_named_with_a_dot_is_read(tmp_path):
 `tests/test_recorded_ltspice_results.py::test_a_measurement_named_with_punctuation`
 pins what each build prints and that the server reads the measurement under
 its name, its crossing the result;
-`tests/test_measurement_answer.py::test_every_route_reads_a_measurement_named_with_punctuation`
-reads it on every route. `tests/test_run_diagnostics.py` still lists XVII's
+`tests/test_measurement_answer.py::test_every_recorded_cell_of_the_grid_reads_as_its_form_means`
+reads it on every route, as a cell of the printed-measurement grid. `tests/test_run_diagnostics.py` still lists XVII's
 dashed line among the lines the log classifier does not know: the classifier
 reads a result line with a pattern of its own.

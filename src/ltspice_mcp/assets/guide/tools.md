@@ -9,6 +9,8 @@ description: >
 
 # Using the tools
 
+## Which call does what
+
 Write the deck to a file and run it with `run_experiments`; attach
 `analyze.recipes` to get the numbers in the same response. Follow a receipt
 with `jobs`, and measure a finished job with `analyze_results`.
@@ -24,7 +26,7 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | a scalar, a trace, a chart | recipes `value`, `waveform`, `plot` |
 | show a run in the user's own LTspice, when they ask to see it there | `plot_waveform(job_id=…, signals=[…], in_ltspice=true)` |
 | let the user plot nets by clicking the sheet in LTspice | `plot_waveform(job_id=…, in_ltspice=true)` on a job that ran the sheet (guide section 'schematics') |
-| put a run beside its sheet as the sheet's own results | `jobs(action="place_beside_sheet", job_id=…, case_id=…)` (guide section 'schematics') |
+| put a run beside its sheet or netlist as its own results | `jobs(action="place_beside_sheet", job_id=…, case_id=…)` (guide section 'schematics') |
 | device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
@@ -40,17 +42,26 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 | open a sheet in the user's own LTspice, when they ask to see it there | `verify_circuit(path=…, in_ltspice=true)` |
 
+## Watching a long run, and stopping it
+
 A case has no time limit unless `execution.run_timeout_s` (or the server's
 `[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or
 `jobs(wait)` receipt contains a `run_progress` observation for each running
 case. It reports the points written and the last time or frequency reached,
-which you can compare with the deck's own stop value. A simulator writes in
+which you can compare with the deck's own stop value. A case that has
+finished is read at once, while its siblings still run; a read of one still
+running is refused with `run_not_finished`, and `analyze_results` lists it in
+`coverage.missing_cases` and counts it in `coverage.runs_running`, so a
+statistic over the runs read is not the job's result until that count is
+gone. A simulator writes in
 buffered blocks, so compare readings a few minutes apart. If `points` has not
 changed, the case is not advancing, and `jobs(action="cancel")` stops it. A
 stopped case's raw is deleted unless the run set
 `execution.keep_partial_raw: true`. With that set, its results stay readable
 up to the point where the run stopped, and every read reports a `partial_raw`
 observation.
+
+## Finding a recipe, op or check and its fields
 
 `inspect(kind="reference")` finds a recipe, schematic op, variation kind,
 check or job action from plain words (`query="phase margin"`) and returns its
@@ -69,6 +80,8 @@ and native Windows. On native Windows it also supports one LTspice
 executable, the LTspice 26.0.2 build whose startup behavior was checked,
 matched by the SHA-256 hash of its file. Any other LTspice executable, a later
 version included, is refused (`recovery_startup_unsupported`).
+
+### What a recoverable request refuses
 
 A recoverable request is refused before submission, with an error code that
 names the reason, when a deck reads an include in place at run time
@@ -92,6 +105,8 @@ ngspice, `simulator_seed`, or a deck that fixes its own seed with
 writes one), allows `agauss`, `gauss`, `aunif`, `unif` and `limit` (guide
 section 'ngspice').
 
+### Recovery on LTspice
+
 For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.
 Each case starts LTspice with its own copy of an LTspice settings file, so the
 original is not changed. The file is `simulator.ltspice_ini` (environment
@@ -103,6 +118,8 @@ submission, at resume and before each case starts. A missing value returns
 `recovery_startup_unsupported`, and an older time `recovery_startup_stale`.
 Resolve startup prompts in LTspice first, because the server does not answer
 dialogs or write these values.
+
+### Resuming: the lineage, retried cases and reused results
 
 A resume creates a child job. The original job and its children form a
 lineage, and its head is the newest of them, which a resume reply returns as
@@ -149,13 +166,30 @@ attach the recipe that reads it back:
 The simulator computes the scalar and the `measurements` recipe reads it back
 from the log, parsed and with SI units. Each case's row contains it as
 `value.measured.vout_dc`. A null there is named by why:
-`value.failed_measurements` if LTspice printed the `.meas` failed,
-`value.unreadable` if it printed something other than a number, and
-`value.not_finite` if it printed a number that is not finite. On ngspice, measure the trace with a
+`value.failed_measurements` if LTspice printed the `.meas` failed, and
+`value.unreadable` if it printed something other than a finite number, which
+its reason quotes (`infdB`). A stepped run's row gives each name's
+statistics in `value.stats`: `failure_count` counts only the steps LTspice
+printed failed, and `no_number` counts each other step with no number under
+its reason, so a `not_established` count there makes `failure_count` a lower
+bound. On ngspice, measure the trace with a
 recipe instead (guide section 'ngspice'). An `assign` target must exist in the
 deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in
 `completeness`, and `outcome` is `"partial"`.
+
+A case whose deck has `.step` is one run with several steps: its run row's
+`steps` gives how many and which parameters step (`{count, parameters}`), and
+says why where its raw and log did not establish them.
+
+### A sweep's cases in one chart
+
+`plot_waveform` with `runs` beside `job_id`, as an `analyze_results` source
+takes it (`"all"`, `[0, 2]`, `{case_ids: [...]}`), draws those cases in one
+chart. Each trace is labelled by the assignments that differ among the cases
+and by its step, each trace summary names its `case_id`, and
+`cases_not_drawn` names each case it left out and why. Cases of different
+analyses go in separate calls, and `in_ltspice` takes one case.
 
 ## Notes per tool
 
@@ -232,6 +266,8 @@ refused. Step parameters are read at the same time as the RAW, from the RAW
 itself or the `.log` beside it, and are not read again later. Guide section
 'python' covers Python arrays and tables.
 
+### Reading a log without a RAW
+
 To read a log that has no RAW, use the `measurements` recipe:
 
 ```json
@@ -266,6 +302,8 @@ the simulation finished. A read by `job_id` works once all the job's runs have
 finished, and only on a case that is `produced` or kept a partial raw
 (`execution.keep_partial_raw`).
 
+### When a page cursor or a first read stops working
+
 A page cursor works only with the same query, and only while the RAW, its
 `.log` and the simulator's console log (`.exe.log`) are unchanged, including
 whether each of them exists. If any of these files changes, appears or is
@@ -276,9 +314,8 @@ first read runs out of time, the call returns `analysis_deadline` with no
 `result_set_id` or cursor; retry the original request with fewer sources or a
 larger configured analysis time budget. A retry reads the sources again,
 because the timeout is not recorded against them. After the first read, every
-call completes at least one recipe evaluation. Work left over when the time
-budget runs out continues when you pass the reply's `next` block
-(`result_set_id` and `cursor`) as `continue`.
+recipe is evaluated in the call, each with that time budget of its own; one
+that runs out of it fails alone, with `analysis_deadline`.
 
 ## Recipes the schema lists by name only
 
@@ -302,33 +339,75 @@ reduces every field.
 ## The response budget
 
 `run_experiments`, `jobs`, `analyze_results` and `inspect` take a `budget` in
-estimated tokens (compact characters / 4, minimum 500). If the assembled
-response is over it, the server applies the rungs of a fixed reduction ladder
-in order until it fits:
+estimated tokens (compact characters / 4, minimum 500). It is the reply's
+target. If you omit it, the server's default (`[analysis] default_budget`,
+4000 tokens) is the target. With the config value set to `0` and no `budget`
+there is no target: a reply is sent whole, except that a reply about a job
+holds at most 50 run rows, and an `analyze_results` reply at most a `per_run`
+page's `limit` (50 by default) and 100 entries of each other list it can cut.
+The Python API returns every row.
+
+`run_experiments` and `jobs` cut a reply over its target by run rows, whole
+rows from the end, keeping at least one. The reply's `cut` names what it left
+out (`"/runs/items": {total, returned, next}`), and its hint gives
+`jobs(action="runs", job_id, cursor)`, which reads the rest from the job's
+record; pass `run_fields` again with each cursor. A page read later shows the
+job as it stands then, with its `status` and `progress`. `jobs(action="list")`
+is cut by circuit groups the same way, and its `cursor` reads on.
+A row is sent whole or not at all. For the rows left out, `runs_not_shown`
+names, per kind (`diagnostics.<code>`, `failed_measurements`,
+`measurements_not_established`, `measurements_not_printed`, a coverage that
+says something was not read, `status.failed`), how many runs carry it, and up
+to 3 of those runs, each with a cursor that reads its row. It stays within a
+few hundred tokens, and the rows are sized against what it leaves. `failures`, `observations`,
+`warnings`, `completeness`, `progress`, the rows sent and `runs_not_shown` are
+never cut: a target too small for them still returns them in full, with one
+`budget_not_met` observation saying the reply is over its target.
+
+`analyze_results` evaluates every recipe you ask for in one call and cuts a
+reply over its target by its lists: each recipe's rows (`values` or
+`per_run.items`), `groups`, `spec.fail_cases` and `outliers`,
+`coverage.missing_cases`, `signals_available` and `source_hashes`, whole
+entries from the end, at least one kept. `reduced` and the counts of `spec`
+are never cut, and nothing you asked to include is dropped. `cut` names each
+list with its `next`; pass it as `continue: {result_set_id, cursor}` (the
+reply's `next` holds the first) to read the rest, sliced from the stored
+answer: nothing is evaluated again, so a page shows the rows as computed even
+if a source changed since, and its `stored_answer.snapshot` says which
+snapshot they are of. A page holds only its list (`page_of`); read each
+other list from the first reply's `cut`. A cursor lasts as long as the stored answer
+(`result_set_ttl_hours`, 24 hours by default); after that, send the request
+again. `rows_not_shown` names, per recipe, the rows left out that carry a fact
+(`failed_measurements`, `unreadable`, `diagnostics.<code>`, ...), up to 3 of
+them with a cursor that starts at each. A receipt's attached analysis is cut
+the same way, beside the run rows, and read on with `analyze_results`.
+
+An inline `waveform` too long for the reply is drawn again at fewer points
+first, each bucket keeping its minimum and maximum, never below 32 points:
+its `cut` entry at `.../value/x` gives the points the answer holds and those
+sent, with no cursor, and the recipe's `warnings` say so and name the
+`budget` at which the reply sends every point; `"format": "csv"` writes every
+sample to a file.
+
+### Notes sent once per session
+
+A note that describes the job or your request (a micro sign read as micro, an
+ngspice mode that could not be checked, results left in the job folder, the
+request's `lint` and `source`, the route to the `measurements` recipe) is sent
+in full once per session. After that it comes back as its code with
+`said_before` in place of its text, and the hint names
+`jobs(action="status", job_id)`, which always sends every note in full, as
+does repeating a `run_experiments` call with the same `request_id`.
+
+### The reduction ladder
+
+`inspect` applies the rungs of a fixed reduction ladder in order until the
+reply fits:
 
 | rung | what is removed |
 |-|-|
-| 0 trim | `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included); then points of an inline `waveform` whose `max_points` you did not set, thinned to fewer buckets that each keep their minimum and maximum |
-| 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"`, and a `max_points` you set, so any inline waveform may be thinned |
+| 0 trim | a page block with nothing left to read |
+| 1 answer | your detail opt-ins, such as `detail:"full"` |
 | 2 shrink | page size; cursors are created for the smaller page, so paging still reaches every row |
 
-Rung 2 lowers one page limit on every list in the reply at once, to the
-largest limit at which all their rows fit, so the values of three recipes
-share the budget instead of each taking all of it. If even one row per list
-is over the budget, a `run_experiments` or `jobs` receipt contains no per-case
-rows at all, so its minimum size is the same for 4 cases or 400.
-`completeness` and `runs.total` still count the runs, `jobs(runs)` pages them
-from `runs.next_cursor`, and `analyze_results` over the `job_id` returns the
-attached analysis's rows. `reduce` results and spec verdicts are kept.
-
-`failures`, `observations`, `warnings`, `completeness` and spec verdicts are
-never cut. A budget too small for them still returns them in full, with an
-observation that the reply is over the budget.
-
-If you omit `budget`, the server applies its own default
-(`[analysis] default_budget`, 4000 tokens) at rung 0 only, so a large response
-loses only `source_hashes` and the inline waveform points
-you did not ask for; set `max_points` to keep a count, or use `"format":
-"csv"` for every sample. A receipt thins its attached waveforms either way;
-`analyze_results` over the job reads more. A thinned recipe says so in its
-`warnings`. Set the config value to `0` to turn the default off.
+With no `budget`, only rung 0 applies.

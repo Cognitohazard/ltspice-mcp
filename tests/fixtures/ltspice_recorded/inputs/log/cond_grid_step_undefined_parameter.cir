@@ -1,0 +1,7 @@
+* a parameter that is not defined, over two steps of another
+V1 a 0 1
+R1 a 0 {undefined_r}
+R2 a 0 {r}
+.step param r list 1k 2k
+.op
+.end

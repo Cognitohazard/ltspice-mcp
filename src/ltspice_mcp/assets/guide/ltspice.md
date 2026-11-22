@@ -189,13 +189,18 @@ branch) instead of trusting `status: completed`.
 | `plotwinsize=0` | Store every computed point of a transient (no waveform compression) |
 
 LTspice XVII compresses a transient's waveform by default. It stored a 1 mV
-RC charge over 5 ms in 13 points, even with a 50 us maximum step, and the
-compression changed its own `.meas` results. LTspice 26 stored every point of
-the same run. When a recipe reads a compressed transient's samples,
-`analyze_results` reports it in `observations` (`coarse_compressed_waveform`)
-if the widest gap between stored points spans more than 5% of the transient's
-duration and is wider than the maximum step a job's deck gives `.tran`. Add
-`.options plotwinsize=0` before measuring a small or slow signal.
+RC charge over 5 ms in 13 points, even with a 50 us maximum step. Its own
+`.meas` results read points that raw does not hold: they came within 0.25% of
+the uncompressed run's, while a trapezoid over the 13 stored points was 0.41%
+below its `AVG` and interpolation at 1 ms 1.15% below its `FIND`. In that
+recording, XVII's `.meas` was the closer value. LTspice 26
+stored every point of the same run with compression on, though its raw's flags
+also say compression was on. When a recipe or a read takes samples from a
+compressed XVII transient, the reply says so in `observations`
+(`compressed_transient`). On either build, `coarse_compressed_waveform` says
+when the widest gap between stored points spans more than 5% of the
+transient's duration and is wider than the maximum step a job's deck gives
+`.tran`. Add `.options plotwinsize=0` before measuring a small or slow signal.
 
 ## Subcircuits
 
@@ -207,14 +212,17 @@ C1 out 0 {C}
 ```
 
 - `.include <path>` — include file contents verbatim.
-- `.lib <path>` — same as .include in LTspice. LTspice has no library
-  sections, so `.lib file section` makes it look for a file named
-  `file section`, and `run_experiments` refuses that deck (lint
+- `.lib <path>` — same as .include in LTspice, and the rest of the line is
+  the path, quoted or not: `.lib my models/amp.lib` reads `my models/amp.lib`.
+  LTspice has no library sections, so `.lib file section` makes it look for a
+  file named `file section`, and `run_experiments` refuses that deck (lint
   `lib-section-ltspice`).
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 
 
 ## Other LTspice Quirks
+
+### Encodings: the micro sign and 8-bit decks
 
 - **Micro sign**: LTspice writes the `u` suffix as µ in saved files and
   exported netlists. LTspice 24 writes it in UTF-8 and reads it back; LTspice
@@ -230,6 +238,14 @@ C1 out 0 {C}
   `Âµ`) is an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`)
   is a warning, read as the bare number. These checks run on a netlist and on
   an `.asc`'s exported netlist.
+- **8-bit decks**: LTspice reads a deck that is not UTF-8 as Latin-1. Byte
+  0x85 (an ellipsis in a Western editor) ends the line on LTspice 24 and
+  later, and a node named with a byte from 0x80 to 0x9F is refused by LTspice
+  26 and saved under a control character by XVII. The linter warns of both
+  (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
+
+### `.meas` names, values and analyses
+
 - **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
   evaluator and cannot name a measurement. LTspice 26 refuses the whole deck and
   XVII skips that measurement. `run_experiments` refuses them before the run
@@ -249,19 +265,15 @@ C1 out 0 {C}
   LTspice before it runs (`.op` may appear with one), and `vdb()`, `phase()`
   and `group_delay()` are not `.meas` functions. `run_experiments` refuses
   both decks (`analysis-count-ltspice`, `meas-function-ltspice`).
-- **8-bit decks**: LTspice reads a deck that is not UTF-8 as Latin-1. Byte
-  0x85 (an ellipsis in a Western editor) ends the line on LTspice 24 and
-  later, and a node named with a byte from 0x80 to 0x9F is refused by LTspice
-  26 and saved under a control character by XVII. The linter warns of both
-  (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
 - **A failed step on XVII**: in a stepped measurement table XVII prints `0`
   where LTspice 24 and later print `failed`, which replies name in
   `failed_measurements`. XVII prints a crossing at 0 s as `0` too, so a `0`
   in its table is not taken as the result: the step's value is null and
   replies name it under `not_established`. A log read by path whose files
   name no build may be XVII's and is read the same way.
-- **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
-  from zero. ngspice has no equivalent keyword.
+
+### Frequency response analysis (`.fra`)
+
 - **Frequency response analysis** (`.fra` with an analyzer `@N`): the run
   writes its transient raw and, beside it, `<run>.fra_N.raw`, which holds
   complex values over frequency in the same form as an AC result (its
@@ -271,11 +283,22 @@ C1 out 0 {C}
   `run_experiments`' attached `analyze` block, `plot_waveform`,
   `inspect(kind="results")` and `api.load_raw`; its path reads it too. A
   stepped FRA run's results file holds each step's sweep in turn, and the
-  server reads it one step at a time, as it reads a stepped `.ac`. The
-  results' `gain_N` is the negative of the loop gain the `stability` recipe
-  takes, so `stability` on `-gain_1` gives the crossover and phase margin
-  LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
-  refuses the analyzer.
+  server reads it one step at a time, as it reads a stepped `.ac`. Which
+  way the analyzer faces decides whether `gain_N` is the loop gain the
+  `stability` recipe takes, its negative, its reciprocal or its negative
+  reciprocal, and that is not established from the results; with the
+  analyzer facing as in the one recorded run, `stability` on `-gain_1` gives
+  the crossover and phase margin LTspice prints at the end of the log.
+  `stability` on these results compares its margin with that printed one: an
+  observation `fra_margin_differs` gives both and names the form whose margin
+  agrees, and `fra_margin_not_checked` says the log held none to compare.
+  Read that observation before trusting the margin. LTspice XVII 17.0 has no
+  FRA and refuses the analyzer.
+
+### `startup`, text of several lines, A-devices and multipliers
+
+- **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
+  from zero. ngspice has no equivalent keyword.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
   `\n` and a backslash as `\\`; a `\n` inside a path such as `C:\new` is a
   line break too. On export, both builds split a directive at each line break

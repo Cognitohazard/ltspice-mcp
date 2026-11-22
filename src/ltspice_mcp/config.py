@@ -739,7 +739,9 @@ class ServerConfig:
     """Whole-call work budget for ``analyze_results``."""
 
     result_set_ttl_hours: float = 24.0
-    """Retention for raw-path-only immutable analysis result sets."""
+    """Hours a cut reply's stored answer can be read on, and a result set
+    read only from files (with its artifacts) is kept. A result set read from
+    jobs is kept as long as its jobs."""
 
     open_plot: bool = True
     """Whether ``plot_waveform`` opens the chart it writes in a local browser
@@ -758,8 +760,11 @@ class ServerConfig:
     """Server-side response budget, in estimated tokens, for a consolidated-profile
     call that sets no ``budget`` of its own. It engages only the ladder's trim rung
     — empty presentation blocks and the identity echo — so it can never cut a fact
-    or revoke a detail the caller explicitly asked for. Set 0 to leave every default
-    response undegraded. ``[analysis] default_budget``."""
+    or revoke a detail the caller explicitly asked for. For a tool with no
+    ``budget`` argument (``verify_circuit``) it is the size a reply is presented
+    to: a longer answer is stored whole and its lists cut (``lib/presenter.py``).
+    Set 0 to leave every default response undegraded and send every answer
+    whole. ``[analysis] default_budget``."""
 
     log_level: str = "WARNING"
     """Stderr logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
@@ -1081,9 +1086,11 @@ def generate_default_config(path: Path) -> None:
     analysis.add(comment("Default response budget, in tokens, for run_experiments, jobs,"))
     analysis.add(comment("analyze_results and inspect replies (0 disables)"))
     _shown_default(analysis, "default_budget")
-    analysis.add(comment("Hours to keep an analyze_results result set whose sources are all"))
     analysis.add(
-        comment("files named by path. A result set read from jobs is kept as long as its jobs.")
+        comment("Hours a cut reply's stored answer can be read on, and an analyze_results")
+    )
+    analysis.add(
+        comment("result set read only from files is kept; one read from jobs lives as its jobs.")
     )
     _shown_default(analysis, "result_set_ttl_hours")
     analysis.add(

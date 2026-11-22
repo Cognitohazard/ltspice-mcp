@@ -1717,12 +1717,15 @@ def may_connect_nodes(card: SpiceCard) -> bool:
 
 def unread_node_names(card: SpiceCard) -> frozenset[str]:
     """Every name a card that cannot be split into its parts
-    (``spice_lex.unreadable_cards``) may still connect or define, lowercased:
-    each word as written between spaces, split again at parentheses, braces
-    and separators, with and without square brackets, and again at
-    operators. Which of them are its nodes is not known, so a reader that
-    must not report on a guess counts every one."""
-    body = card.body.lower()
+    (``spice_lex.unreadable_cards``) may still connect or define, folded
+    (``device_names.fold_name``): each word as written between spaces, split
+    again at parentheses, braces and separators, with and without square
+    brackets, and again at operators. Which of them are its nodes is not
+    known, so a reader that must not report on a guess counts every one."""
+    # Here, not at the top: the resolver reads LTspice's export rules here.
+    from ltspice_mcp.lib.device_names import fold_name
+
+    body = fold_name(card.body)
     words = set(body.split())
     words |= {word for split in _UNREAD_SEPARATORS for word in split.split(body) if word}
     words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}

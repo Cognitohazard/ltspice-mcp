@@ -1,0 +1,34 @@
+* every form failing in the second step (k=100), and every form whose result is 0 in one step (z=0 in the second, or a level of 0 in the first): a transient, stepped
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.param r=1k z=(100-k)/99
+.step param k list 1 100
+.tran 0 1m 0 1u
+.meas tran max_sf MAX V(out) FROM {0.1m*k} TO {0.6m*k}
+.meas tran min_sf MIN V(out) FROM {0.1m*k} TO {0.6m*k}
+.meas tran pp_sf PP V(out) FROM {0.1m*k} TO {0.6m*k}
+.meas tran avg_sf AVG V(out) FROM {0.1m*k} TO {0.6m*k}
+.meas tran rms_sf RMS V(out) FROM {0.1m*k} TO {0.6m*k}
+.meas tran integ_sf INTEG V(out) FROM {0.1m*k} TO {0.6m*k}
+.meas tran find_at_sf FIND V(out) AT {0.5m*k}
+.meas tran find_when_sf FIND V(in) WHEN V(out)={0.5*k}
+.meas tran when_sf WHEN V(out)={0.5*k}
+.meas tran deriv_at_sf DERIV V(out) AT {0.5m*k}
+.meas tran deriv_when_sf DERIV V(out) WHEN V(out)={0.5*k}
+.meas tran trig_targ_sf TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL={0.9*k} RISE=1
+.meas tran param_sf PARAM when_sf*2
+.meas tran max_sz MAX V(out)*z FROM 0.1m TO 0.6m
+.meas tran min_sz MIN V(out)*z FROM 0.1m TO 0.6m
+.meas tran pp_sz PP V(out)*z FROM 0.1m TO 0.6m
+.meas tran avg_sz AVG V(out)*z FROM 0.1m TO 0.6m
+.meas tran rms_sz RMS V(out)*z FROM 0.1m TO 0.6m
+.meas tran integ_sz INTEG V(out)*z FROM 0.1m TO 0.6m
+.meas tran find_at_sz FIND V(out)*z AT 0.5m
+.meas tran find_when_sz FIND V(in)*z WHEN V(out)=0.5
+.meas tran when_sz WHEN V(out)={0.5*(1-z)}
+.meas tran deriv_at_sz DERIV V(out)*z AT 0.5m
+.meas tran deriv_when_sz DERIV V(out)*z WHEN V(out)=0.5
+.meas tran trig_targ_sz TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL={0.1+(0.9-0.1)*z} RISE=1
+.meas tran param_sz PARAM 2*z
+.end

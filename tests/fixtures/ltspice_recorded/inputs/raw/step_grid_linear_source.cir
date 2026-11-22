@@ -1,0 +1,10 @@
+* one .step: a linear sweep of a source, read for which step each value belongs to
+Vin in 0 1
+R1 in out {rv}
+C1 out 0 {c}
+D1 out 0 DM
+.model DM D(Is=1e-14)
+.param rv=1k c=100n
+.step VIN 1 2 1
+.tran 0 100u 0 5u
+.end

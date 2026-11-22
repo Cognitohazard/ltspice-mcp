@@ -9,8 +9,10 @@ lint and arity rules read the same card and have to reach the same answer.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +23,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.deck_staging import (
+    LibraryReader,
     relative_data_path_established,
     scan_data_references,
     stage_deck,
@@ -54,6 +57,7 @@ from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_s
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.schematic_ops import netlist_card_value
 from ltspice_mcp.lib.services import extract_netlist_info
+from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.lib.simulator_build import (
     Producer,
     executable_path,
@@ -99,6 +103,9 @@ from tests import _ltspice_recorded as rec
 from tests.conftest import LTSPICE_READER, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
+
+#: LTspice's reading of a deck's ``.lib`` cards (``deck_staging.library_read``).
+LTSPICE_LIBRARIES = LibraryReader("ltspice")
 
 MICRO = "µ"
 
@@ -258,7 +265,7 @@ def test_a_digit_after_the_letters_is_declined_inside_an_expression():
     an exponent are not after the letters."""
 
     def ltspice(text: str, **options) -> float:
-        return evaluate(text, lambda name: 0.0, simulator="ltspice", **options)
+        return evaluate(text, lambda name: 0.0, simulator="ltspice", ngbehavior=None, **options)
 
     with pytest.raises(ValueError, match="1k5"):
         ltspice("{1k5}")
@@ -418,9 +425,10 @@ def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
     build: str, case_id: str, for_ngspice: bool, tmp_path: Path
 ):
     """A variation names ``R§Load`` as the sheet does (``Load``), as LTspice's
-    results do (``I(Load)``, recorded) or as ``verify_circuit`` reports it
-    (``RLoad``), and ``RLoad`` names it on either simulator's copy of the
-    deck, though ngspice's has the marker taken out."""
+    results do (``I(Load)``, recorded), as the export does (``R§Load``) or as
+    ``verify_circuit`` reports it (``RLoad``), on either simulator's copy of
+    the deck: ngspice's has the marker taken out and records the name it
+    took it out of (``spice_lex_ops.exported_names``)."""
     assert "i(load)" in rec.operating_point(build, case_id, tmp_path / "raw")
     export = tmp_path / "load.net"
     export.write_bytes((INPUTS / rec.CASES.case(case_id).source).read_bytes())
@@ -431,11 +439,48 @@ def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
         for line in map(read_instance, lex(text).cards)
         if line and line.nodes == ["a", "0"]
     ]
-    names = ["RLoad"] if for_ngspice else ["R§Load", "RLoad", "Load", "load"]
+    names = ["R§Load", "RLoad", "Load", "load"]
     for index, target in enumerate(names):
         values = variant_values(text, export, target, tmp_path / str(index))
         assert values == {"I1": "1", load: "2k"}, target
         assert drawn_for(text, export, target, tmp_path / f"random{index}") == [load], target
+
+
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_sheet_run_on_ngspice_takes_a_target_by_each_name_of_its_part(
+    build: str, work_dir: Path
+):
+    """``run_experiments`` on ngspice, over the sheet exported as ``R§Load``
+    (``export/load_name_op``): each of the part's names sets the part ngspice
+    runs, which then draws the current the new value gives (1 V across 1k and
+    4k in parallel)."""
+    from tests._fake_netlister import install_fixed_exporter
+    from tests.conftest import terminal_experiment
+
+    config = ServerConfig(simulator="ngspice", working_dir=work_dir, allowed_paths=[work_dir])
+    state = SessionState.create(config, detect_simulators(config))
+    assert "ngspice" in state.available_simulators
+    install_fixed_exporter(state, rec.export_text(build, "export/load_name_op"))
+    sheet = work_dir / "load_name_op.asc"
+    sheet.write_bytes((INPUTS / "export" / "load_name_op.asc").read_bytes())
+
+    for index, target in enumerate(["R§Load", "RLoad", "Load", "load"]):
+        receipt = asyncio.run(
+            terminal_experiment(
+                state,
+                {
+                    "request_id": f"names-{build}-{index}",
+                    "circuits": [{"path": str(sheet), "id": "sheet"}],
+                    "variations": [{"kind": "assign", "assign": {target: ["4k"]}}],
+                    "execution": {"simulator": "ngspice", "wait_s": 90},
+                    "analyze": {"recipes": [{"metric": "value", "key": "i", "expr": "I(V1)"}]},
+                },
+            )
+        )
+        assert receipt["status"] == "completed", (target, receipt)
+        (row,) = receipt["analysis"]["result"]["results"]["i"]["values"]
+        assert abs(row["value"]["value"]) == pytest.approx(1.25e-3, rel=1e-6), (target, row)
 
 
 def test_a_name_holding_two_section_signs_is_one_name_without_them(tmp_path: Path):
@@ -967,7 +1012,11 @@ def as_ltspice_reads(text: str) -> str:
 
 
 def no_structural_change(delta: dict[str, list]) -> bool:
-    return not any(changes for key, changes in delta.items() if key != "components_renamed")
+    return not any(
+        changes
+        for key, changes in delta.items()
+        if key not in ("components_renamed", "not_compared")
+    )
 
 
 @pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
@@ -1032,7 +1081,7 @@ async def test_the_checks_read_only_the_cards_ltspice_reads(
                 (f["rule_id"], f["at"].get("line"))
                 for f in verified.structured_content.get("findings", [])
             ),
-            deck_requirements(path),
+            deck_requirements(path, reader=LTSPICE_LIBRARIES),
             parse_requested_outputs(text),
             parse_source_amplitudes(text),
         )
@@ -1089,7 +1138,9 @@ async def test_a_card_ltspice_does_not_read_changes_no_reading(
     assert [
         f for f in verified.structured_content.get("findings", []) if f["severity"] == "error"
     ] == []
-    assert deck_requirements(path) == deck_requirements(read)
+    assert deck_requirements(path, reader=LTSPICE_LIBRARIES) == deck_requirements(
+        read, reader=LTSPICE_LIBRARIES
+    )
     assert parse_requested_outputs(text) == parse_requested_outputs(as_ltspice_reads(text))
     assert parse_source_amplitudes(text) == parse_source_amplitudes(as_ltspice_reads(text))
 
@@ -1469,7 +1520,7 @@ class TestDeckSemantics:
             assert rows[(reference,)]["value"]["status"] == "unresolved"
             assert "value" not in rows[(reference,)]["value"]
         with pytest.raises(ValueError, match="caret"):
-            evaluate("2^3", lambda name: 0.0, simulator="ltspice")
+            evaluate("2^3", lambda name: 0.0, simulator="ltspice", ngbehavior=None)
 
     async def test_a_subcircuits_header_default_beats_a_param_in_its_body(
         self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
@@ -2464,25 +2515,19 @@ def test_params_with_no_space_after_the_colon_is_passed(build: str, tmp_path: Pa
     assert refusals("deck/params_no_space") == set()
 
 
-#: An unquoted ``.lib`` path holding a space: both builds read it as one path,
-#: and the server reads the word after the space as a section name, so it
-#: refuses the deck LTspice runs.
-ONE_PATH_TO_LTSPICE_AND_A_SECTION_TO_THE_SERVER = {"lib-section-ltspice", "model-missing"}
-
-
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_a_lib_path_holding_a_space_is_one_path(build: str, tmp_path: Path):
     for stem in ("lib_path_space_unquoted", "lib_path_space_quoted"):
         assert rec.operating_point(build, f"deck/{stem}", tmp_path / stem)["v(a)"] == 2000.0
+    # Both builds read an unquoted path holding a space as one path, and so
+    # does the server (``deck_staging.scan_include_references``).
     assert refusals("deck/lib_path_space_quoted") == set()
-    assert refusals("deck/lib_path_space_unquoted") == (
-        ONE_PATH_TO_LTSPICE_AND_A_SECTION_TO_THE_SERVER
-    )
+    assert refusals("deck/lib_path_space_unquoted") == set()
 
 
 #: The spelling of XAMP's node mid each build's ``.meas`` takes when the
 #: settings save subcircuit nodes; on the defaults neither build takes either.
-MEAS_SUBCKT_NODE = {"current": "deck/meas_subckt_node_x", "xvii": "deck/meas_subckt_node_no_x"}
+OWN_MEAS_SPELLING = {"current": "deck/meas_subckt_node_x", "xvii": "deck/meas_subckt_node_no_x"}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -2490,8 +2535,11 @@ def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
     """LTspice 26 takes ``V(xamp:mid)`` and XVII ``V(amp:mid)``, each only with
     the subcircuit's nodes saved: on the defaults both fail (LTspice 26
     "Voltage not found.", XVII FAIL'ed), and the other build's spelling fails
-    either way. The checks pass all four decks."""
-    taken = MEAS_SUBCKT_NODE[rec.generation(build)]
+    either way. Linted for the build that runs it, the other build's
+    spelling is refused and the build's own is a warning
+    (``tests/test_names_through_the_resolver.py``); for no known build,
+    neither is refused, as which spelling the run takes is not established."""
+    taken = OWN_MEAS_SPELLING[rec.generation(build)]
     for stem in ("deck/meas_subckt_node_x", "deck/meas_subckt_node_no_x"):
         for suffix in ("", "_saved"):
             data = parse_measurements(rec.recorded(build, f"{stem}{suffix}.log"))
@@ -2500,6 +2548,12 @@ def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
                 assert values == [0.5]
             else:
                 assert values in ([], [None])
+        refused = {
+            f["rule_id"]
+            for f in lint_input(stem, reader=rec.producer(build))
+            if f["severity"] == "error"
+        }
+        assert refused == (set() if stem == taken else {"save-meas-coverage"})
         assert refusals(stem) == set()
 
 
@@ -2516,3 +2570,75 @@ def test_options_seed_is_refused_and_draws_repeat_without_it(build: str, tmp_pat
     again = rec.operating_point(build, "deck/seed_none_again", tmp_path / "again")
     assert first == again
     assert 1000.0 not in {first["v(a)"], first["v(b)"], first["v(c)"]}
+
+
+#: The scopes that may ask for a part's other names (``section_sign_names``)
+#: or for the name an ngspice copy of an export records (``exported_names``),
+#: with the reason. A variation asks ``variations._other_names``, which reads
+#: both, so a target answers to the same names on either simulator's copy.
+PART_NAME_ASKERS = {
+    "lib/spice_lex_ops.py:section_sign_names": "the one answer for a name holding the marker",
+    "lib/spice_lex_ops.py:exported_names": "reads the record the copy writes",
+    "lib/spice_lex_ops.py:exported_part": "a part's names on either copy of a deck",
+    "lib/variations.py:_deck_targets": "reads the copy's record once per file",
+    "lib/lint_rules.py:_instances": "reads the copy's record once per file",
+    "lib/device_names.py:_own": "a result's names (section_sign_spellings), which LTspice writes",
+}
+
+
+def test_only_the_owners_ask_for_a_parts_other_names():
+    import ast
+
+    from tests._source_scan import modules, scopes
+
+    asked = {"section_sign_names", "exported_names"}
+    found = {
+        f"{name}:{scope}"
+        for name, tree in modules().items()
+        for scope, nodes in scopes(tree)
+        if any(
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None)) in asked
+            for node in nodes
+        )
+    }
+    assert found <= set(PART_NAME_ASKERS), sorted(found - set(PART_NAME_ASKERS))
+
+
+def test_the_lint_reads_a_part_exported_with_a_section_sign_on_either_copy(tmp_path: Path):
+    """The ``.save``/``.meas`` lint asks for a part's other names through the
+    same answer a variation does (``spice_lex_ops.exported_part``). On the
+    LTspice export, ``U1`` is the own name of ``X§U1``, and which instance
+    LTspice reads it as is not recorded. On ngspice's copy, which renamed the
+    part ``XU1``, ngspice's own reading decides: a colon path stores nothing.
+    Read as LTspice would, the copy gives the export's answer, from its
+    record of the name it changed."""
+    from ltspice_mcp.lib.spice_lex_ops import ExportedPart, exported_names, exported_part
+
+    text = (
+        "* sheet\n.subckt blk a\nR1 a n 1k\nR2 n 0 1k\n.ends blk\n"
+        "V1 in 0 1\nX§U1 in blk\n.save V(U1:n) V(in)\n.op\n.end\n"
+    )
+    export = tmp_path / "sheet.net"
+    export.write_text(text, encoding="utf-8")
+    _stem, data = deck_prep._read_export(export, for_ngspice=True)
+    copy = decode_spice_bytes_with_encoding(data)[0]
+
+    def findings(deck: str, dialect: str, simulator: str) -> list[tuple[str, str]]:
+        build = "LTspice 26.1.1 for Windows" if dialect == "ltspice" else "ngspice-42"
+        return [
+            (f["rule_id"], f["subject"])
+            for f in lint_deck(
+                deck, export, dialect, simulator, reader=Producer(dialect, build, None)
+            )
+            if f["rule_id"].startswith("save-")
+        ]
+
+    unestablished = [("save-meas-spelling-unestablished", "V(U1:n)")]
+    assert findings(text, "ltspice", "LTspice") == unestablished
+    assert findings(copy, "ltspice", "LTspice") == unestablished
+    assert findings(copy, "ngspice", "NGspiceSimulator") == [("save-name-not-stored", "V(U1:n)")]
+
+    part = ExportedPart("X§U1", "XU1", "U1")
+    assert exported_part("X§U1", exported_names(lex(text).cards)) == part
+    assert exported_part("XU1", exported_names(lex(copy).cards)) == part

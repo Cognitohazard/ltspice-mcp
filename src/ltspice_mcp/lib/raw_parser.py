@@ -38,11 +38,13 @@ from ltspice_mcp.lib.decoded_raw import (
     deck_time,
     time_offset,
 )
+from ltspice_mcp.lib.device_names import fold_name
+from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.format import cap_list
+from ltspice_mcp.lib.log_conditions import rules_for, run_diagnostics, said_as, said_lines
 from ltspice_mcp.lib.log_parser import (
     CardKind,
     answered_measurements,  # noqa: TID251 - the summary is built off the loop, handed its producer and cards
-    is_op_stepping_failure,
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
@@ -55,6 +57,7 @@ from ltspice_mcp.lib.result_kinds import (
 )
 from ltspice_mcp.lib.result_observations import surface_observations
 from ltspice_mcp.lib.simulator_build import Producer
+from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.trace_names import TraceQuantity, is_node_voltage, trace_quantity
 
 # What a raw accessor raises when the thing being asked for is not there: a
@@ -103,6 +106,35 @@ OTHER_RAW_KINDS: tuple[OtherRawKind, ...] = get_args(OtherRawKind)
 def other_raw_path(raw: Path, kind: str) -> Path:
     """Where a run whose raw is ``raw`` writes its raw of ``kind``."""
     return raw.with_name(f"{raw.stem}.{kind}.raw")
+
+
+def run_log_path(results: Path) -> Path:
+    """The log of the run that wrote the results file ``results``: the one
+    answer for every reader given a results file by its path (but a
+    ``<case>.log.raw``, below).
+
+    A run of ``<case>`` writes ``<case>.log`` beside ``<case>.raw`` and beside
+    each other raw it writes there, ``<case>.<kind>.raw`` (``OTHER_RAW_KINDS``),
+    and no log of that other raw's own name: the recorded runs of ``raw/fra``,
+    ``raw/fra_step`` and ``raw/step_tran_op_raw`` write ``.log``, ``.raw`` and
+    ``.fra_1.raw`` or ``.op.raw``, and no ``.fra_1.log`` or ``.op.log`` (their
+    ``written`` lists). A Fast Access copy keeps the raw's own name
+    (``raw/tran_fastaccess``). So a log of the file's own name, where there
+    is one, is its run's: a circuit named ``amp.op`` writes ``amp.op.raw``
+    and ``amp.op.log``, and ``amp.log`` beside them is another circuit's.
+    Whether the log named is there is the reader's to find out: one that is
+    not is reported by the read, under this name. ``<case>.log.raw``, which
+    LTspice writes for some runs, is kept by no recording, and its log is
+    not established."""
+    own = results.with_suffix(".log")
+    if os.path.isfile(own):
+        return own
+    name = results.name
+    for kind in OTHER_RAW_KINDS:
+        suffix = f".{kind}.raw"
+        if len(name) > len(suffix) and name.lower().endswith(suffix):
+            return results.with_name(f"{name[: -len(suffix)]}.log")
+    return own
 
 
 def other_raws(raw: Path) -> list[str]:
@@ -438,7 +470,7 @@ def trace_unit(raw: DecodedRaw | DecodedPlot, name: str) -> str | None:
     none — a guess from the name would be a vendor catalog, not a relay.
     """
     for trace in raw.descriptor.traces:
-        if trace.name.lower() == name.lower():
+        if fold_name(trace.name) == fold_name(name):
             return trace.unit
     return None
 
@@ -733,6 +765,28 @@ def _step_temperature(
     return True, None
 
 
+def _meas_error(text: str, family: str | None) -> dict[str, Any] | None:
+    """A ``meas_errors`` entry for an error line ``text`` that names a
+    ``.meas`` card, with the fix the pre-flight rules suggest for it; None for
+    one that names none."""
+    directive = next(
+        (
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().casefold().startswith(".meas")
+        ),
+        None,
+    )
+    if directive is None:
+        return None
+    found = validate_directive(directive, simulator=DISPLAY.get(family or "", "LTspice"))
+    return {
+        "directive": directive,
+        "raw_block": text,
+        "suggestion": found.suggestion if found is not None else None,
+    }
+
+
 def build_simulation_summary(
     raw: DecodedRaw | DecodedPlot,
     logs: DecodedLog | None,
@@ -744,6 +798,7 @@ def build_simulation_summary(
     source_amplitudes: dict[str, float] | None = None,
     producer: Producer | None = None,
     cards: Mapping[str, CardKind] | None = None,
+    measurements_unread: str | None = None,
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
 
@@ -769,6 +824,11 @@ def build_simulation_summary(
             measurement is: each measurement names the field holding its
             result from them (``log_parser.answered_measurements``). With no
             producer, the log is read as one whose writer is not known.
+        measurements_unread: Why the log's measurements say nothing that can
+            be trusted (``services.measurements_unread``, which the caller
+            asks), or None. Given, the summary reports no measurement and its
+            observations say why once, as the run row does, instead of
+            calling each requested ``.meas`` missing.
 
     Returns:
         Dictionary with sim_type, range info, signals, point_count, step_count,
@@ -790,6 +850,8 @@ def build_simulation_summary(
     # this function has somewhere to land; attached to the summary once, at the
     # end, so a warning raised after the attachment point is not lost.
     warnings: list[str] = []
+    # The conditions the run's log names, as its producer's rules read them.
+    said: list[Mapping[str, Any]] = []
 
     # A plot with no sampled axis (an operating point, a table) has a point
     # count and no range. A step the plot cannot give is a different fact
@@ -880,7 +942,11 @@ def build_simulation_summary(
             if temperature is not None:
                 summary["temp_c"] = temperature
 
-        meas_data = section_value("measurements", "measurements")
+        meas_data = (
+            section_value("measurements", "measurements")
+            if measurements_unread is None
+            else None
+        )
         if meas_data is not None:
             # The whole run's measurements, whichever ``step`` this summarises:
             # each entry holds every step's value and the steps LTspice printed
@@ -901,11 +967,38 @@ def build_simulation_summary(
 
         diagnostics = section_value("diagnostics", "log diagnostics (errors, warnings)")
         if diagnostics is not None:
-            warnings.extend(diagnostics["warnings"])
-            if diagnostics["errors"]:
-                summary["errors"] = diagnostics["errors"]
-            if diagnostics.get("meas_errors"):
-                summary["meas_errors"] = diagnostics["meas_errors"]
+            # What the simulator said, and how severe it called it: the run's
+            # conditions as its producer's rules read them, the run row's
+            # diagnostics. A line is an error or a warning where the simulator
+            # wrote that word on it (log_conditions.said_as), and neither where
+            # it wrote none; the summary's diagnostics carry every condition.
+            # Each distinct line the simulator gave a word is listed, by that
+            # word (log_conditions.said_lines); lines past a condition's bound
+            # are counted in lines_left_out, never dropped unsaid.
+            found = run_diagnostics(
+                diagnostics["conditions"], producer or Producer(None, None, None), lines=True
+            )
+            said = list(found.get("diagnostics") or [])
+            worded = [line for c in said for line in said_lines(c)]
+            error_lines = [line["text"] for line in worded if said_as(line) == "error"]
+            warnings.extend(line["text"] for line in worded if said_as(line) == "warning")
+            if error_lines:
+                summary["errors"] = error_lines
+            meas_errors = [
+                entry
+                for text in error_lines
+                if (entry := _meas_error(text, (producer.family if producer else None)))
+                is not None
+            ]
+            if meas_errors:
+                summary["meas_errors"] = meas_errors
+            left_out: dict[str, int] = {}
+            for c in said:
+                if c.get("written_left_out"):
+                    code = str(c["code"])
+                    left_out[code] = left_out.get(code, 0) + int(c["written_left_out"])
+            if left_out:
+                summary["lines_left_out"] = left_out
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails).
@@ -935,9 +1028,19 @@ def build_simulation_summary(
         # stepped .op (the log shows >1 solve) or a multi-step raw (later steps
         # not checked here) keeps the error — the
         # first step's finite data can't clear a failure that belongs to another.
+        # The rungs of the bias-point search are one condition
+        # (``operating_point_fallback``); no recorded build writes an error
+        # word on them, so this demotes nothing a recording shows. A build that
+        # did, on a run whose raw holds finite data, found the point after all.
         errs = summary.get("errors")
         if errs:
-            demoted = [e for e in errs if is_op_stepping_failure(e)]
+            fallback = {
+                line["text"]
+                for c in said
+                if c["code"] == "operating_point_fallback"
+                for line in said_lines(c)
+            }
+            demoted = [e for e in errs if e in fallback]
             if (
                 demoted
                 and step_count <= 1
@@ -1027,6 +1130,9 @@ def build_simulation_summary(
         value_traces=value_traces,
         source_amplitudes=source_amplitudes,
         node_voltages=None if value_traces is None else node_voltages(raw),
+        measurements_unread=measurements_unread,
+        said=said,
+        reading=rules_for(producer or Producer(None, None, None))[0],
     )
 
     return summary
@@ -1076,11 +1182,83 @@ def raw_writer_command(path: Path) -> str | None:
     return (fields or {}).get("command") or None
 
 
+def first_plot_traces(path: Path) -> list[tuple[str, str]] | None:
+    """The traces the first plot of the raw at ``path`` holds, each with the
+    type its header declares, read from the header alone; None when the file
+    is not a raw or cannot be read."""
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
+            if magic.startswith(_RAW_HEADER_UTF16):
+                width = 2
+            elif magic.startswith(_RAW_HEADER_ASCII):
+                width = 1
+            else:
+                return None
+            header = _read_plot_header(handle, 0, width)
+    except OSError:
+        return None
+    return list(zip(header.variables, header.types, strict=True))
+
+
+#: Most bytes :func:`first_plot_shape` reads of a header: a few thousand
+#: variables' lines. A longer header is not read there.
+_SHAPE_HEADER_CAP = 256 * 1024
+
+
+@dataclass(frozen=True)
+class FirstPlotShape:
+    """What the header of a raw's first plot says of its size, read from the
+    header alone: its plot name, its first variable's declared type, its
+    variables' names in order and its declared number of points (None where
+    the header gives none)."""
+
+    plot_name: str
+    first_type: str
+    variables: tuple[str, ...]
+    points: int | None
+
+
+def first_plot_shape(path: Path) -> FirstPlotShape | None:
+    """:class:`FirstPlotShape` of the raw at ``path``, read from its first
+    plot's header (at most ``_SHAPE_HEADER_CAP`` bytes); None when the file
+    is not a raw, cannot be read, or its header does not end there."""
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
+            if magic.startswith(_RAW_HEADER_UTF16):
+                width = 2
+            elif magic.startswith(_RAW_HEADER_ASCII):
+                width = 1
+            else:
+                return None
+            header = _read_plot_header(handle, 0, width, _SHAPE_HEADER_CAP)
+    except OSError:
+        return None
+    if header.data_start is None:
+        return None
+    try:
+        points: int | None = int(header.fields.get("no. points", ""))
+    except ValueError:
+        points = None
+    return FirstPlotShape(
+        plot_name=header.fields.get("plotname", ""),
+        first_type=header.first_type,
+        variables=tuple(header.variables),
+        points=points,
+    )
+
+
 def may_hold_compressed_transient(path: Path) -> bool:
     """Whether the first plot of the raw at ``path`` may be a transient that
     waveform compression thinned: its header names a transient and its flags
     do not say ``nocompression``. True when the header cannot be read, so a
-    caller that must know decodes the file to find out."""
+    caller that must know decodes the file to find out.
+
+    A pre-check, on purpose apart from ``result_observations.compressed_transient``,
+    which answers for a decoded plot: this one reads the first header alone,
+    before anything is decoded, and errs toward True, so a recipe that reads
+    only the log decodes the raw only where it may need to."""
     fields = _first_header_fields(path)
     if fields is None:
         return True
@@ -1164,10 +1342,15 @@ class _Cut:
 class _PlotHeader:
     fields: dict[str, str]
     variables: list[str]
-    #: The first variable's declared type: what says whether it is an axis.
-    first_type: str
+    #: Each variable's declared type, in the order of ``variables``.
+    types: list[str]
     data_start: int | None
     data_kind: str | None
+
+    @property
+    def first_type(self) -> str:
+        """The first variable's declared type: what says whether it is an axis."""
+        return self.types[0] if self.types else ""
 
 
 def read_partial_raw_progress(path: Path, dialect: str | None = None) -> PartialRawProgress | None:
@@ -1410,14 +1593,17 @@ def points_reached(points: int | None, axis: str | None, last_axis_value: float 
     return phrase
 
 
-def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
-    """Read one plot header from ``offset``, up to the line that starts its data."""
+def _read_plot_header(
+    handle: Any, offset: int, width: int, cap: int = _PARTIAL_HEADER_CAP
+) -> _PlotHeader:
+    """Read one plot header from ``offset``, up to the line that starts its
+    data, reading at most ``cap`` bytes."""
     codec = _RAW_CODECS[width]
     decoder = codecs.getincrementaldecoder(codec)(errors="surrogatepass")
     handle.seek(offset)
     text = ""
     consumed = 0
-    while consumed < _PARTIAL_HEADER_CAP:
+    while consumed < cap:
         chunk = handle.read(_PARTIAL_READ_CHUNK)
         if not chunk:
             break
@@ -1428,28 +1614,27 @@ def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
         match = _RE_DATA_START.search(text, max(0, searched - 16))
         if match is not None:
             prefix = text[: match.end()].encode(codec, errors="surrogatepass")
-            fields, variables, first_type = _parse_plot_header(text[: match.start()])
+            fields, variables, types = _parse_plot_header(text[: match.start()])
             return _PlotHeader(
-                fields, variables, first_type, offset + len(prefix), match.group(1).lower()
+                fields, variables, types, offset + len(prefix), match.group(1).lower()
             )
-    fields, variables, first_type = _parse_plot_header(text)
-    return _PlotHeader(fields, variables, first_type, None, None)
+    fields, variables, types = _parse_plot_header(text)
+    return _PlotHeader(fields, variables, types, None, None)
 
 
-def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], str]:
+def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], list[str]]:
     """Header fields keyed in lower case, the variable names in order, and
-    the first variable's declared type."""
+    each one's declared type (empty where the line declares none)."""
     fields: dict[str, str] = {}
     variables: list[str] = []
-    first_type = ""
+    types: list[str] = []
     in_variables = False
     for line in text.split("\n"):
         line = line.rstrip("\r")
         if in_variables:
             parts = line.lstrip().split("\t")
             if len(parts) >= 2:
-                if not variables and len(parts) >= 3:
-                    first_type = parts[2]
+                types.append(parts[2] if len(parts) >= 3 else "")
                 variables.append(parts[1])
             continue
         key, sep, value = line.partition(":")
@@ -1460,7 +1645,7 @@ def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], str]:
             in_variables = True
             continue
         fields.setdefault(key, value.strip())
-    return fields, variables, first_type
+    return fields, variables, types
 
 
 def _int_field(fields: dict[str, str], key: str) -> int:

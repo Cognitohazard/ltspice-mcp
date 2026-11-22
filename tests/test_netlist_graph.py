@@ -574,12 +574,21 @@ def test_block_in_lib_matches_inline_reference(tmp_path: Path) -> None:
     assert {c.ref for c in flat.components} == {"Vin", "XSTAGE.R1", "XSTAGE.R2"}
 
 
-def test_lib_with_section_token_still_resolves(tmp_path: Path) -> None:
-    # `.lib <file> <section>` — the section name must not be read as the file.
-    (tmp_path / "divblock.lib").write_text(BLOCK_LIB)
+def test_a_lib_line_is_one_path_to_ltspice_and_a_file_and_section_to_ngspice(
+    tmp_path: Path,
+) -> None:
+    """``.lib divblock.lib typical``: LTspice reads the rest of the line as one
+    path and finds no file ``divblock.lib typical`` (recorded:
+    deck/lib_section), and says so; ngspice reads section ``typical`` of
+    ``divblock.lib``, as the section declares it."""
+    (tmp_path / "divblock.lib").write_text(".lib typical\n" + BLOCK_LIB + ".endl typical\n")
     deck = tmp_path / "sectioned.cir"
     deck.write_text(EXTERNAL_BLOCK.replace(".include divblock.lib", ".lib divblock.lib typical"))
-    flat = flatten_graph(parse_netlist_graph(deck, reader=LTSPICE_READER))
+    ltspice = parse_netlist_graph(deck, reader=LTSPICE_READER)
+    (missing,) = ltspice.missing_includes
+    assert missing.target == "divblock.lib typical"
+    assert "no library sections" in missing.reason
+    flat = flatten_graph(parse_netlist_graph(deck, reader=_SECTION_READER))
     assert "XSTAGE.R1" in {c.ref for c in flat.components}
 
 
@@ -688,6 +697,10 @@ def test_duplicate_definition_first_in_textual_order_wins(
 #: An ngspice reader, which keeps the first of two definitions of one name.
 _NGSPICE_READER = SemanticProfile.of(Producer("ngspice", None, None), "kiltpsa")
 
+#: ngspice in a mode that reads a library section (kiltpsa drops it:
+#: ``deck_staging.library_read``).
+_SECTION_READER = SemanticProfile.of(Producer("ngspice", None, None), "hsa")
+
 
 #: One subcircuit defined per corner section of a library, as an ngspice deck
 #: selects one with ``.lib <file> <section>`` (LTspice has no sections and
@@ -723,14 +736,14 @@ def test_an_instance_runs_the_one_body_its_deck_selects(
     path = tmp_path / "deck.cir"
     path.write_text(deck)
 
-    graph = parse_netlist_graph(path, reader=_NGSPICE_READER)
+    graph = parse_netlist_graph(path, reader=_SECTION_READER)
 
     assert graph.missing_includes == ()
     assert [(c.ref, c.value) for c in flatten_graph(graph).components if c.ref != "V1"] == [
         ("X1.R1", value)
     ]
     inline = f"{_AMP_CALL}.subckt amp a b\nR1 a b {value}\n.ends amp\n.end\n"
-    assert compare_graphs(path, inline, reader=_NGSPICE_READER).equivalent
+    assert compare_graphs(path, inline, reader=_SECTION_READER).equivalent
 
 
 def test_include_cycle_terminates(tmp_path: Path) -> None:
@@ -962,7 +975,8 @@ def test_an_include_brings_definitions_only_when_its_file_defines_nothing_else(
     _write_files(tmp_path, files)
     deck = tmp_path / "d.cir"
     deck.write_text(f"* d\nV1 a 0 1\nX1 a b AMP\n{line}\n.op\n.end\n", newline="\n")
-    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
+    # Read by ngspice in a mode that reads sections: LTspice has none.
+    graph = parse_netlist_graph(deck, reader=_SECTION_READER)
     assert _bodies(graph.definition_includes) == ([line] if brings_definitions_only else [])
 
 

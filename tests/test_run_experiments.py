@@ -26,7 +26,7 @@ from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ERROR_HINTS, RecipeInvalidError, SimulationError
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
-from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
+from ltspice_mcp.lib import experiment_store, store, wsl
 from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
@@ -562,10 +562,10 @@ class TestReceiptThenDwell:
     ):
         fake_simulator(monkeypatch)
 
-        async def exploding_renderer(*_args, **_kwargs):
+        def exploding_renderer(*_args, **_kwargs):
             raise RuntimeError("budget renderer exploded")
 
-        monkeypatch.setattr(experiments_mod, "render_run_receipt", exploding_renderer)
+        monkeypatch.setattr(experiments_mod, "present_job_answer", exploding_renderer)
         deck = _deck(work_dir / "budget-render-fail.cir")
 
         result = await handle_run_experiments(
@@ -632,10 +632,14 @@ class TestTerminalReceiptHint:
             )
         )
         assert data["completeness"]["expanded"] == 55
-        assert data["runs"]["truncated"] is True
-        assert data["hint"] == (
-            f"The inline run page is truncated; use jobs(runs) with job_id "
-            f"{data['job_id']} for the remaining cases."
+        runs = data["runs"]
+        assert runs["truncated"] is True
+        cut = data["cut"]["/runs/items"]
+        assert cut["returned"] == runs["returned"] >= 1
+        assert data["hint"].startswith(
+            f"{55 - runs['returned']} of 55 run rows are not in this reply; read them "
+            f'from the job\'s record with jobs(action="runs", job_id="{data["job_id"]}", '
+            f'cursor="{cut["next"]}")'
         )
 
 
@@ -740,6 +744,60 @@ class TestPostClaimFailures:
         assert fallback_failed == [data["job_id"]]
         assert _observation_code(data, "experiment_index_write_failed") is not None
         assert experiment_store.load_request_index("unwritable-index", work_dir) is not None
+
+    async def test_the_index_note_is_on_the_record_when_the_submission_answers(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The circuit index fails, so the job gets a note about it, written
+        through the registry's writes of the job. The submission answers only
+        once that write has landed: while it is held the submission waits, and
+        once it is let go the record on disk carries the note."""
+        loop = asyncio.get_running_loop()
+        fake_simulator(monkeypatch)
+        real_save_job = experiment_store.save_job
+        held = asyncio.Event()
+        release = threading.Event()
+        taken: list[str] = []
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        def held_note(job, *args, **kwargs):
+            noted = any(
+                item.get("code") == "experiment_index_write_failed" for item in job.observations
+            )
+            if noted and not taken:
+                taken.append(job.job_id)
+                loop.call_soon_threadsafe(held.set)
+                release.wait(LIVENESS_S)
+            return real_save_job(job, *args, **kwargs)
+
+        monkeypatch.setattr(experiment_store, "register_circuits", unwritable_index)
+        monkeypatch.setattr(experiment_store, "save_job", held_note)
+        deck = _deck(work_dir / "index-note.cir")
+        submission = asyncio.ensure_future(
+            handle_run_experiments(_args(deck, "index-note", wait_s=0), state_with_sim)
+        )
+        try:
+            await asyncio.wait_for(held.wait(), LIVENESS_S)
+            # timing: a negative window; the submission must not answer while its note is held
+            done, _ = await asyncio.wait({submission}, timeout=0.2)
+            assert not done
+            release.set()
+            data = _assert_schema(await asyncio.wait_for(submission, LIVENESS_S))
+            persisted = experiment_store.load_job(data["job_id"], work_dir)
+            assert persisted is not None
+            assert any(
+                item.get("code") == "experiment_index_write_failed"
+                for item in persisted.observations
+            )
+        finally:
+            release.set()
+            await asyncio.gather(submission, return_exceptions=True)
+            await state_with_sim.settled()
 
     async def test_a_failure_after_the_claim_is_not_reported_as_not_started(
         self,
@@ -2862,6 +2920,18 @@ def _convergence_abort_log(index: int) -> str:
     )
 
 
+def _failure_messages(data: dict, expected: set[str]) -> str:
+    """Each failure row whose code a test did not expect, with its message, so
+    an assertion about the failure channel names the cause it did not expect."""
+    rows = [
+        f"{row['code']}: {row.get('message', '')}"
+        for row in data.get("failures", [])
+        if row["code"] not in expected
+    ]
+    codes = [row["code"] for row in data.get("failures", [])]
+    return f"failure codes {codes}; unexpected: {rows}"
+
+
 @pytest.mark.asyncio
 class TestFailureChannel:
     """What a caller learns from a batch that failed the same way N times."""
@@ -2894,7 +2964,7 @@ class TestFailureChannel:
 
         assert data["completeness"]["expanded"] == 12
         assert data["completeness"]["failed"] == 12
-        assert len(data["failures"]) == 1
+        assert len(data["failures"]) == 1, _failure_messages(data, {"convergence_failed"})
         row = data["failures"][0]
         assert row["count"] == 12
         assert len(row["case_ids"]) == 10
@@ -2961,7 +3031,8 @@ class TestFailureChannel:
         data = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         by_code = {row["code"]: row for row in data["failures"]}
-        assert set(by_code) == {"missing_model", "convergence_failed"}
+        expected = {"missing_model", "convergence_failed"}
+        assert set(by_code) == expected, _failure_messages(data, expected)
         assert by_code["missing_model"]["count"] == 4
         assert by_code["convergence_failed"]["count"] == 4
 
@@ -3401,7 +3472,20 @@ class TestAttachedAnalysis:
         changed_cursor = changed["analysis"]["result"]["results"]["summary"]["per_run"][
             "next_cursor"
         ]
-        assert result_store.cursor_view(changed_cursor) == ["case_id"]
+        changed_page = await analyze_mod.handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "continue": {
+                        "result_set_id": changed["analysis"]["result"]["result_set_id"],
+                        "cursor": changed_cursor,
+                    }
+                }
+            ),
+            state_with_sim,
+        )
+        assert changed_page.structured_content is not None
+        (row,) = changed_page.structured_content["results"]["summary"]["per_run"]["items"]
+        assert set(row) == {"case_id"} or set(row) - {"value"} == {"case_id"}
 
     async def test_budget_answer_reconstructs_values_independent_of_requested_page(
         self,
@@ -3454,67 +3538,43 @@ class TestAttachedAnalysis:
         job = state_with_sim.all_jobs[full["job_id"]]
         assert job.analysis.result is not None
         assert "answer_top" not in job.analysis.result
-        assert all(
-            "answer_facts" not in block for block in job.analysis.result["results"].values()
-        )
         snapshot_identity = job.analysis.result
         pristine_snapshot = copy.deepcopy(job.analysis.result)
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
-        trim_rung = response_budget.Rung(response_budget.RUNG_TRIM, budget=10_000, measured=0)
-        answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
-        manual_snapshot = receipts_mod.snapshot_receipt(
-            job,
-            None,
-            control_token=job.control_token,
-        )
-        trim_view = receipts_mod.finalize_receipt(
-            receipts_mod.render_receipt_snapshot(
-                manual_snapshot,
-                control_token=job.control_token,
-            )
-        )
-        receipts_mod._degrade_receipt(trim_view, trim_rung)
-        answer_view = receipts_mod.finalize_receipt(
-            receipts_mod.render_receipt_snapshot(
-                manual_snapshot,
-                control_token=job.control_token,
-                analysis_answer_channel=True,
-            )
-        )
-        receipts_mod._degrade_receipt(answer_view, answer_rung)
-        trim_size = response_budget.estimate_tokens(trim_view)
-        answer_size = response_budget.estimate_tokens(answer_view)
-        assert answer_size < trim_size
-        # The handler's real response carries envelope text this manual view
-        # does not (replay observation, progress-augmented hint), so aim the
-        # budget a third of the rung gap above the measured answer size —
-        # still below trim — instead of exactly at it.
-        budget = answer_size + (trim_size - answer_size) // 3 + response_budget.NOTE_RESERVE_TOKENS
-        assert trim_size > budget - response_budget.NOTE_RESERVE_TOKENS
+        # A budget cuts the analysis' lists; it drops nothing the request
+        # asked for and leaves the job's record as it was.
         answer = _assert_schema(
             await _completed_analysis_receipt(
-                request.model_copy(update={"budget": budget}),
+                request.model_copy(update={"budget": 1500}),
                 state_with_sim,
             )
         )
         assert job.analysis.result is snapshot_identity
         assert job.analysis.result == pristine_snapshot
         assert experiment_store.serialize_job(job) == pristine_job
-        note = next(
-            item for item in answer["observations"] if item.get("code") == "budget_truncated"
-        )
-        assert "(answer)" in note["detail"]
+        assert not [item for item in answer["observations"] if item["code"] == "budget_truncated"]
         answer_result = answer["analysis"]["result"]
-        entry = answer_result["results"]["vout"]
-        assert entry["values"] == expected
         assert answer_result["outcome"] == expected_result["outcome"]
         assert answer_result["coverage"] == expected_result["coverage"]
-        assert "next" not in answer_result
-        assert "cursor" not in answer_result
-        assert "signals_available" not in answer_result
-        assert "signals_available" in job.analysis.result["top"]
-        restored = _assert_schema(await _completed_analysis_receipt(request, state_with_sim))
-        assert restored["analysis"]["result"]["signals_available"]
+        assert answer_result["signals_available"]
+        rows = list(answer_result["results"]["vout"]["per_run"]["items"])
+        entry = answer_result["cut"].get("/results/vout/per_run/items")
+        while entry is not None and "next" in entry:
+            page = await analyze_mod.handle_analyze_results(
+                AnalyzeResultsInput.model_validate(
+                    {
+                        "continue": {
+                            "result_set_id": answer_result["result_set_id"],
+                            "cursor": entry["next"],
+                        }
+                    }
+                ),
+                state_with_sim,
+            )
+            assert page.structured_content is not None
+            rows.extend(page.structured_content["results"]["vout"]["per_run"]["items"])
+            entry = page.structured_content["cut"]["/results/vout/per_run/items"]
+        assert rows == expected
 
     async def test_successful_analysis_does_not_report_partial(
         self,
@@ -4159,7 +4219,9 @@ class TestReceiptWeight:
         assert source["staged_files"] >= 1
         # What the caller acts on is untouched.
         assert source["circuit"] == "dut"
-        assert source["simulator"]
+        # The job names its simulator once, at its own level.
+        assert lean["simulator"] == "fake"  # the key the session holds it under
+        assert "simulator" not in source
 
         full = _assert_schema(
             await handle_run_experiments(_args(deck, "full-1", provenance=True), state_with_sim)
@@ -4502,3 +4564,43 @@ class TestReceiptWeight:
         assert str(anomalous.path) in kept, "an unexplained un-staged entry must survive"
         assert str(ordinary.path) not in kept, "an ordinary staged entry is bulk"
         assert lean["staged_files"] == 2, "the count still covers every entry"
+
+
+@pytest.mark.asyncio
+async def test_a_meas_in_degrees_is_refused_naming_suppress_and_runs_with_it(
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """On LTspice a trig function inside a .meas reads degrees, by a per-user
+    setting (recorded: ``log-meas-angle-unit``). The refusal says how to run a
+    deck written for degrees anyway, and on which machines it is right; the
+    suppress it names lets the deck run."""
+    from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON
+
+    state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+    submissions: list[str] = []
+    fake_simulator(monkeypatch, submissions)
+    deck = _deck(
+        work_dir / "trig.cir",
+        "* trig\nV1 out 0 SIN(0 1 1k)\n.meas tran p PARAM atan2(1,1)\n.tran 2m\n.end\n",
+    )
+
+    data = _assert_schema(await handle_run_experiments(_args(deck, "trig-block"), state))
+    assert submissions == []
+    assert data["failures"][0]["code"] == "lint_blocked"
+    (finding,) = [
+        f
+        for block in data["lint"]
+        for f in block["findings"]
+        if f["rule_id"] == "meas-trig-degrees"
+    ]
+    reason = finding["evidence"]["reason"]
+    assert reason == MEAS_ANGLE_REASON
+    assert 'suppress: ["meas-trig-degrees"]' in reason
+    assert "left at its default" in reason
+
+    data = _assert_schema(
+        await handle_run_experiments(
+            _args(deck, "trig-suppressed", suppress=["meas-trig-degrees"]), state
+        )
+    )
+    assert len(submissions) == 1, data

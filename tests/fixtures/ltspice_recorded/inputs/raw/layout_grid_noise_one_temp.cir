@@ -1,0 +1,7 @@
+* rc noise at one frequency over three temperatures
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 100n
+.step temp list -40 27 125
+.noise V(out) V1 lin 1 1k 1k
+.end

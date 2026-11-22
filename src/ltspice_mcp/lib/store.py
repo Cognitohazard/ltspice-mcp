@@ -24,6 +24,7 @@ The layout, rooted at the working directory::
     |   `-- staged/{circuit_id}/            the decks it actually ran
     |-- results/
     |   |-- {result_set_id}.json            an immutable analyze_results set
+    |   |-- {stored_answer_id}.json         a complete answer too long to send whole
     |   `-- artifacts/{result_set_id}/      files those results point at
     |-- detached/                           per-job detached owner hand-off
     |   |-- {digest}.request.json           the request one owner was spawned for
@@ -87,6 +88,7 @@ from typing import Any
 
 from ltspice_mcp.lib import atomic_write_json as _atomic_write_json
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.redirect import canonical, redirect_below, same_location
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,7 @@ KIND_REQUEST_INDEX = "request-index"
 KIND_CIRCUIT_INDEX = "circuit-index"
 KIND_CANCELLATION = "cancellation"
 KIND_RESULT_SET = "result-set"
+KIND_STORED_ANSWER = "stored-answer"
 KIND_ANALYSIS_SNAPSHOT = "attached-analysis"
 KIND_RECENT = "recent-circuits"
 KIND_RECOVERY_JOURNAL = "recovery-journal"
@@ -167,23 +170,18 @@ def validate_job_id(job_id: str) -> str:
 
 
 def _record(directory: Path, name: str, error: str) -> Path:
-    """One record file under an already-resolved store directory.
+    """One record file under a store directory, refused with ``error`` when it
+    exists and redirects elsewhere (a planted symlink or junction).
 
-    An existing record comes back resolved and must resolve inside its
-    directory (a planted symlink is refused with ``error``). One that does not
-    exist yet is returned as named and NOT resolved: the name is already one
-    validated segment, and on Windows resolving a path whose directory a peer
-    is creating at that moment can come back with the ``\\?\\`` prefix still
-    on, which no comparison survives.
+    Returned as named: the name is already one validated segment, and the
+    question is answered by ``redirect.redirect_below`` from what is on disk,
+    never by comparing a resolved path's text, which on Windows can keep the
+    ``\\\\?\\`` prefix when a peer creates or removes the file at that moment.
     """
     candidate = directory / name
-    try:
-        resolved = candidate.resolve(strict=True)
-    except OSError:
-        return candidate
-    if resolved.parent != directory:
+    if redirect_below(candidate, directory) is not None:
         raise StoreError(error)
-    return resolved
+    return candidate
 
 
 def _validate_name(name: str, what: str) -> str:
@@ -241,11 +239,17 @@ def user_home() -> Path:
 
 
 def _resolved(path: Path) -> Path:
-    """``path`` resolved, or made absolute when it cannot be (a symlink loop)."""
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError):
-        return path.absolute()
+    """``path`` in the one spelling every store path takes (``redirect.canonical``):
+    resolved, and the same whatever a peer creates, removes or replaces meanwhile."""
+    return canonical(path)
+
+
+def file_key(path: Path) -> str:
+    """One file as it is named whatever its spelling: the resolved path,
+    case-folded, so two spellings of one file on a case-insensitive filesystem
+    are one key (:meth:`Store.circuit_lock`, :meth:`Store.results_file_lock`).
+    Filesystem work."""
+    return str(_resolved(path)).casefold()
 
 
 @functools.lru_cache(maxsize=64)
@@ -289,9 +293,10 @@ def json_default(obj: Any) -> Any:
     raise TypeError(f"Not JSON-serializable: {type(obj).__name__}")
 
 
-def atomic_write_json(path: Path, data: Any) -> None:
-    """Atomically and durably write a store record."""
-    _atomic_write_json(path, data, default=json_default)
+def atomic_write_json(path: Path, data: Any, *, mtime: float | None = None) -> None:
+    """Atomically and durably write a store record, with ``mtime`` as its
+    modification time from the moment it appears at ``path``."""
+    _atomic_write_json(path, data, default=json_default, mtime=mtime)
 
 
 def envelope(kind: str, **payload: Any) -> dict[str, Any]:
@@ -630,7 +635,7 @@ class Store:
     @property
     def experiments_dir(self) -> Path:
         """Where the job records live. One directory, one record kind."""
-        return (self.root / "experiments").resolve()
+        return _resolved(self.root / "experiments")
 
     def job_record(self, job_id: str) -> Path:
         """The durable record for one experiment job."""
@@ -656,10 +661,7 @@ class Store:
         so two sessions recording jobs for the same circuit cannot lose each
         other's entry to a read-modify-write race.
         """
-        try:
-            resolved = str(circuit_path.resolve())
-        except OSError:
-            resolved = str(circuit_path)
+        resolved = str(_resolved(circuit_path))
         return self.experiments_dir / "by-circuit" / path_digest(resolved)
 
     def circuit_index(self, circuit_path: Path, job_id: str) -> Path:
@@ -793,12 +795,15 @@ class Store:
         self, root_job_id: str, recorded: Path, simulator: type | None = None
     ) -> Path:
         """Validate the retained initial artifact directory before reuse."""
-        runs = self.runs_root(simulator).resolve()
+        runs = _resolved(self.runs_root(simulator))
         expected = run_dir_in(runs, root_job_id)
-        resolved = expected.resolve()
-        if not recorded.is_absolute() or recorded.resolve() != resolved or resolved != expected:
+        if (
+            not recorded.is_absolute()
+            or redirect_below(expected, runs) is not None
+            or not same_location(recorded, expected)
+        ):
             raise StoreError("Recorded lineage directory is outside its Store run root")
-        return resolved
+        return expected
 
     def recovery_spinit(self, root_job_id: str, simulator: type | None = None) -> Path:
         """Inert system startup input retained inside the initial run root."""
@@ -846,7 +851,7 @@ class Store:
 
     @property
     def results_dir(self) -> Path:
-        return (self.root / "results").resolve()
+        return _resolved(self.root / "results")
 
     def result_set(self, result_set_id: str) -> Path:
         """One immutable ``analyze_results`` set."""
@@ -855,6 +860,19 @@ class Store:
             f"{_validate_name(result_set_id, 'result_set_id')}.json",
             f"Invalid result_set_id: {result_set_id!r}",
         )
+
+    def stored_answer(self, answer_id: str) -> Path:
+        """One complete answer too long to send whole (``lib/presenter.py``)."""
+        return _record(
+            self.results_dir,
+            f"{_validate_name(answer_id, 'stored answer id')}.json",
+            f"Invalid stored answer id: {answer_id!r}",
+        )
+
+    def stored_answers_swept(self) -> Path:
+        """The empty file whose modification time is when the stored answers
+        were last swept (``lib/presenter.py``)."""
+        return self.results_dir / ".stored_answers_swept"
 
     def result_artifacts(self, result_set_id: str) -> Path:
         """Files one result set points at, deleted with it."""
@@ -903,9 +921,9 @@ class Store:
     def parser_dir(self, parse_id: str) -> Path:
         """One parser process's temporary capture and numeric output directory."""
         name = _validate_name(parse_id, "parser id")
-        base = (self.root / "parsing").resolve()
+        base = _resolved(self.root / "parsing")
         candidate = base / name
-        if candidate.resolve() != candidate:
+        if redirect_below(candidate, base) is not None:
             raise StoreError("Parser directory must not redirect to another location")
         return candidate
 
@@ -932,8 +950,20 @@ class Store:
         "locked, retry" error, never a missed exclusion. Resolving is filesystem
         work, so an event-loop caller runs this off-loop.
         """
-        resolved = _resolved(circuit_path)
-        return user_home() / "locks" / "circuits" / path_digest(str(resolved).casefold())
+        return user_home() / "locks" / "circuits" / path_digest(file_key(circuit_path))
+
+    @staticmethod
+    def results_file_lock(results_path: Path) -> Path:
+        """Anchor for the cross-process lock on one results file beside a circuit
+        (``file_lock`` appends .lock), taken inside the circuit's own lock.
+
+        Two circuits whose runs go to one results file (``foo.asc`` and
+        ``foo.net``, both ``foo.raw``) hold different circuit locks, so a copy
+        there also takes this one. Keyed as :meth:`circuit_lock` is, by the
+        digest of the resolved path, case-folded; resolving is filesystem
+        work, so an event-loop caller runs this off-loop.
+        """
+        return user_home() / "locks" / "results" / path_digest(file_key(results_path))
 
     @staticmethod
     def renders_dir() -> Path:

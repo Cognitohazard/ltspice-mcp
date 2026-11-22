@@ -19,8 +19,10 @@ core has an example that reads a sweep back in one loop.
 process the server starts once and keeps for the session, with `api` already
 open on the server's working directory. The snippet also has
 `np`, `load_raw`, `measurements`, `reference`, `window_and_clean`,
-`compute_signal_stats` and `time_weighted_quantiles` in scope. `print()`
-output and the repr of a trailing expression are returned, so print the result
+`compute_signal_stats` and `time_weighted_quantiles` in scope. `np` is
+NumPy 2, which removed or deprecates some NumPy 1 names: write `np.trapezoid` (or
+`compute_signal_stats`) for `np.trapz`, `np.ptp(a)` for `a.ptp()` and
+`np.isin` for `np.in1d`. `print()` output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole
 table. Each call gets a fresh namespace around the same `api`, so keep state
 on disk, in a file or in a job you can find again by its `request_id`. A
@@ -75,7 +77,10 @@ starting a session.
   variation set something, and the case's `status`), `failures` and
   `observations` when there are any, and the `analysis` block when you
   attached `analyze`. A result leaves out a field that says nothing, as a
-  reply does, so read one that may be empty with `.get`. A row's status describes its case. A case that ran is
+  reply does, and reading a left-out field gives its empty value (`[]`, `{}`,
+  `False` or `None`), so `row["assignments"]` is `{}` for an unswept run; `in`
+  still tells whether the reply carried it, and a misspelt key or a left-out
+  field the tool always keeps raises `KeyError`. A row's status describes its case. A case that ran is
   `"produced"` while the job is `"completed"`, so select rows on `"produced"`.
 - `wait=False` returns the receipt at once; `api.wait(job_id, timeout_s=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with
@@ -89,10 +94,12 @@ starting a session.
   `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
 - To open a sheet's run in LTspice, pass
   `execution={"results_beside_sheet": True}`: the results are copied beside
-  the `.asc` under its name as the runs finish, instead of copying them with
+  the `.asc`, or a netlist, under its name as the runs finish, instead of copying them with
   the shell. For a case of a sweep, `api.jobs(action="place_beside_sheet",
   job_id=..., case_id=...)` copies that one. Guide section 'schematics' has
   the details.
+
+### Recovering a job from Python
 
 For recovery, submit with `execution={"simulator": "ngspice", "recoverable": True}`
 and keep the original receipt's `control_token`. Once the job is terminal, use
@@ -131,6 +138,14 @@ ops = api.device_op_points(job_id=job_id, case_id=case_id)  # ops["m1"]["gm"], .
 d = r.compare(api.load_raw("archived.raw"))  # d["signals"]["V(out)"]["max_abs"], per signal
 ```
 
+Arrays are copies, so you can modify them. Trace math across steps and its
+statistics are in guide section 'signals'. `api.analyze_results(...)` returns
+every row of every recipe; pass `include={"per_run": True}` for the per-run
+rows. Variation values are SPICE literals (`"5p"`), and `parse_spice_value`
+parses one.
+
+### Comparing two runs
+
 `r.compare(other, signals=None, step=0, other_step=None)` measures how far
 another run's traces are from these. For each signal it reports the largest
 difference, that difference as a share of this run's peak, and where it
@@ -143,6 +158,8 @@ The other run is read at this run's points over the span both cover,
 interpolated where its axis differs (as in a compressed LTspice raw, guide
 section 'ltspice'). You choose the tolerance.
 
+### Reading part of a large file
+
 A file too large to read whole (one read keeps 512 MiB of numbers) can still
 be read for the signals you need: `api.load_raw(..., signals=["V(out)",
 "I(R1)"])` keeps only those traces, the axis and any step parameters. A node
@@ -154,6 +171,8 @@ axis at a time: `api.load_raw(..., window=("1m", "2m"))` keeps the points from
 time, which is decoded whole, and a file in its Fast Access layout is decoded
 for the traces kept, each along its whole axis. For a larger file, convert it
 with `LTspice -FastAccess <file>.raw` and choose signals.
+
+### Choosing a plot, and plots with no axis
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
 zero-based position in the file, separately from the case (or run) and the
@@ -173,6 +192,8 @@ Step parameters (`r.steps`) are read at the same time as the traces, from the
 RAW itself or the `.log` beside it. LTspice writes a step parameter's name in
 lower case, so a name is found whatever its case: `r.steps[0]["RD"]` reads
 `rd`, as `step={axis:'RD', ...}` and `group_by` do.
+
+### Reading a log without a RAW file
 
 For a log without a RAW file:
 
@@ -206,11 +227,7 @@ RAW beside the log, and in a request that also has RAW recipes, a malformed
 RAW fails only those recipes. Guide section 'tools' covers when a page cursor stops working because
 a file changed, and a timeout while `analyze_results` first reads its sources.
 
-Arrays are copies, so you can modify them. Trace math across steps and its
-statistics are in guide section 'signals'. `api.analyze_results(...)` returns
-every row of every recipe; pass `include={"per_run": True}` for the per-run
-rows. Variation values are SPICE literals (`"5p"`), and `parse_spice_value`
-parses one.
+### Keeping one run's numbers in a file
 
 To keep one run's numbers for later, write them to a file you choose, in a
 layout you decide. Each read takes one line:
@@ -249,7 +266,10 @@ Import these from `ltspice_mcp.api`. They take arrays and return dicts.
   `time_weighted_quantiles`, `analyze_edge`, `analyze_pulse_response`,
   `analyze_disturbance_response`, `analyze_timing_between`,
   `analyze_periodic`, `analyze_thd`, `analyze_tone`,
-  `compute_measurement_stats`.
+  `compute_measurement_stats`. Over the table `api.measurements()` returns,
+  give it `{name: result_numbers(entry)}` and `reasons={name:
+  no_number_reasons(table, name)}`, as the `measurements` recipe does; a
+  null given no reason is counted as `reason_not_given`, not as a failure.
 - AC: `prepare_ac_arrays`, `gain_at_frequencies`, `detect_crossings`,
   `find_crossings_any_quantity`, `compute_filter_metrics`,
   `compute_stability_metrics`, `compute_roll_off`, `compute_resonances`,
@@ -290,4 +310,5 @@ Name each further executable, in `[simulator.executables]` of the config
 and select it per run with `execution={"simulator": "ltspice:xvii"}`. The plain
 family name still runs the default build. `inspect(kind="capabilities")` lists
 the named builds under `named_executables`. Each job records the executable
-that ran it.
+that ran it, and its replies name the simulator as `simulator`, the selector
+to pass back to run the same build.

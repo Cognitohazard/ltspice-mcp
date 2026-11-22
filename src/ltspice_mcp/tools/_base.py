@@ -1,5 +1,6 @@
 """Shared utilities for tool handlers."""
 
+import asyncio
 import base64
 import contextlib
 import contextvars
@@ -18,19 +19,23 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
-from ltspice_mcp.lib import atomic_write_bytes, response_budget
+from ltspice_mcp.lib import atomic_write_bytes, presenter, response_budget, said_once
 from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
 from ltspice_mcp.lib.log_conditions import COVERAGE as LOG_COVERAGE
+from ltspice_mcp.lib.log_types import FAILED, NO_NUMBER_REASONS
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.observability import note_request
+from ltspice_mcp.lib.presenter import ListCut as ListCut
+from ltspice_mcp.lib.presenter import StoredAnswer as StoredAnswer
+from ltspice_mcp.lib.presenter import not_sent as not_sent
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
-from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.reply_fields import (
     Kept,
     active_kept,
@@ -50,6 +55,7 @@ from ltspice_mcp.lib.runner_base import (
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import RULES as SHEET_RULES
+from ltspice_mcp.lib.signal_analysis import NO_REASON_GIVEN
 from ltspice_mcp.lib.simulator import (
     family_refusal,
     no_simulator_message,
@@ -206,6 +212,366 @@ def format_response(data: Mapping[str, Any]) -> types.CallToolResult:
     return types.CallToolResult(content=[], structured_content=reply_payload(payload))
 
 
+def reply_target(state: SessionState) -> int | None:
+    """The size, in estimated tokens, a reply of a tool with no ``budget``
+    argument is presented to: ``[analysis] default_budget``, or None (every
+    answer whole) when that is 0, or under the Python API's automatic mode,
+    which promises complete results."""
+    return resolve_response_budget(None, state).tokens
+
+
+async def presented(
+    data: dict[str, Any],
+    *,
+    tool: str,
+    schema: Mapping[str, Any],
+    snapshot: dict[str, Any] | Callable[[], dict[str, Any]],
+    state: SessionState,
+    annotate: presenter.Annotate | None = None,
+    target: int | Literal["default"] | None = "default",
+    records: Mapping[str, presenter.Record] | None = None,
+    caps: Mapping[str, int] | None = None,
+    over: presenter.Over | None = None,
+    apart: Mapping[str, int] | None = None,
+    series: presenter.Series | None = None,
+) -> dict[str, Any]:
+    """``data``, a complete answer, as the reply to send: whole when it fits
+    the reply target, else cut by ``lib/presenter.py``, and stored when a list
+    that is not one of ``records`` is cut. ``snapshot`` names what the answer
+    was computed from; ``annotate`` adds the tool's words about a cut;
+    ``over`` says once that the reply is still over its target; ``apart`` and
+    ``series`` are as for ``presenter.present``. ``target`` is the call's own
+    (its ``budget``), else :func:`reply_target`. Build the result with
+    :func:`format_response`, as :func:`present_reply` does."""
+    shown = await asyncio.to_thread(
+        presenter.present,
+        reply_payload(data),
+        schema,
+        target=reply_target(state) if target == "default" else target,
+        tool=tool,
+        snapshot=snapshot,
+        store=state.store,
+        ttl_hours=state.config.result_set_ttl_hours,
+        annotate=annotate,
+        records=records,
+        caps=caps,
+        over=over,
+        apart=apart,
+        series=series,
+    )
+    return shown.reply
+
+
+async def present_reply(
+    data: dict[str, Any],
+    *,
+    tool: str,
+    schema: Mapping[str, Any],
+    snapshot: dict[str, Any] | Callable[[], dict[str, Any]],
+    state: SessionState,
+    annotate: presenter.Annotate | None = None,
+) -> types.CallToolResult:
+    """``data``, a complete answer, as a reply to the reply target
+    (:func:`presented`). An answer that fits is what :func:`format_response`
+    sends for ``data``."""
+    reply = await presented(
+        data, tool=tool, schema=schema, snapshot=snapshot, state=state, annotate=annotate
+    )
+    # Through format_response, as every reply is built: the presented reply
+    # is already as sent, which the rule leaves as it is.
+    return format_response(reply)
+
+
+async def open_stored_page(
+    text: str, *, tool: str, schema: Mapping[str, Any], state: SessionState, gone: str
+) -> tuple[presenter.StoredAnswer, str, int]:
+    """The stored answer, list pointer and offset a presenter cursor names;
+    ``InvalidCursorError`` (adding ``gone``, how to get a fresh answer) when
+    it is not one or its answer has expired."""
+    return await asyncio.to_thread(
+        presenter.open_page, text, schema, tool=tool, store=state.store, gone=gone
+    )
+
+
+async def stored_page(
+    stored: presenter.StoredAnswer,
+    pointer: str,
+    offset: int,
+    *,
+    schema: Mapping[str, Any],
+    state: SessionState,
+    annotate: presenter.Annotate | None = None,
+    cap: int | None = None,
+    target: int | Literal["default"] | None = "default",
+    over: presenter.Over | None = None,
+    apart: Mapping[str, int] | None = None,
+    series: presenter.Series | None = None,
+) -> dict[str, Any]:
+    """One page of a stored answer's list as the reply to send, read from the
+    stored file and cut to ``target`` (the call's own, else
+    :func:`reply_target`), and to ``cap`` entries when given. Nothing is
+    computed again."""
+    shown = await asyncio.to_thread(
+        presenter.present_page,
+        stored,
+        pointer,
+        offset,
+        schema,
+        target=reply_target(state) if target == "default" else target,
+        annotate=annotate,
+        cap=cap,
+        over=over,
+        apart=apart,
+        series=series,
+    )
+    return shown.reply
+
+
+async def present_stored_page(
+    stored: presenter.StoredAnswer,
+    pointer: str,
+    offset: int,
+    *,
+    schema: Mapping[str, Any],
+    state: SessionState,
+    annotate: presenter.Annotate | None = None,
+) -> types.CallToolResult:
+    """One page of a stored answer's list as a reply (:func:`stored_page`)."""
+    reply = await stored_page(
+        stored, pointer, offset, schema=schema, state=state, annotate=annotate
+    )
+    return format_response(reply)
+
+
+async def record_page(
+    data: dict[str, Any],
+    pointer: str,
+    offset: int,
+    record: presenter.Record,
+    *,
+    target: int | None,
+    annotate: presenter.Annotate | None = None,
+    over: presenter.Over | None = None,
+    apart: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    """One page of a list the server keeps in a record, as the reply to send:
+    ``data`` is the complete answer read from the record now, cut from
+    ``offset`` to ``target``. Nothing is stored; sizing a large table is slow,
+    so it runs off the loop."""
+    cap = ROWS_WITHOUT_TARGET if target is None and not in_automatic_door() else None
+    shown = await asyncio.to_thread(
+        presenter.present_record_page,
+        reply_payload(data),
+        pointer,
+        offset,
+        record,
+        target=target,
+        annotate=annotate,
+        over=over,
+        cap=cap,
+        apart=apart,
+    )
+    return shown.reply
+
+
+#: The most run rows an MCP reply about a job holds when it has no target
+#: (``[analysis] default_budget = 0`` and no ``budget``), as pages held before
+#: replies were cut by size. The Python API's automatic mode holds them all.
+ROWS_WITHOUT_TARGET = 50
+
+_NOTES_IN_FULL: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "notes_in_full", default=False
+)
+
+
+@contextlib.contextmanager
+def notes_in_full() -> Iterator[None]:
+    """Present the replies inside with every standing note in full, and
+    remember none of them: for a call the server makes on its own behalf, such
+    as the Python API's polling wait, whose reply no caller reads."""
+    token = _NOTES_IN_FULL.set(True)
+    try:
+        yield
+    finally:
+        _NOTES_IN_FULL.reset(token)
+
+
+#: Builds one job's complete answer at a moment, every run row and its
+#: attached analysis whole.
+JobAnswerBuild = Callable[[], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class JobAnswerParts:
+    """What a tool tells the reply layer about a job's answer
+    (:func:`present_job_answer`)."""
+
+    #: The pointer of the answer's run rows, which are cut as rows.
+    rows: str
+    #: The record a job's run rows are read back from, by job id.
+    record: Callable[[str], presenter.Record]
+    #: The words a cut of the run rows adds, by job id (None for an answer that
+    #: names no job) and the complete answer before the cut, with the fields
+    #: it adds that are sized apart and the bound each reserves
+    #: (``presenter.present``'s ``apart``).
+    annotate: Callable[
+        [str | None, Mapping[str, Any]], tuple[presenter.Annotate, Mapping[str, int]]
+    ]
+    #: The answer of another tool the answer carries (a receipt's attached
+    #: analysis), as the presenter presents it beside the job's own under one
+    #: target: ``(answer, target, whole)``, whole for the Python API's
+    #: automatic mode; None when it carries none.
+    attached: Callable[[Mapping[str, Any], int | None, bool], presenter.Answer | None]
+    #: How the presenter redraws the attached answer's series.
+    series: presenter.Series | None
+    #: The sentences of the hint that are standing notes, by job id.
+    route: Callable[[str], tuple[str, ...]]
+    #: That sentence once the session was sent it in full.
+    short_route: str
+
+
+def say_over_target(reply: dict[str, Any], size: int, target: int, *, more: str = "") -> None:
+    """Say once that a reply went out over its target, what it cut, and
+    ``more`` (``response_budget.over_target_observation``). The reply's
+    ``observations`` list is replaced, not extended, so the answer it was cut
+    from keeps its own."""
+    cut = reply.get("cut")
+    held = (
+        {
+            pointer: (entry["returned"], entry["total"])
+            for pointer, entry in cut.items()
+            if isinstance(entry, dict)
+        }
+        if isinstance(cut, dict)
+        else {}
+    )
+    if "runs_not_shown" in reply:
+        # Never cut, so part of what the target could not hold.
+        more = " ".join(
+            part
+            for part in (
+                "runs_not_shown, which is never cut, is part of what the target could not hold.",
+                more,
+            )
+            if part
+        )
+    reply["observations"] = [
+        *reply.get("observations", []),
+        response_budget.over_target_observation(size, target, held, more=more),
+    ]
+
+
+async def present_job_answer(
+    build: JobAnswerBuild,
+    parts: JobAnswerParts,
+    *,
+    tool: str,
+    schema: Mapping[str, Any],
+    budget: "ResponseBudget",
+    state: SessionState,
+    delivery: said_once.Delivery,
+) -> dict[str, Any]:
+    """One delivery of a job's answer as the reply to send, through the
+    presenter. Build the result with :func:`format_response`.
+
+    ``build`` gives the job's complete answer. Its run rows (``parts.rows``)
+    are cut as rows to fit the budget's target, at least one kept, and read
+    back from the job's record (``parts.record``), so nothing is stored for
+    them and no file is written. The answer of another tool it carries
+    (``parts.attached``, a receipt's attached analysis) is presented beside
+    it under the same target (``presenter.present_many``), one size search
+    over the lists of both, and is stored as that tool's answer when it is
+    cut. A standing note this session was already sent in full goes out by
+    its code when ``delivery`` shortens (``lib/said_once.py``); the Python
+    API's automatic mode sends every note in full. A reply still over its
+    target says so once. An answer that names no job has no record to read
+    rows back from, so its rows are stored.
+
+    Rendering and sizing a large job's whole table is slow, so it runs off the
+    loop: the snapshot behind ``build`` is detached, and the session's note
+    memory takes its own lock.
+    """
+    whole = in_automatic_door()
+    memory = None if whole or _NOTES_IN_FULL.get() else state.notes_sent
+    # With no target an MCP reply still holds a bounded number of run rows;
+    # the Python API's automatic mode returns them all.
+    caps = {parts.rows: ROWS_WITHOUT_TARGET} if budget.tokens is None and not whole else None
+    reply, planned = await asyncio.to_thread(
+        _present_job_answer,
+        build,
+        parts,
+        tool,
+        schema,
+        budget,
+        state,
+        delivery,
+        memory,
+        caps,
+        whole,
+    )
+    # Remembered on the loop, once the reply is in hand: a call cancelled
+    # while the thread ran records nothing it did not send.
+    said_once.commit(planned, memory)
+    return reply
+
+
+def _present_job_answer(
+    build: JobAnswerBuild,
+    parts: JobAnswerParts,
+    tool: str,
+    schema: Mapping[str, Any],
+    budget: "ResponseBudget",
+    state: SessionState,
+    delivery: said_once.Delivery,
+    memory: said_once.NotesSent | None,
+    caps: Mapping[str, int] | None,
+    whole: bool,
+) -> tuple[dict[str, Any], said_once.Plan | None]:
+    """The reply, and the plan of standing notes it carries, which the caller
+    commits to the memory."""
+    data = build()
+    job_id = data.get("job_id")
+    named = isinstance(job_id, str)
+    planned = said_once.plan(
+        data,
+        memory=memory,
+        delivery=delivery,
+        routes=parts.route(job_id) if named else (),
+        short_route=parts.short_route,
+    )
+    said_once.apply(data, planned)
+    annotate, apart = parts.annotate(job_id if named else None, data)
+    answer = reply_payload(data)
+    answers = [
+        presenter.Answer(
+            "",
+            schema,
+            tool,
+            {"request_id": data.get("request_id")},
+            annotate=annotate,
+            records={parts.rows: parts.record(job_id)} if named else None,
+            caps=caps,
+            apart=apart,
+        )
+    ]
+    attached = parts.attached(answer, budget.tokens, whole)
+    if attached is not None:
+        answers.append(attached)
+    shown = presenter.present_many(
+        answer,
+        answers,
+        target=budget.tokens,
+        store=state.store,
+        ttl_hours=state.config.result_set_ttl_hours,
+        over=say_over_target,
+        series=parts.series,
+    )
+    # Every list of a job's own answer it may cut is its run rows, read from
+    # the record; an answer that names no job has none, so its rows are stored.
+    assert shown.stored is None or not named, "a job's answer cut a list not a record"
+    return shown.reply, planned
+
+
 def image_content(image: RenderedImage) -> types.ImageContent:
     """A raster image as the MCP image block a model looks at."""
     return types.ImageContent(
@@ -218,6 +584,70 @@ def image_content(image: RenderedImage) -> types.ImageContent:
 # ---------------------------------------------------------------------------
 # Shared tool schema fragments and annotations
 # ---------------------------------------------------------------------------
+
+#: ``cut``: present on a reply too long to send whole, by the JSON Pointer of
+#: each list it cut (``lib/presenter.py``).
+CUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present when the reply was too long to send whole: each list it cut, by "
+        "JSON Pointer, with the entries it holds. Pass next back to read the rest."
+    ),
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "total": {"type": "integer", "description": "Entries in the whole list."},
+            "returned": {"type": "integer", "description": "Entries this reply holds."},
+            "offset": {
+                "type": "integer",
+                "description": "The index of the first entry this reply holds; absent for 0.",
+            },
+            "next": {
+                "type": "string",
+                "description": "The cursor for the entries after these; absent on the last.",
+            },
+        },
+        "required": ["total", "returned"],
+    },
+}
+
+#: ``page_of``: present on a page read from a stored answer
+#: (``presenter.present_page``).
+PAGE_OF_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "Present on a page: the JSON Pointer of the list this page reads. A page holds "
+        "that list's entries and what identifies it; every other field the first reply "
+        "gave is left out, not absent."
+    ),
+}
+
+#: ``stored_answer``: where the complete answer behind a cut reply is kept.
+STORED_ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present beside cut: the complete answer, kept as JSON under 'answer' in the "
+        "file at path until it expires, and what it was computed from; or, when it "
+        "could not be written, only not_kept, and the cut entries carry no cursor."
+    ),
+    "properties": {
+        "id": {"type": "string"},
+        "path": {"type": "string"},
+        "not_kept": {
+            "type": "object",
+            "description": "Why the answer could not be kept, and what to ask instead.",
+            "properties": {"code": {"type": "string"}, "message": {"type": "string"}},
+            "required": ["code", "message"],
+        },
+        "snapshot": {
+            "type": "object",
+            "description": (
+                "What the answer was computed from, such as a file's sha256: a page "
+                "read later says whether it predates a change."
+            ),
+        },
+    },
+}
 
 # Output-schema fragment for the optional ``hint`` key: caller guidance a
 # reply carries in its data (see format_response). Sites needing a custom
@@ -462,8 +892,8 @@ RUN_DIAGNOSTICS_SCHEMA: dict[str, Any] = {
     CUT: NEVER,
     "description": (
         "What the simulator said about the run, one entry per condition and channel: 'code' is "
-        "the server's name for it, 'severity' the simulator's own word where it wrote "
-        "one, 'first_text' the first occurrence as written, 'count' how often. A line "
+        "the server's name for it, 'severity' the strongest word the simulator wrote on "
+        "it, 'first_text' the first occurrence as written, 'count' how often. A line "
         "the server does not recognise is counted under 'unclassified'. The run's "
         "'log' and the summary recipe hold the rest."
     ),
@@ -494,7 +924,10 @@ DIAGNOSTICS_COVERAGE_SCHEMA: dict[str, Any] = {
 # Surfaced result observations — see lib/result_observations.py. A surfacing
 # layer: facts lifted into view for the consuming agent to judge, never a trust
 # verdict. ``severity`` is present only on ``relay`` items (the simulator's own
-# classification); ``value``/``reconciliation``/``coverage`` items omit it.
+# classification); ``value``/``reconciliation``/``coverage`` items omit it. A
+# read by job repeats a run's own observations
+# (``result_observations.READ_BY_JOB``), so ``execution`` is one kind it holds:
+# ``raw_names_disagree`` is the run's.
 OBSERVATIONS_SCHEMA: dict[str, Any] = {
     "type": "array",
     CUT: NEVER,
@@ -504,7 +937,7 @@ OBSERVATIONS_SCHEMA: dict[str, Any] = {
             "code": {"type": "string"},
             "kind": {
                 "type": "string",
-                "enum": ["relay", "reconciliation", "value", "coverage"],
+                "enum": ["relay", "reconciliation", "value", "coverage", "execution"],
             },
             "detail": {"type": "string"},
             "severity": {"type": "string"},
@@ -523,6 +956,80 @@ NOT_ESTABLISHED_SCHEMA: dict[str, Any] = {
         "reason": {"type": "string"},
     },
     "required": ["steps", "reason"],
+}
+
+#: Why a measurement's printed value is null where the log printed other than
+#: a finite number (``log_parser.parse_measurements``): the line, the reason
+#: quoting what was printed, and the steps it concerns where not every step.
+UNREADABLE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "line": {"type": ["string", "null"]},
+        "reason": {"type": "string"},
+        "steps": {"type": "array", "items": {"type": "integer"}, CUT: NEVER},
+    },
+    "required": ["reason"],
+}
+
+#: A value the log printed once for a run of several steps
+#: (``log_parser.answered_measurements``).
+PRINTED_ONCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "step_count": {"type": "integer"},
+        "step": {"type": "integer"},
+        "reason": {"type": "string"},
+    },
+    "required": ["step_count", "reason"],
+    "description": (
+        "The log printed this value once for a run of several steps (a stepped "
+        ".op): how many steps the run had, the step, from 0, whose value it is "
+        "where a recording establishes it, and how to read the other steps' "
+        "values, which are not in the log."
+    ),
+}
+
+#: One measurement's statistics in a measurements row
+#: (``signal_analysis.compute_measurement_stats``). Its counts of the steps
+#: with no number are by the reasons the log decoder gives
+#: (``log_types.NO_NUMBER_REASONS``), from which ``no_number`` is built.
+MEASUREMENT_STATS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "total_count": {
+            "type": "integer",
+            "description": (
+                "Steps read: valid_count plus failure_count plus every count in no_number."
+            ),
+        },
+        "valid_count": {
+            "type": "integer",
+            "description": "Steps with a number; the statistics are over these.",
+        },
+        "failure_count": {
+            "type": "integer",
+            "description": next(r.counted for r in NO_NUMBER_REASONS if r.field == FAILED),
+        },
+        "no_number": {
+            "type": "object",
+            "description": (
+                "The other steps with no number, counted under the name of the row "
+                "field that gives their reason."
+            ),
+            "properties": {
+                **{
+                    reason.field: {"type": "integer", "description": reason.counted}
+                    for reason in NO_NUMBER_REASONS
+                    if reason.field != FAILED
+                },
+                NO_REASON_GIVEN: {
+                    "type": "integer",
+                    "description": "Steps with no number for which no reason was given.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
 }
 
 # Parsed .MEAS results, keyed by measurement name. Each entry names the field
@@ -587,19 +1094,17 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 ),
             },
             "unreadable": {
-                "type": "object",
-                "properties": {
-                    "line": {"type": ["string", "null"]},
-                    "reason": {"type": "string"},
-                },
-                "required": ["reason"],
+                **UNREADABLE_SCHEMA,
                 "description": (
-                    "Present when the log printed something other than a number for "
-                    "this value, such as a WHEN threshold written as a parameter or "
-                    "an expression: 'values' is null, 'line' is the log line and "
-                    "'reason' says what was printed. Only this entry fails."
+                    "Present when the log printed something other than a finite "
+                    "number for this value, such as a WHEN threshold written as a "
+                    "parameter or an expression, or a gain margin of infdB: 'values' "
+                    "is null, 'line' is the log line, 'reason' quotes what was "
+                    "printed, and 'steps' names the steps it concerns where not "
+                    "every step. Only this entry fails."
                 ),
             },
+            "printed_once": PRINTED_ONCE_SCHEMA,
         },
         "required": ["values"],
     },
@@ -762,7 +1267,17 @@ ALWAYS_PRESENT: dict[str, dict[str, Kept]] = {
         ),
     },
     "edit_schematic": {**_OUTCOME, **_FINDING_OK, **_COMPARISON, **_SHOWN},
-    "verify_circuit": {**_OUTCOME, **_FINDING_OK, **_COMPARISON, **_SHOWN},
+    "verify_circuit": {
+        **_OUTCOME,
+        **_FINDING_OK,
+        **_COMPARISON,
+        **_SHOWN,
+        "diff_vs_prior": Kept(
+            "An export's delta from the previous one: empty is the answer that "
+            "nothing changed, where an absent field means there was no previous "
+            "export to compare with."
+        ),
+    },
     "plot_waveform": {
         **_SHOWN,
         "tied": Kept(
@@ -857,6 +1372,38 @@ class NotedModel(StrictModel):
                     path = name if index is None else f"{name}[{index}]"
                     notes.extend(f"{path}.{note}" for note in item.argument_notes())
         return notes
+
+
+class CaseSelection(NotedModel):
+    case_ids: list[str] = Field(
+        min_length=1,
+        description=(
+            "Read only these cases, addressed by the stable case_id a "
+            "run_experiments receipt reports. Experiment jobs only."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _unique_cases(self) -> "CaseSelection":
+        self.keep_first("case_ids")
+        return self
+
+
+#: Which runs of a job a source reads: ``"all"``, a list of run indices, or
+#: ``{case_ids: [...]}``. ``services.select_cases`` reads it.
+RunsSelection = Literal["all"] | list[int] | CaseSelection
+
+
+def check_runs(model: NotedModel, name: str = "runs") -> None:
+    """Refuse a list of runs that names none or a negative index, and read a
+    repeated index once (noted), for a model's ``RunsSelection`` field."""
+    runs = getattr(model, name)
+    if isinstance(runs, list):
+        if not runs:
+            raise ValueError("runs must be 'all' or a non-empty list")
+        if any(index < 0 for index in runs):
+            raise ValueError("run indices must be non-negative integers")
+        model.keep_first(name)
 
 
 def outcome_of(
@@ -979,9 +1526,10 @@ FINDING_SCHEMA: dict[str, Any] = {
     "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
 }
 
-#: How a list of findings is cut: whole findings, each named by its rule, what
-#: it is about and where.
-FINDING_ROWS_CUT: dict[str, Any] = rows("rule_id", "subject", "at")
+#: How a list of findings is cut: whole findings, from the end. Their fields
+#: do not name one finding (one rule can report one subject at one place more
+#: than once), so a finding is named by its place in the list.
+FINDING_LIST_CUT: str = ITEMS
 
 #: The keys every offset page declares — see ``lib/pagination.page``, which
 #: builds them.
@@ -1455,6 +2003,12 @@ def automatic_door() -> Iterator[None]:
         _AUTOMATIC_DOOR.reset(token)
 
 
+def in_automatic_door() -> bool:
+    """Whether this call arrived through the API's automatic mode, which
+    returns every answer complete and in full."""
+    return _AUTOMATIC_DOOR.get()
+
+
 def resolve_response_budget(explicit: int | None, state: SessionState) -> ResponseBudget:
     """Resolve one call's budget: the caller's, else the server's default.
 
@@ -1465,9 +2019,9 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     fact and revoke no detail the caller asked for, while rung 1 revokes opt-ins
     — doing that unasked would silently answer a different question.
 
-    Only the four consolidated tools that advertise ``budget`` consult this, so
-    the default reaches exactly the surface it was designed for; ``0`` disables it
-    and restores the fully undegraded default response.
+    The tools that advertise ``budget`` consult this, and so does a tool on the
+    presenter that has none (:func:`reply_target`); ``0`` disables it and
+    restores the fully undegraded default response.
 
     The API's automatic mode gets no default at all. That mode promises complete
     results and refuses ``budget`` outright, so a presentation ladder there would

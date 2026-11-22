@@ -9,6 +9,8 @@ This module neither reads files nor constructs third-party readers.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -20,6 +22,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.lib.device_names import fold_name
+from ltspice_mcp.lib.experiment_types import CaseSteps
 from ltspice_mcp.lib.raw_header import RawPlotHeader
 from ltspice_mcp.lib.result_kinds import (
     Analysis,
@@ -32,6 +36,7 @@ from ltspice_mcp.lib.result_kinds import (
     stepped_kind,
 )
 from ltspice_mcp.lib.step_values import steps_with
+from ltspice_mcp.lib.trace_names import declared, is_input_noise
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
@@ -139,30 +144,19 @@ class PlotDescriptor:
         return tuple(trace for trace in self.traces if trace.name not in self.step_variables)
 
 
-# The SI unit of each type a simulator declares a trace with. An unknown type
-# has none rather than a guess; an analysis can still override a declared type
-# that does not hold for what it writes (_trace_descriptor).
-_UNITS = {
-    "voltage": "V",
-    "current": "A",
-    "device_current": "A",
-    "time": "s",
-    "frequency": "Hz",
-    "hertz": "Hz",
-    "admittance": "S",
-    "impedance": "Ω",
-    "capacitance": "F",
-    "voltage-density": "V/√Hz",
-    "current-density": "A/√Hz",
-}
+#: The ``unit_evidence`` of a trace whose declared type the server does not
+#: know (``trace_names.DECLARED_TYPES``): it has no unit and holds "other",
+#: and says why.
+UNKNOWN_DECLARED_TYPE = "declared_type_unknown"
 
 
 def declared_unit(declared_type: str | None) -> str | None:
     """The SI unit of a trace's declared type (the raw header's own word for
-    what it holds), or None for a type with no known unit."""
-    if not declared_type:
-        return None
-    return _UNITS.get(declared_type.strip().lower())
+    what it holds), or None for a type with no unit or one the server does not
+    know (``trace_names.declared``). An analysis can still override a declared
+    type that does not hold for what it writes (``_trace_descriptor``)."""
+    known = declared(declared_type)
+    return None if known is None else known[1]
 
 
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
@@ -172,9 +166,9 @@ def _trace_descriptor(
     header: RawPlotHeader, index: int, wave: NDArray, analysis: Analysis
 ) -> TraceDescriptor:
     variable = header.variables[index]
-    declared = variable.declared_type.lower()
-    name = variable.name.lower()
-    unit = declared_unit(declared)
+    kind = variable.declared_type.lower()
+    name = fold_name(variable.name)
+    unit = declared_unit(kind)
     evidence = "declared_type" if unit else None
     normalization = None
     # ngspice's native analyses emit generic voltage types for derived facts.
@@ -187,7 +181,7 @@ def _trace_descriptor(
             "#input_impedance)" in name or name.startswith("v(output_impedance_at_")
         ):
             unit, evidence = "Ω", "ngspice:tf_resistance_label"
-        elif declared == "impedance":
+        elif kind == "impedance":
             unit, evidence = "Ω", "declared_type"
     elif analysis == "pz":
         unit, evidence = None, None
@@ -199,22 +193,19 @@ def _trace_descriptor(
         unit, evidence = None, None
         if header.dialect == "ngspice":
             normalization = "absolute"
-    elif analysis == "noise" and name in {
-        "inoise",
-        "v(inoise)",
-        "i(inoise)",
-        "inoise_spectrum",
-        "inoise_total",
-    }:
+    elif analysis == "noise" and is_input_noise(variable.name):
         unit, evidence = None, "input_source_unresolved"
     elif (
         analysis == "noise"
         and header.plot_name.lower() != "integrated noise"
-        and declared in ("voltage", "current", "device_current")
         and index != 0
+        and (quantity := declared(kind)) is not None
+        and quantity[0] in ("node_voltage", "current")
     ):
-        unit = "V/√Hz" if declared == "voltage" else "A/√Hz"
+        unit = "V/√Hz" if quantity[0] == "node_voltage" else "A/√Hz"
         evidence = "noise_spectral_density:declared_type"
+    if unit is None and evidence is None and declared(kind) is None:
+        evidence = UNKNOWN_DECLARED_TYPE
     return TraceDescriptor(
         variable.name,
         variable.declared_type,
@@ -311,9 +302,11 @@ def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool,
     return True, "nonmonotonic"
 
 
-def unresolved_steps_reason(stepped: str | None) -> str:
+def unresolved_steps_reason(stepped: str | None, *, absent_log: str | None = None) -> str:
     """Why a stepped plot whose kind is ``stepped`` (its ``stepped_kind``)
     cannot be read a step at a time, and what to read instead, where it shows.
+    ``absent_log`` names the log the read looked for beside the results file
+    and did not find (``raw_parser.run_log_path``).
 
     The operating-point raw of a stepped ``.tran`` or ``.ac`` on LTspice 26
     is one point that does not say whose step it is.
@@ -325,7 +318,59 @@ def unresolved_steps_reason(stepped: str | None) -> str:
             "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
             "an operating point at each step, run .op under the same .step."
         )
+    if absent_log is not None:
+        return (
+            "Step boundaries are unresolved: the run's log, which says where each step "
+            f"starts, was looked for as {absent_log} beside the results file and is not "
+            "there, and without it the steps of this plot cannot be told apart. Put the "
+            "run's log there; this plot supports inventory only"
+        )
     return "Step boundaries are unresolved; this plot supports inventory only"
+
+
+def steps_held(descriptor: PlotDescriptor) -> CaseSteps:
+    """How the plot ``descriptor`` describes is stepped, as a case's record
+    keeps it (``ExperimentCase.steps``): the raw reader's own reading of the
+    raw's stepped flag against the log's ``.step`` lines (``step_status``),
+    made once when the case's run ends. The one place a case's stepping is
+    decided; every reader asks the record."""
+    kind = kind_named(descriptor.stepped_kind)
+    if descriptor.step_status == "unstepped":
+        return CaseSteps(count=1)
+    if descriptor.step_status == "mismatch":
+        return CaseSteps(
+            count=None,
+            kind=descriptor.stepped_kind,
+            not_established=(
+                "Its raw's header marks its results stepped, and the steps the raw "
+                "holds do not match the .step lines of its log, so how many steps it "
+                "holds was not established."
+            ),
+        )
+    if descriptor.step_status == "unresolved":
+        return CaseSteps(
+            count=None,
+            kind=descriptor.stepped_kind,
+            not_established=(
+                "Its raw's header marks its results stepped, and where each step "
+                "starts could not be read from the raw and its log."
+            ),
+        )
+    names: dict[str, None] = {}
+    for step in descriptor.steps:
+        names.update(dict.fromkeys(name for name, _ in step.parameters))
+    values_from = kind.step_values if kind is not None else "log"
+    return CaseSteps(
+        count=len(descriptor.steps),
+        parameters=tuple(names),
+        values_from=values_from if names and values_from in ("raw", "log") else None,
+        kind=descriptor.stepped_kind,
+        not_established=(
+            None
+            if names
+            else "Where each step starts was read, and no step's stepped values were."
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -367,6 +412,8 @@ class DecodedPlot:
     _traces: tuple[DecodedTrace, ...]
     _has_step_metadata: bool
     _stored_waves: tuple[NDArray, ...]
+    #: The refusal of a step read where the boundaries are unresolved.
+    _unresolved: str
 
     def __init__(
         self,
@@ -469,6 +516,7 @@ class DecodedPlot:
         object.__setattr__(self, "_has_step_metadata", steps is not None)
         object.__setattr__(self, "_stored_waves", tuple(waves))
         refusal = unresolved_steps_reason(descriptor.stepped_kind)
+        object.__setattr__(self, "_unresolved", refusal)
         object.__setattr__(
             self,
             "_traces",
@@ -477,6 +525,29 @@ class DecodedPlot:
                 for t, w in zip(traces, arrays, strict=True)
             ),
         )
+
+    def without_log(self, looked_for: str) -> DecodedPlot:
+        """This plot as read with no log beside it, which the read looked
+        for as ``looked_for``: a plot whose steps cannot be told apart says
+        so in its refusal; any other plot is itself."""
+        if self.descriptor.completeness != "step_metadata_missing":
+            return self
+        # One copy a name, kept with the plot, so every read of one cached
+        # capture under one name sees the same plot.
+        noted: dict[str, DecodedPlot] = self.__dict__.setdefault("_noted", {})
+        if looked_for in noted:
+            return noted[looked_for]
+        refusal = unresolved_steps_reason(self.descriptor.stepped_kind, absent_log=looked_for)
+        plot = copy.copy(self)
+        object.__setattr__(plot, "_noted", noted)
+        object.__setattr__(plot, "_unresolved", refusal)
+        object.__setattr__(
+            plot,
+            "_traces",
+            tuple(dataclasses.replace(trace, _unresolved=refusal) for trace in self._traces),
+        )
+        noted[looked_for] = plot
+        return plot
 
     @property
     def dialect(self) -> str:
@@ -521,7 +592,7 @@ class DecodedPlot:
             return self._traces[trace_ref]
         if isinstance(trace_ref, str):
             for trace in self._traces:
-                if trace.name.lower() == trace_ref.lower():
+                if fold_name(trace.name) == fold_name(trace_ref):
                     return trace
         raise IndexError(f"Unknown trace: {trace_ref}")
 
@@ -540,7 +611,7 @@ class DecodedPlot:
         each of its values, matched as a step selector matches a value
         (``step_values.steps_with``)."""
         if not self.descriptor.steps:
-            raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
+            raise ResultError(self._unresolved)
         steps = self.descriptor.steps
         found = steps_with([dict(step.parameters) for step in steps], kwargs)
         return [steps[position].index for position in found]
@@ -592,6 +663,14 @@ class DecodedRaw:
 
     def select_plot(self, plot_index: int) -> DecodedRaw:
         return DecodedRaw(self.plots, plot_index=plot_index, logs=self.logs)
+
+    def without_log(self, looked_for: str) -> DecodedRaw:
+        """This result as read with no log beside it (``DecodedPlot.without_log``);
+        itself where no plot's refusal changes."""
+        plots = [plot.without_log(looked_for) for plot in self.plots]
+        if all(new is old for new, old in zip(plots, self.plots, strict=True)):
+            return self
+        return DecodedRaw(plots, plot_index=self.plot_index, logs=self.logs)
 
     def get_plot_names(self) -> list[str]:
         return [p.header.plot_name for p in self.plots]

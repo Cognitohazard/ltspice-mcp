@@ -138,12 +138,12 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
         assert loaded.status == "completed"
         assert loaded.cases[0].status == "produced"
         assert loaded.cases[0].raw_file is None
-        run = services.resolve_experiment_run(job.job_id, fresh, require_raw=False)
+        run = await services.resolve_experiment_run(job.job_id, fresh, require_raw=False)
         assert run.raw is None
         assert run.log == case.log_file
         assert run.console == case.log_file.with_suffix(".exe.log")
         with pytest.raises(ResultError, match="did not produce a raw result"):
-            services.resolve_experiment_run(job.job_id, fresh)
+            await services.resolve_experiment_run(job.job_id, fresh)
 
         reply = await inspect_tools.handle_inspect(
             inspect_tools.InspectInput.model_validate(

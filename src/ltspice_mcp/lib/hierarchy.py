@@ -21,8 +21,11 @@ from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_nodes import unestablished_reason as _unestablished_node
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    UNDECIDED_READER,
+    IncludeReference,
+    LibraryReader,
     card_sections,
-    in_other_section,
+    library_read,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -32,11 +35,12 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.device_names import (
     Naming,
     device_address,
+    fold_name,
     naming_for,
     path_text,
     spelled_name,
 )
-from ltspice_mcp.lib.encoding import decode_spice_bytes
+from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_spice_bytes_with_encoding
 from ltspice_mcp.lib.hierarchy_expr import (
     NGSPICE_M_EXEMPT,
     NGSPICE_M_TAKERS,
@@ -46,7 +50,7 @@ from ltspice_mcp.lib.hierarchy_expr import (
     references_sibling,
     scaled_geometry,
 )
-from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
+from ltspice_mcp.lib.ngspice_compat import multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
@@ -70,6 +74,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     global_names,
     unreadable_card,
 )
+from ltspice_mcp.lib.stored_values import OtherReading, readings_of_cards
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_CARDS = 100_000
@@ -119,6 +124,10 @@ class SemanticProfile:
     evaluation_context: str = "initial_deck"
     naming: Naming | None = None
     definitions: DefinitionRule | None = None
+    #: The profile stands in for a family with no profile of its own (QSPICE,
+    #: Xyce, or none detected; ``of``'s ``definitions_of``), whose reading of
+    #: a library is not decided (``library_reader``).
+    stands_in: bool = False
 
     def __post_init__(self) -> None:
         if self.simulator not in SUPPORTED_FAMILIES:
@@ -162,6 +171,7 @@ class SemanticProfile:
             ngbehavior if family == "ngspice" else None,
             naming=naming_for(producer),
             definitions=definition_rule(definitions_of or producer),
+            stands_in=definitions_of is not None and definitions_of.family != producer.family,
         )
 
     @property
@@ -169,6 +179,15 @@ class SemanticProfile:
         """``definitions``, set by the time a profile exists."""
         assert self.definitions is not None
         return self.definitions
+
+    @property
+    def library_reader(self) -> LibraryReader:
+        """Who reads the deck's ``.lib`` cards (``deck_staging.library_read``):
+        for a profile that stands in for another family, the reader whose
+        reading is not decided (``UNDECIDED_READER``), as before."""
+        if self.stands_in:
+            return UNDECIDED_READER
+        return LibraryReader(self.simulator, self.ngbehavior)
 
     @property
     def names(self) -> Naming:
@@ -336,6 +355,9 @@ class Hierarchy:
     m_rewritten: frozenset[str] = frozenset()
     #: The deck the hierarchy was read from.
     root: Path | None = None
+    #: Each value of an active card that a recorded LTspice build reads as
+    #: another number than this hierarchy gives (``stored_values``).
+    readings: tuple[OtherReading, ...] = ()
 
     def binding(self) -> dict[str, Any]:
         return {
@@ -416,14 +438,6 @@ def _assignments(
     return result
 
 
-def param_assignments(card: SpiceCard) -> dict[str, str]:
-    """A ``.param`` card's assignments by folded name, each expression whole.
-
-    Raises ``NetlistError`` for an assignment this reader does not support.
-    """
-    return _assignments(card, only=True)
-
-
 def parse_hierarchy_cards(content: bytes, *, root: bool) -> list[SpiceCard]:
     # Root decks begin with a title; included fragments begin with a card.
     # Explicit validation below handles active boundaries, including definitions
@@ -442,8 +456,15 @@ def walk_active(
     count = 0
     lexical_scope: list[str] = []
 
-    def visit(path: Path, section: str | None, stack: tuple[tuple[Path, str | None], ...]) -> None:
+    reader = profile.library_reader
+
+    def visit(
+        path: Path,
+        reference: IncludeReference | None,
+        stack: tuple[tuple[Path, str | None], ...],
+    ) -> None:
         nonlocal count
+        section = reference.section if reference is not None else None
         key = (path, section.casefold() if section else None)
         if key in stack:
             raise NetlistError(f"active include cycle at {path}")
@@ -457,10 +478,17 @@ def walk_active(
         existence = dict(captured.existence)
         _refuse_unreadable_references(cards, path)
         sections = card_sections(cards, path, len(stack), exists=existence.__getitem__)
+        read = library_read(reference, sections, reader)
+        if read.unread is not None:
+            raise NetlistError(f"{read.unread} ({path})")
         refs = {
             id(ref.card): ref
             for ref in scan_include_references(
-                cards, path, depth=len(stack), exists=existence.__getitem__
+                cards,
+                path,
+                family=reader.family,
+                depth=len(stack),
+                exists=existence.__getitem__,
             )
         }
         targets = dict(captured.targets)
@@ -489,15 +517,7 @@ def walk_active(
                     raise NetlistError(f"malformed .endl at {path}:{card.line_start}")
                 opened = None
                 continue
-            if in_other_section(owner, section):
-                continue
-            # Hierarchy discovery also leaves out the cards outside every
-            # section of a file pulled in for one, and the cards inside the
-            # sections of a file pulled in for none. No recording decides
-            # either, and the other readers of a library read them
-            # (``deck_staging.in_other_section``; pinned in
-            # tests/test_library_section_read.py).
-            if (owner is None) != (section is None):
+            if not read.reads(owner):
                 continue
             if is_orphan_continuation(card):
                 raise NetlistError(f"orphan continuation at {path}:{card.line_start}")
@@ -505,18 +525,10 @@ def walk_active(
                 break
             ref = refs.get(id(card))
             if ref is not None:
-                if (
-                    ref.section
-                    and profile.simulator == "ngspice"
-                    and drops_lib_sections(profile.ngbehavior)
-                ):
-                    raise NetlistError(
-                        "sectioned libraries require an ngbehavior ngspice reads without "
-                        "lt, ps or s3, which drop the section"
-                    )
                 target = targets.get(ref.raw_path)
                 if target is None:
-                    raise NetlistError(f"missing include {ref.raw_path!r} from {path}")
+                    why = library_read(ref, None, reader).unread
+                    raise NetlistError(f"missing include {ref.raw_path!r} from {path}: {why}")
                 source = Source(
                     str(path), card.line_start, owner, lexical_scope[-1] if lexical_scope else None
                 )
@@ -525,7 +537,7 @@ def walk_active(
                     include_bindings.append(IncludeBinding(source, target, ref.section))
                 if ref.section is not None and library_bindings is not None:
                     library_bindings.append(LibraryBinding(source, target, ref.section))
-                visit(target, ref.section, (*stack, key))
+                visit(target, ref, (*stack, key))
             else:
                 if card.kind == "ends" and lexical_scope:
                     lexical_scope.pop()
@@ -594,7 +606,9 @@ def load_hierarchy(
             return existence[candidate]
 
         _refuse_unreadable_references(cards, source)
-        refs = scan_include_references(cards, source, depth=depth, exists=exists)
+        refs = scan_include_references(
+            cards, source, family=profile.library_reader.family, depth=depth, exists=exists
+        )
         card_sections(cards, source, depth, exists=exists)
         targets = tuple(
             (ref.raw_path, resolve_existing(resolve_reference(source.parent, ref.raw_path)))
@@ -855,7 +869,7 @@ def resolve_hierarchy(
                 raise NetlistError(f"mismatched .ends for {view.name}")
             if view.name.casefold() in definitions:
                 raise NetlistError(f"duplicate active subcircuit {view.name}")
-            if len({p.casefold() for p in view.ports}) != len(view.ports):
+            if len({fold_name(p) for p in view.ports}) != len(view.ports):
                 raise NetlistError(f"duplicate ports in {view.name}")
             body = occurrences[i + 1 : end]
             if any(o.card.kind in {"subckt", "ends"} for o in body):
@@ -901,7 +915,7 @@ def resolve_hierarchy(
             except SpiceLexError as exc:
                 raise unreadable_card(item.card, exc, item.source.path) from exc
             for text in listed:
-                globals_.setdefault(text.casefold(), text)
+                globals_.setdefault(fold_name(text), text)
         if head in {".option", ".options"}:
             values = _assignments(item.card, where=item.source.path)
             if "scale" in values:
@@ -911,7 +925,10 @@ def resolve_hierarchy(
                     raise NetlistError("local .option scale is unsupported")
                 scale_expression = values["scale"]
     global_env = Environment(
-        _parameters(top, profile), simulator=profile.simulator, dynamic_reason=dynamic_reason
+        _parameters(top, profile),
+        simulator=profile.simulator,
+        ngbehavior=profile.ngbehavior,
+        dynamic_reason=dynamic_reason,
     )
     scale = global_env.fact(scale_expression)
     rewritten = _rewritten_for_m(occurrences, definitions, top, profile)
@@ -920,7 +937,7 @@ def resolve_hierarchy(
     node_cache: dict[tuple[tuple[str, ...], str], Node] = {}
 
     def node(name: str, scope: tuple[str, ...], ports: Mapping[str, Node]) -> Node:
-        folded = name.casefold()
+        folded = fold_name(name)
         kind = node_kind(
             name,
             ports=ports,
@@ -936,7 +953,7 @@ def resolve_hierarchy(
             scope, name = (), GROUND
         elif kind == "global":
             scope, name = (), globals_[folded]
-        key = (tuple(segment.casefold() for segment in scope), name.casefold())
+        key = (tuple(fold_name(segment) for segment in scope), fold_name(name))
         if key in node_cache:
             return node_cache[key]
         trace = None
@@ -967,7 +984,7 @@ def resolve_hierarchy(
             if item.card.kind != "instance":
                 continue
             view, supported = _shape(item.card, item.source.path)
-            folded = view.ref.casefold()
+            folded = fold_name(view.ref)
             if folded in refs:
                 raise NetlistError(f"duplicate active reference {view.ref} in {scope}")
             refs.add(folded)
@@ -1037,6 +1054,7 @@ def resolve_hierarchy(
                 child_env = Environment(
                     expressions,
                     simulator=profile.simulator,
+                    ngbehavior=profile.ngbehavior,
                     parent=env,
                     overrides=overrides,
                     dynamic_reason=dynamic_reason,
@@ -1112,7 +1130,7 @@ def resolve_hierarchy(
                     child.body,
                     path,
                     child_env,
-                    {k.casefold(): v for k, v in mapped},
+                    {fold_name(k): v for k, v in mapped},
                     (*stack, child.view.name.casefold()),
                     child.view.name,
                     child_passed,
@@ -1122,7 +1140,7 @@ def resolve_hierarchy(
     if profile.simulator == "ltspice":
         # Existing operating-point selectors match ancestral suffixes. A suffix
         # that also names another runtime device cannot promise exact selection.
-        paths = {tuple(p.casefold() for p in row.instance) for row in rows}
+        paths = {tuple(fold_name(p) for p in row.instance) for row in rows}
         ambiguous = {path[i:] for path in paths for i in range(1, len(path)) if path[i:] in paths}
         rows = [
             replace(
@@ -1131,11 +1149,11 @@ def resolve_hierarchy(
                 save=None,
                 address_reason="operating_point selector also matches another instance",
             )
-            if tuple(p.casefold() for p in row.instance) in ambiguous
+            if tuple(fold_name(p) for p in row.instance) in ambiguous
             else row
             for row in rows
         ]
-    rows.sort(key=lambda row: tuple(p.casefold() for p in row.instance))
+    rows.sort(key=lambda row: tuple(fold_name(p) for p in row.instance))
     return Hierarchy(
         profile,
         tuple(rows),
@@ -1147,4 +1165,24 @@ def resolve_hierarchy(
         tuple(include_bindings),
         rewritten,
         root,
+        _readings(occurrences, active),
+    )
+
+
+def _readings(
+    occurrences: Sequence[_Occurrence], files: Mapping[Path, CapturedFile]
+) -> tuple[OtherReading, ...]:
+    """The values of the active cards a recorded build reads otherwise, each
+    file's cards read in the codec the server decoded that file as."""
+    codecs = {
+        str(path): decode_spice_bytes_with_encoding(captured.content)[1]
+        for path, captured in files.items()
+    }
+    by_file: dict[str, list[SpiceCard]] = {}
+    for item in occurrences:
+        by_file.setdefault(item.source.path, []).append(item.card)
+    return tuple(
+        reading
+        for path, cards in by_file.items()
+        for reading in readings_of_cards(cards, codecs[path], file=path)
     )

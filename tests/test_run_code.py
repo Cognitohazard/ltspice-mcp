@@ -717,3 +717,44 @@ class TestWorkerProcess:
             [sys.executable, "-c", probe], capture_output=True, text=True, check=True
         )
         assert out.stdout.strip() == "[]"
+
+
+def test_the_numpy_names_the_guide_says_to_replace_fail_and_their_replacements_work():
+    """The Python guide names NumPy 1 spellings a snippet's ``np`` lacks, each
+    with what to write; each is checked against the NumPy this package runs."""
+    import re
+    import warnings
+    from importlib.resources import files
+
+    import numpy as np
+
+    guide = files("ltspice_mcp") / "assets" / "guide" / "python.md"
+    text = " ".join(guide.read_text(encoding="utf-8").split())
+    pairs = re.findall(r"`([^`]+)`(?: \(or `[^`]+`\))? for `([^`]+)`", text)
+    assert {old for _new, old in pairs} == {"np.trapz", "a.ptp()", "np.in1d"}, pairs
+    a = np.arange(4.0)
+    scope = {"np": np, "a": a}
+    for new, old in pairs:
+        # Removed in the locked NumPy; on an earlier 2.x, deprecated.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with pytest.raises((AttributeError, DeprecationWarning)):
+                eval(old if old.endswith(")") else f"{old}(a)", scope)
+        eval(new if new.endswith(")") else f"{new}(a, a)", scope)
+
+
+def test_the_description_and_the_timeout_field_say_the_same_of_a_timeout():
+    """A wait on a run ends before ``timeout_s`` and the job keeps running
+    (``Api._waits_ending_at``); a timeout elsewhere interrupts the snippet and
+    kills the worker, with its jobs, on Windows or past the grace
+    (``RunCodeWorker._interrupt``, ``_lost``)."""
+    from ltspice_mcp.tools import registry
+    from ltspice_mcp.tools.run_code import INTERRUPT_GRACE_S, RunCodeInput
+
+    defs, _ = registry.get_tools()
+    description = next(d for d in defs if d.name == "run_code").description or ""
+    field = RunCodeInput.model_fields["timeout_s"].description or ""
+    for text in (description, field):
+        assert "ends just before it, naming the job, which keeps running" in text, text
+    assert "cancels a run" not in description
+    assert f"on Windows or when it does not stop within {INTERRUPT_GRACE_S:g} s" in description

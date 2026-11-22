@@ -211,10 +211,10 @@ async def test_every_reader_reads_gnd_bang_as_a_node_of_its_own(state_no_sim, wo
     # A result's node pair reads the same names as ground: V(a,gnd!) needs
     # gnd!'s own voltage, where it read as V(a).
     for xvii in (False, True):
-        assert read_name(["V(a)"], "V(a,gnd!)", xvii=xvii).refused == "missing"
-        pair = read_name(["V(a)", "V(gnd!)"], "V(a,gnd!)", xvii=xvii)
+        assert read_name(["V(a)"], "V(a,gnd!)", xvii=xvii, schematic=False).refused == "missing"
+        pair = read_name(["V(a)", "V(gnd!)"], "V(a,gnd!)", xvii=xvii, schematic=False)
         assert (pair.plus, pair.minus) == ("V(a)", "V(gnd!)")
-        grounded = read_name(["V(a)"], "V(a,GND)", xvii=xvii)
+        grounded = read_name(["V(a)"], "V(a,GND)", xvii=xvii, schematic=False)
         assert (grounded.refused, grounded.plus, grounded.minus) == (None, "V(a)", None)
 
 

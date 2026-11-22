@@ -61,16 +61,46 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.deck_staging import (
+    DEFAULT_INCLUDE_DEPTH,
+    resolve_existing,
+    resolve_reference,
+    scan_include_references,
+)
+from ltspice_mcp.lib.device_names import (
+    DevicePath,
+    path_text,
+    spelled_name,
+    split_path,
+    trace_keys,  # noqa: TID251 - a deck's own .save names and cards, one reading each
+)
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_types import measurement_failed, measurement_named
-from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head, lex_deck
+from ltspice_mcp.lib.log_conditions import said_lines
+from ltspice_mcp.lib.log_types import (
+    MEASUREMENTS_UNREAD,
+    given_no_value,
+    measurement_named,
+    run_measurement_facts,
+)
+from ltspice_mcp.lib.ngspice_driver import interp_option, read_option_cards
+from ltspice_mcp.lib.spice_lex import (
+    EditCards,
+    SpiceLexError,
+    directive_head,
+    extract_meas_name,
+    lex_deck,
+    lex_for_edit,
+)
 from ltspice_mcp.lib.spice_lex_views import directive_args, read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 from ltspice_mcp.lib.trace_names import is_node_voltage
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
+    from ltspice_mcp.lib.device_names import Naming
+    from ltspice_mcp.lib.lint_rules import SaveList
+    from ltspice_mcp.lib.netlist_graph import FlatNetlist
     from ltspice_mcp.lib.result_kinds import Analysis
 
 # Salience threshold for lifting a node value into view. The gmin/floating-node
@@ -351,6 +381,63 @@ def tran_max_step(netlist_text: str) -> float | None:
     return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
 
 
+def deck_ngspice_interp(netlist: Path) -> tuple[bool | None, str | None]:
+    """Whether the deck at ``netlist`` sets ngspice's ``interp`` option
+    (``ngspice_driver.interp_option``) on a card ngspice reads
+    (``ngspice_driver.read_option_cards``), in the deck or a file it
+    ``.include``s.
+
+    ``(True, None)`` when one does; ``(False, None)`` when every file the deck
+    reads was read and no card it reads does; ``(None, why)`` otherwise: an
+    option card setting it in a file read through ``.lib``, which part of such
+    a file ngspice reads turning on its mode (a section, or the whole file);
+    a ``.control`` block, which can set it as a command; a file that could not
+    be read or lies deeper than ``deck_staging.DEFAULT_INCLUDE_DEPTH``."""
+    files: list[EditCards] = []
+    through_lib: list[bool] = []
+    unread: str | None = None
+    pending: list[tuple[Path, int, bool]] = [(netlist, 0, False)]
+    seen: set[Path] = set()
+    while pending:
+        path, depth, lib = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            lexed = lex_for_edit(read_spice_text(path), deck=depth == 0)
+            references = scan_include_references(lexed.read, path, family="ngspice", depth=depth)
+        except (OSError, SpiceLexError):
+            unread = unread or f"the file {path.name} could not be read"
+            continue
+        files.append(lexed)
+        through_lib.append(lib)
+        if any(card.kind == "control" for card in lexed.read):
+            unread = unread or "a .control block can set it as a command, and is not read here"
+        for reference in references:
+            target = resolve_existing(resolve_reference(path.parent, reference.raw_path))
+            if target is None:
+                unread = unread or f"the file {reference.raw_path} the deck reads was not found"
+            elif depth + 1 > DEFAULT_INCLUDE_DEPTH:
+                unread = unread or (
+                    f"the file {reference.raw_path} is more than {DEFAULT_INCLUDE_DEPTH} "
+                    "includes deep, and is not read here"
+                )
+            else:
+                pending.append((target, depth + 1, lib or reference.head == ".lib"))
+    for index, card in read_option_cards(files):
+        sets = interp_option(card)
+        if sets is None:
+            unread = unread or "an option card could not be read"
+        elif sets and through_lib[index]:
+            unread = unread or (
+                "an option card in a file the deck reads through .lib sets it, and "
+                "whether ngspice reads that card turns on the section and the mode"
+            )
+        elif sets:
+            return True, None
+    return (None, unread) if unread else (False, None)
+
+
 def one_ac_frequency(netlist_text: str) -> float | None:
     """The one frequency a deck's first ``.ac`` names as ``.ac list <f>``: the
     frequency of a stepped ``.ac`` at one frequency, which its raw does not
@@ -387,7 +474,15 @@ def compressed_transient(raw: DecodedRaw) -> bool:
     """Whether ``raw`` is an LTspice transient saved with waveform compression
     on, the plot ``coarse_compressed_waveform`` judges. LTspice adds
     ``nocompression`` to a transient's flags when compression is off
-    (``raw/compress_*``)."""
+    (``raw/compress_*``). The flag shows the setting, not that points were
+    dropped: LTspice 26 stores every point of ``raw/compress_1mv`` with it on.
+
+    It reads the decoded plot, its dialect established, so it answers for the
+    plot a read holds. ``raw_parser.may_hold_compressed_transient`` asks the
+    same of the header alone, before anything is decoded, and answers True
+    where it cannot tell, so a recipe that reads only the log decodes the raw
+    only when it may need to. The two differ on purpose: one is a cheap,
+    conservative pre-check, this is the answer."""
     descriptor = raw.descriptor
     return (
         descriptor.dialect == "ltspice"
@@ -431,6 +526,35 @@ def coarse_compressed_waveform(
     return None
 
 
+#: What the recordings show of LTspice's own ``.meas`` on a compressed
+#: transient, by build (``raw/compress_1mv`` and ``raw/compress_1mv_off``).
+_XVII_MEAS = (
+    "LTspice XVII's own .meas results read points its raw does not hold: in a recorded "
+    "RC charge they came within 0.25% of the uncompressed run's, while a trapezoid "
+    "average over the 13 stored points was 0.41%, and interpolation at 1 ms 1.15%, "
+    "below them. LTspice 26 stored every point of the same run."
+)
+
+
+def compressed_xvii_observation(labels: Sequence[str], *, run_cap: int) -> Observation:
+    """The observation for LTspice XVII transient runs, each by its label,
+    whose samples a read took from a raw saved with waveform compression on
+    (``services.compression_drops_points``) and not already said to be coarse
+    (``coarse_waveform_observation``)."""
+    return Observation(
+        code="compressed_transient",
+        kind="value",
+        detail=(
+            f"{len(labels)} LTspice XVII transient run(s) read here were saved with "
+            "waveform compression on, which in every recorded XVII run stored fewer "
+            "points than it computed, so a value read from the samples is interpolated "
+            f"across points the raw does not hold. {_XVII_MEAS} '.options plotwinsize=0' stores every "
+            "point."
+        ),
+        evidence={"runs": list(labels[:run_cap]), "run_count": len(labels)},
+    )
+
+
 def coarse_waveform_observation(
     coarse: Sequence[tuple[str, Mapping[str, float]]], *, run_cap: int
 ) -> Observation:
@@ -450,9 +574,8 @@ def coarse_waveform_observation(
             f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
             f"between two, from {first['gap_from_s']:.3g} s to "
             f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
-            "read between stored points is interpolated across the gap, and "
-            "LTspice's own .meas results can differ from an uncompressed run's "
-            "too. '.options plotwinsize=0' stores every point."
+            f"read between stored points is interpolated across the gap. {_XVII_MEAS} "
+            "'.options plotwinsize=0' stores every point."
         ),
         evidence={
             "run": label,
@@ -498,80 +621,423 @@ _OBSERVATION_INPUTS: FileCache[tuple[dict[str, list[str]] | None, dict[str, floa
 )
 
 
-def relay_observations(summary: dict) -> list[Observation]:
+def relay_observations(summary: dict, said: Sequence[Mapping[str, Any]] = ()) -> list[Observation]:
     """Promote the simulator's own error diagnostics to surfaced observations.
 
     These are the highest-authority facts — the simulator classified them, we
     only relay. They are also the gap (b) fix: a ``completed`` run with a
     ``singular matrix`` line now surfaces it prominently instead of leaving it
     buried in ``errors`` while the headline says success.
+
+    Each carries the ``severity`` the simulator wrote on its line, read off
+    the run's condition that holds it (``said``, the run row's diagnostics),
+    or none where no condition names one: a line relayed without its
+    condition (a solve-failure line) carries none rather than one the server
+    made up.
     """
+    severity = {
+        line["text"]: line["severity"]
+        for c in said
+        for line in said_lines(c)
+        if isinstance(line.get("severity"), str)
+    }
+
+    def with_severity(item: Observation, text: str) -> Observation:
+        if text in severity:
+            item["severity"] = severity[text]
+        return item
+
     obs: list[Observation] = []
+    # An error that names a ``.meas`` is relayed once, as the measurement that
+    # failed (below), not again as a log line.
     seen: set[str] = set()
+    measured = {
+        str(entry.get("raw_block"))
+        for entry in summary.get("meas_errors", []) or []
+        if isinstance(entry, dict)
+    }
     for err in summary.get("errors", []) or []:
         first_line = err.splitlines()[0] if err else err
-        if first_line in seen:
+        if err in measured or first_line in seen:
             continue
         seen.add(first_line)
         obs.append(
-            {
-                "code": "log_error",
-                "kind": "relay",
-                "severity": "error",
-                "detail": first_line,
-                "evidence": {"log": err},
-            }
+            with_severity(
+                {
+                    "code": "log_error",
+                    "kind": "relay",
+                    "detail": first_line,
+                    "evidence": {"log": err},
+                },
+                err,
+            )
         )
     for entry in summary.get("meas_errors", []) or []:
         directive = entry.get("directive", "") if isinstance(entry, dict) else str(entry)
         obs.append(
-            {
-                "code": "meas_parse_error",
-                "kind": "relay",
-                "severity": "error",
-                "detail": f".meas failed to parse: {directive}",
-                "evidence": entry if isinstance(entry, dict) else {"directive": directive},
-            }
+            with_severity(
+                {
+                    "code": "meas_parse_error",
+                    "kind": "relay",
+                    "detail": f".meas failed to parse: {directive}",
+                    "evidence": entry if isinstance(entry, dict) else {"directive": directive},
+                },
+                str(entry.get("raw_block", "")) if isinstance(entry, dict) else "",
+            )
         )
     return obs
 
 
+#: The codes of what a run's case observed that every read of its results by
+#: job repeats (``services.experiment_run_context``): facts about what the
+#: raw holds, or how its names are spelled, which a read of one signal would
+#: otherwise not see. ``partial_raw`` (a stopped run's kept raw) is added to
+#: the read by ``services.partial_raw_observation`` itself.
+READ_BY_JOB = frozenset(
+    {"subcircuit_nodes_not_saved", "raw_names_disagree", "saves_not_stored"}
+)
+
+#: Every other code a run's case can carry, and why a read of the run by job
+#: does not repeat it. A case's observations are on the job's receipt
+#: (``run_experiments``, ``jobs``); ``tests/test_replies_name_what_they_left_out.py``
+#: fails a code a case can carry that is on neither list.
+NOT_READ_BY_JOB: Mapping[str, str] = {
+    # What the run did, which its receipt says and no read of the raw changes.
+    "control_write_injected": "how the run was launched; the raw it wrote is read as written",
+    "late_simulator_exit": "when the simulator exited; the raw it left is read as written",
+    "kill_unconfirmed": "a run with no confirmed exit leaves no raw a read takes",
+    "kill_attempt_failed": "a failed kill attempt; the run's raw, if any, is read as written",
+    "partial_progress": "how far a stopped run got; partial_raw says it of the raw a read takes",
+    "run_progress": "how far a running case has got, said only while it runs",
+    # What the run's log says; a read of the raw does not read the log.
+    "logopinfo_withheld": (
+        "the log's device table, not the raw: every read of that table by job "
+        "gives it with an empty table (services.device_table_unread), and no other read"
+    ),
+    "native_log_output": "a run that wrote no raw, so no read of a raw by job is made",
+    "missing_required_raw": "a run that wrote no raw, so no read of a raw by job is made",
+    "ngspice_mode_unverified": (
+        "how ngspice read the deck, which the server's deck models use; the raw's traces "
+        "are read as the raw spells them"
+    ),
+    # Where the deck came from; the staged copy is what ran.
+    "circuit_id_derived": "how the circuit was named, not what its run wrote",
+    "micro_sign_folded": "how the staged deck spells a suffix, not what its run wrote",
+    "value_read_otherwise": "how another build reads the source, not what its run wrote",
+    "live_include": "which input the run read live, not what its run wrote",
+    "live_data_file": "which input the run read live, not what its run wrote",
+    "data_path_unrecorded": "how the staged deck names a data file, not what its run wrote",
+    "source_unavailable_after_staging": "the source after staging; the staged copy ran",
+    "source_modified_after_staging": "the source after staging; the staged copy ran",
+}
+
+
+def saves_not_stored(
+    saves: SaveList,
+    traces: Sequence[tuple[str, str | None]],
+    naming: Naming,
+    *,
+    circuit: str,
+) -> Observation | None:
+    """Name each entry of a deck's ``.save`` list (``saves``, from
+    ``lint_rules.save_list``, the reading the lint makes before the run) that
+    the run's results do not hold, and each this check could not settle; None
+    when every entry is held.
+
+    ``traces`` is the raw's first plot (``raw_parser.first_plot_traces``),
+    each read as ``naming`` writes a raw (``device_names.trace_keys``). An
+    entry is not stored where the reader is known to store nothing for it (an
+    ngspice ``.save`` of a colon path, another LTspice build's spelling, both
+    measured or recorded), or where it is a node voltage whose trace the raw
+    lacks. A current or device value the raw does not hold under the ``.save``'s
+    own spelling (ngspice writes ``v1#branch`` for ``i(v1)``), an entry whose
+    reading is not established, and a pattern (``V(x1:*)``) are not checked:
+    which name the run would store is not established, so none is guessed."""
+    # Read as a deck's run names them, each instance its card, as the .save
+    # entries are the deck's own names: a sheet's export is a deck too, whose
+    # card XMB1 XVII writes mb1 (export/sheet_part_names).
+    stored = {
+        key for name, _ in traces for key in trace_keys(name, xvii=naming.xvii, schematic=False)
+    }
+    missing: list[dict[str, str]] = []
+    unchecked: list[dict[str, str]] = []
+    if naming.family not in ("ltspice", "ngspice"):
+        # No recording or live run shows what this simulator's .save stores
+        # (Xyce's .SAVE writes an initial-condition file), so nothing is
+        # said to be missing.
+        reason = (
+            f"what {naming.family or 'this simulator'}'s .save stores is not recorded"
+        )
+        entries = [text for text, _ in saves.entries] + list(saves.patterns)
+        if saves.unreadable:
+            entries.append(".save")
+        if not entries:
+            return None
+        return Observation(
+            code="saves_not_stored",
+            kind="coverage",
+            detail=f"{circuit}: not checked against the results: .save {', '.join(entries)}.",
+            evidence={
+                "circuit": circuit,
+                "not_checked": [{"save": text, "reason": reason} for text in entries],
+            },
+        )
+    if saves.unreadable:
+        unchecked.append({"save": ".save", "reason": "a .save card could not be read"})
+    for text, signal in saves.entries:
+        if signal.key is not None:
+            if signal.key in stored:
+                continue
+            if signal.key[0] == "v":
+                missing.append(
+                    {"save": text, "reason": f"the results hold no trace that {text} names"}
+                )
+            else:
+                unchecked.append(
+                    {
+                        "save": text,
+                        "reason": (
+                            "which name the run stores for a current or a device value is "
+                            "not established, and the results hold none spelled as the "
+                            ".save spells it"
+                        ),
+                    }
+                )
+        elif not signal.established:
+            unchecked.append({"save": text, "reason": signal.why or "not established"})
+        elif (
+            saves.includes
+            and naming.family == "ltspice"
+            and signal.spelled is None
+            and not signal.voids_save
+        ):
+            unchecked.append(
+                {
+                    "save": text,
+                    "reason": (
+                        "the deck reads other files, whose subcircuit instances this check "
+                        f"did not read ({signal.why})"
+                    ),
+                }
+            )
+        else:
+            missing.append({"save": text, "reason": signal.why or "it stores nothing"})
+    for pattern in saves.patterns:
+        unchecked.append(
+            {"save": pattern, "reason": "which signals a pattern saves is not recorded"}
+        )
+    if not missing and not unchecked:
+        return None
+    parts = []
+    if missing:
+        names = ", ".join(item["save"] for item in missing)
+        parts.append(
+            f"{circuit}: the run's results hold nothing for .save {names}, so a .meas "
+            "or a read of it gives no value."
+        )
+    if unchecked:
+        names = ", ".join(item["save"] for item in unchecked)
+        parts.append(f"Not checked against the results: .save {names}.")
+    evidence: dict[str, Any] = {"circuit": circuit}
+    if missing:
+        evidence["not_stored"] = missing
+    if unchecked:
+        evidence["not_checked"] = unchecked
+    return Observation(
+        code="saves_not_stored", kind="coverage", detail=" ".join(parts), evidence=evidence
+    )
+
+
+def subcircuit_nodes_not_saved(
+    flat: FlatNetlist,
+    traces: Sequence[tuple[str, str | None]],
+    naming: Naming,
+    *,
+    saves: bool,
+    circuit: str,
+) -> Observation | None:
+    """Say that a run's raw holds no node inside the deck's subcircuits, or
+    None.
+
+    It applies where the deck calls a subcircuit whose body has a net that is
+    not a port (``flat``, from ``netlist_graph.flatten_graph``, names such a
+    net ``<instance path>/<net>``) and no trace of ``traces`` (the raw's first
+    plot, as ``raw_parser.first_plot_traces`` reads it) is a node voltage
+    inside any instance it calls, its path read as ``naming`` writes a raw
+    (``device_names.trace_keys``). A deck whose subcircuits have only ports
+    (``raw/op_subckt``) is never said to miss one.
+
+    The causes are the recorded ones: what the deck's ``.save`` cards name
+    (``saves``), and, on LTspice, the "Save subcircuit node voltages"
+    setting, off by default (``raw/subckt_names_tran`` and its ``_saved``
+    recording, on LTspice 26 and XVII). Whether a deck can turn the setting
+    on, or a ``.save`` with a wildcard saves one instance's nodes, is not
+    recorded, and the detail claims neither."""
+    calls = [split_path(call.ref) for call in flat.calls]
+    inner: list[tuple[DevicePath, str]] = []
+    for path in calls:
+        prefix = f"{path_text(path)}/"
+        inner.extend(
+            (path, net[len(prefix) :]) for net in sorted(flat.nets) if net.startswith(prefix)
+        )
+    if not inner:
+        return None
+    instances = set(calls)
+    for name, declared in traces:
+        if not is_node_voltage(name, declared or None):
+            continue
+        # As a deck's run names it, each instance its card: ``calls`` are the
+        # deck's own cards (see saves_not_stored).
+        ((_, path),) = trace_keys(name, xvii=naming.xvii, schematic=False)
+        if len(path) > 1 and path[:-1] in instances:
+            return None
+    scope, net = inner[0]
+    example = f"V({spelled_name(scope, net, naming)})"
+    causes = []
+    if saves:
+        causes.append("the deck's .save cards, which leave out every such node")
+    if naming.family == "ltspice":
+        causes.append(
+            "LTspice's 'Save subcircuit node voltages' setting, off by default, without "
+            "which LTspice stores a subcircuit's inner node only where a .save names it "
+            "in the build's own spelling"
+        )
+    detail = (
+        f"The raw of {circuit} holds no node voltage inside the deck's subcircuit "
+        f"instances, whose bodies have nets of their own ({example} among them), so a "
+        "read of such a node finds no trace."
+    )
+    if causes:
+        detail += " What decides it: " + "; and ".join(causes) + "."
+    return Observation(
+        code="subcircuit_nodes_not_saved",
+        kind="coverage",
+        detail=detail,
+        evidence={
+            "circuit": circuit,
+            "example": example,
+            "instances": len({path for path, _ in inner}),
+            "inner_nets": len(inner),
+            "saves": saves,
+        },
+    )
+
+
+def measurements_failed_in_every_run(
+    failed_by_run: Sequence[Collection[str]],
+    requested: Collection[str] | None,
+    *,
+    circuit: str | None = None,
+) -> Observation | None:
+    """The ``.meas`` that gave no value in any run read, or None for none.
+
+    ``failed_by_run`` holds, for each run whose measurements were read, the
+    names it gave no value for at any step (``log_types.given_no_value``:
+    printed failed at every step, or not printed at all); ``requested`` the
+    names the deck's own text asks for (:func:`parse_requested_outputs`), or
+    None where the deck was not read. A name is matched as the log reader
+    holds it (``log_types.measurement_named``). The one answer to "which
+    measurements did no run give": the analysis and the job receipt both ask
+    it, each over the runs it read. When the names cover every requested
+    ``.meas``, the detail says so, and that a ``.meas`` in an included file
+    is not counted among them."""
+    runs = [list(names) for names in failed_by_run]
+    if not runs:
+        return None
+    common = [
+        name
+        for name in runs[0]
+        if all(measurement_named(name, others) is not None for others in runs[1:])
+    ]
+    if not common:
+        return None
+    asked = list(requested) if requested is not None else None
+    # Named as the deck spells them where it asks for them.
+    names = [name for name in asked or () if measurement_named(name, common) is not None]
+    names += [name for name in common if measurement_named(name, names) is None]
+    every = bool(asked) and all(
+        measurement_named(name, common) is not None for name in asked or ()
+    )
+    where = f" of {circuit}" if circuit is not None else ""
+    detail = (
+        f".meas {', '.join(names)} gave no value in any of the {len(runs)} run(s){where} "
+        "read: the simulator printed "
+        + ("it" if len(names) == 1 else "each")
+        + " as failed, or printed nothing for it"
+        + (
+            ". That is every requested .meas the deck's own text holds (one in an "
+            "included file is not counted)."
+            if every
+            else "."
+        )
+        + " The measurements recipe reads each run's values."
+    )
+    evidence: dict[str, Any] = {"measurements": names, "runs": len(runs)}
+    if asked is not None:
+        evidence["requested"] = len(asked)
+    if circuit is not None:
+        evidence["circuit"] = circuit
+    return Observation(
+        code="meas_failed_in_every_run",
+        kind="reconciliation",
+        detail=detail,
+        evidence=evidence,
+    )
+
+
+def measurements_not_read_observation(
+    reason: str, requested: Sequence[str] | None
+) -> Observation:
+    """Say that the run's measurements have no value here because they were
+    not read, and why (``reason``, from ``services.measurements_unread``, the
+    run row's ``measurements_coverage``); ``requested`` is the ``.meas`` the
+    deck requests, None where the deck was not read."""
+    asked = (
+        f"The deck requests {len(requested)} .meas, and none is reported"
+        if requested is not None
+        else "No .meas result of this run is reported"
+    )
+    evidence: dict[str, Any] = {"reason": reason}
+    if requested is not None:
+        evidence["requested"] = list(requested)
+    return {
+        "code": "measurements_not_read",
+        "kind": "coverage",
+        "detail": f"{asked}: {MEASUREMENTS_UNREAD[reason]} ({reason}).",
+        "evidence": evidence,
+    }
+
+
 def reconciliation_observations(
-    summary: dict, requested: dict[str, list[str]]
+    summary: dict, requested: dict[str, list[str]], said: Sequence[Mapping[str, Any]] = ()
 ) -> list[Observation]:
     """Surface requested ``.meas``/``.four`` outputs that were not produced.
 
     Classifies each miss as ``failed`` (LTspice printed it failed at every
     step — in ``failed_measurements``), ``skipped_in_batch_mode`` (ngspice
-    can't evaluate in batch mode — a recoverable relay signal already in
-    ``warnings``), or ``missing`` (silently absent — the real trust gap). A
+    can't evaluate in batch mode — its ``measurement_skipped_batch`` condition
+    in ``said``), or ``missing`` (silently absent — the real trust gap). A
     measurement that failed at some steps of a stepped run and was taken at the
     others was produced. The fact, not a verdict: the model decides whether a
     missing measurement matters.
     """
     obs: list[Observation] = []
 
-    # Which measurement a requested name refers to is measurement_named's answer.
-    failed = [
-        name
-        for name in summary.get("failed_measurements") or []
-        if measurement_failed(summary, name)
-    ]
-    # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
-    # in ``failed_measurements``). Without removing it here, the produced-check
-    # below would treat it as produced and skip it — shadowing the "failed"
-    # classification, so a failed measurement never surfaced as an observation.
-    produced_meas = [
-        name
-        for name in summary.get("measurements") or {}
-        if measurement_named(name, failed) is None
-    ]
-    warns = " ".join(summary.get("warnings") or []).lower()
-    meas_batch_skipped = "batch mode" in warns and "meas" in warns
-    four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
+    # Which requested .meas the run gave no value for, and which of those it
+    # printed failed, is run_measurement_facts' answer, the one the run row
+    # and the every-run observation read; this only adds why.
+    facts = run_measurement_facts(summary, requested.get("meas") or [])
+    no_value = given_no_value(facts)
+    failed = facts.get("failed") or []
+    # Whether ngspice skipped a .meas or .four in batch mode is read off the
+    # run's conditions by their codes (``said``), not the warnings list: its
+    # lines saying so carry no severity word (log_conditions).
+    skipped = {str(c.get("code")) for c in said}
+    meas_batch_skipped = "measurement_skipped_batch" in skipped
+    four_batch_skipped = "fourier_skipped_batch" in skipped
 
     for name in requested.get("meas", []):
-        if measurement_named(name, produced_meas) is not None:
+        if measurement_named(name, no_value) is None:
             continue
         if measurement_named(name, failed) is not None:
             reason = "failed"
@@ -726,45 +1192,105 @@ def value_observations(
     return obs
 
 
-def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
-    """Causal link between a ``.meas`` parse error and unexplained misses.
+#: What a recording establishes about a ``.meas`` that cannot be taken, by the
+#: rules a run's log was read with (``log_conditions.rules_for``), and the
+#: recording that shows it. A reading not listed has nothing established.
+_FAILED_MEAS_ESTABLISHED: dict[str, str] = {
+    "ltspice26": (
+        "LTspice 26 refuses a deck whose .meas card does not parse, and a refused "
+        "run measures nothing (recorded: log/meas_bad_syntax)"
+    ),
+}
 
-    One erroring ``.meas`` directive makes LTspice abandon the whole ``.meas``
-    batch — even directives that precede it come back missing. When the
-    assembled list holds both a relay ``meas_parse_error`` and reconciliation
-    ``missing`` misses, link them so the model fixes the one failing directive
-    instead of chasing N phantom misses. Correlates across families, so it runs
-    over the assembled list, not inside either family builder.
+#: The recording that would settle whether a failed ``.meas`` leaves the
+#: others unmeasured where none is established.
+_FAILED_MEAS_UNSETTLED = (
+    "Whether the other .meas go unmeasured because one failed is not established: "
+    "LTspice XVII takes the others in log/meas_bad_syntax, and no recording shows a "
+    "build leaving them unmeasured; a recording of a deck with a failing .meas beside "
+    "ones that would measure, whose log holds no measurement, would settle it"
+)
+
+
+def _failed_meas_cards(obs: list[Observation], said: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The ``.meas`` cards a run's log says failed: those the summary relays as
+    ``meas_errors``, and each ``measurement_error`` condition's card where the
+    simulator gave it no word (LTspice 26's refusal), in order, once each."""
+    cards: list[str] = [
+        str(o.get("evidence", {}).get("directive", o.get("detail")))
+        for o in obs
+        if o.get("code") == "meas_parse_error"
+    ]
+    for condition in said:
+        if condition.get("code") != "measurement_error":
+            continue
+        texts = [line["text"] for line in said_lines(condition)] or [str(condition["first_text"])]
+        cards.extend(
+            line.strip()
+            for text in texts
+            for line in text.splitlines()
+            if line.strip().casefold().startswith(".meas")
+        )
+    return list(dict.fromkeys(cards))
+
+
+def meas_batch_abort_observation(
+    obs: list[Observation],
+    *,
+    measured: bool = False,
+    said: Sequence[Mapping[str, Any]] = (),
+    reading: str | None = None,
+) -> Observation | None:
+    """Link requested ``.meas`` the log does not hold to the ``.meas`` the log
+    says failed, saying only what a recording establishes for the build that
+    wrote it (``reading``, the rules its log was read with).
+
+    It fires only when the log holds no measurement (``measured`` false): a
+    log that holds one shows the ``.meas`` were evaluated, as LTspice XVII's
+    log/meas_bad_syntax does around the one it cannot take. A failed
+    directive's own miss is explained by its own error and is not counted.
+    Correlates across families, so it runs over the assembled list.
     """
-    parse_errors = [o for o in obs if o.get("code") == "meas_parse_error"]
+    if measured:
+        return None
+    cards = _failed_meas_cards(obs, said)
+    failed = [name for card in cards if (name := extract_meas_name(card))]
     # request_kind gate: .four misses also carry reason="missing", but the
-    # Fourier pipeline is unrelated to the .meas batch abort — folding them
-    # in would state a wrong count and attribution.
+    # Fourier pipeline is unrelated to a failed .meas.
     missing = [
         o
         for o in obs
         if o.get("code") == "unmet_request"
         and o.get("evidence", {}).get("reason") == "missing"
         and o.get("evidence", {}).get("request_kind") == "meas"
+        and measurement_named(str(o.get("evidence", {}).get("name", "")), failed) is None
     ]
-    if not (parse_errors and missing):
+    if not (cards and missing):
         return None
+    established = _FAILED_MEAS_ESTABLISHED.get(reading or "")
+    evidence: dict[str, Any] = {
+        "missing": [o.get("evidence", {}).get("name") for o in missing],
+        "failed_directives": cards,
+        "established": established is not None,
+    }
+    detail = (
+        f"{len(missing)} .meas requested were not produced and the log holds no "
+        f"measurement, while {len(cards)} .meas directive(s) failed; fix the failing "
+        "directive first. "
+    )
+    if established is not None:
+        detail += established + "."
+    else:
+        detail += _FAILED_MEAS_UNSETTLED + "."
+        evidence["settled_by"] = (
+            "a recording of a deck with a failing .meas beside ones that would "
+            "measure, whose log holds no measurement"
+        )
     return {
         "code": "meas_batch_abort",
         "kind": "reconciliation",
-        "detail": (
-            f"{len(missing)} .meas requested but not produced while "
-            f"{len(parse_errors)} .meas directive(s) failed to parse — LTspice "
-            "skips the remaining .meas evaluation (including directives that "
-            "come earlier in the deck) after one bad directive; fix the "
-            "failing directive first."
-        ),
-        "evidence": {
-            "missing": [o.get("evidence", {}).get("name") for o in missing],
-            "failed_directives": [
-                o.get("evidence", {}).get("directive", o.get("detail")) for o in parse_errors
-            ],
-        },
+        "detail": detail,
+        "evidence": evidence,
     }
 
 
@@ -776,8 +1302,19 @@ def surface_observations(
     value_traces: dict[str, np.ndarray] | None = None,
     source_amplitudes: dict[str, float] | None = None,
     node_voltages: Collection[str] | None = None,
+    measurements_unread: str | None = None,
+    said: Sequence[Mapping[str, Any]] = (),
+    reading: str | None = None,
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
+
+    ``said`` is the run's conditions with their worded lines, and ``reading``
+    the rules its log was read with (``log_conditions.rules_for``).
+
+    ``measurements_unread`` is why the log's measurements were not read
+    (``services.measurements_unread``): the requested ``.meas`` are then said
+    once to be unread for that reason (``measurements_not_read_observation``),
+    never each "missing".
 
     Passing ``value_traces`` is the decision to surface value facts: a caller
     that loaded them wants them scanned, and one that did not passes None.
@@ -788,10 +1325,24 @@ def surface_observations(
     traces ``node_voltages`` names (``value_observations``).
     """
     obs: list[Observation] = []
-    obs.extend(relay_observations(summary))
+    obs.extend(relay_observations(summary, said))
+    if measurements_unread is not None and (
+        requested.get("meas")
+        if requested is not None
+        # A summary of a raw by path has no deck to say what it requests: it
+        # still says a simulator's measurements are not read. A log that was
+        # not read is said by the summary's diagnostics_coverage.
+        else measurements_unread == "simulator_unsupported"
+    ):
+        asked = None if requested is None else requested["meas"]
+        obs.append(measurements_not_read_observation(measurements_unread, asked))
+        if requested is not None:
+            requested = {**requested, "meas": []}
     if requested:
-        obs.extend(reconciliation_observations(summary, requested))
-        abort = meas_batch_abort_observation(obs)
+        obs.extend(reconciliation_observations(summary, requested, said))
+        abort = meas_batch_abort_observation(
+            obs, measured=bool(summary.get("measurements")), said=said, reading=reading
+        )
         if abort is not None:
             obs.append(abort)
     if value_traces is not None:

@@ -243,6 +243,8 @@ _PATH_MEMBERS: dict[str, Any] = {
     "results_dir": (),
     "result_set": ("rs_" + "0" * 32,),
     "result_artifacts": ("rs_" + "0" * 32,),
+    "stored_answer": ("sa_" + "0" * 32,),
+    "stored_answers_swept": (),
     "verify_artifact": ("export",),
     "edit_export": ("build_1",),
     "run_export": ("amp.0123456789ab",),
@@ -257,6 +259,10 @@ _PATH_MEMBERS: dict[str, Any] = {
 _OUTSIDE_THE_STORE: dict[str, str] = {
     "circuit_lock": (
         "per user: every session editing the file contends on it, whatever its working directory"
+    ),
+    "results_file_lock": (
+        "per user: every session copying to the results file contends on it, whatever its "
+        "working directory"
     ),
     "renders_dir": (
         "per user: a drawing is a view of a sheet, not a record of the server's working directory"

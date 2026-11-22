@@ -1,0 +1,20 @@
+* every form with a result: a noise analysis, stepped
+V1 in 0 0 AC 1
+R1 in out {r}
+C1 out 0 159.154943n
+.step param r list 1k 2k
+.noise V(out) V1 dec 10 10 100k
+.meas noise max_v MAX V(onoise) FROM 2k TO 8k
+.meas noise min_v MIN V(onoise) FROM 2k TO 8k
+.meas noise pp_v PP V(onoise) FROM 2k TO 8k
+.meas noise avg_v AVG V(onoise) FROM 2k TO 8k
+.meas noise rms_v RMS V(onoise) FROM 2k TO 8k
+.meas noise integ_v INTEG V(onoise) FROM 2k TO 8k
+.meas noise find_at_v FIND V(onoise) AT 5k
+.meas noise find_when_v FIND V(inoise) WHEN V(onoise)=2n
+.meas noise when_v WHEN V(onoise)=2n
+.meas noise deriv_at_v DERIV V(onoise) AT 5k
+.meas noise deriv_when_v DERIV V(onoise) WHEN V(onoise)=2n
+.meas noise trig_targ_v TRIG V(onoise) VAL=3n FALL=1 TARG V(onoise) VAL=1n FALL=1
+.meas noise param_v PARAM max_v*2
+.end

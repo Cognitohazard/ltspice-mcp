@@ -157,8 +157,11 @@ def _barrier_process(
     circuit = Path(circuit_path)
     # With persistence on, as a submission requires: the gate finds the other
     # process's job through this registry, which reads it from the store.
+    # A new job records the selector of its runner's class among these.
     state = SimpleNamespace(
-        working_dir=working, job_registry=JobRegistry(persist_enabled=True, working_dir=working)
+        working_dir=working,
+        job_registry=JobRegistry(persist_enabled=True, working_dir=working),
+        offered_simulators={},
     )
     request = ExperimentRunRequest(
         state=cast("SessionState", state),
@@ -290,7 +293,7 @@ class TestExperimentTypesAndStore:
 
         assert loaded is not None
         assert loaded.analysis.result == public_result
-        assert analysis_snapshot.classify(public_result) == "legacy"
+        assert analysis_snapshot.classify(public_result) == "earlier"
 
     def test_a_record_from_an_unread_store_version_is_refused(
         self,
@@ -1341,7 +1344,7 @@ class TestCancelledExperimentReads:
         job.completeness.produced = 1
         state_no_sim.add_experiment_job(job)
 
-        context = services.resolve_experiment_run(job.job_id, state_no_sim)
+        context = await services.resolve_experiment_run(job.job_id, state_no_sim)
         assert context.raw == raw
         assert context.netlist == circuit
         assert context.identity["case_id"] == "case_0000"
@@ -1361,7 +1364,7 @@ class TestCancelledExperimentReads:
         job.completeness.cancelled = 1
         state_no_sim.all_jobs[job.job_id] = job
         with pytest.raises(ResultError, match="did not produce a raw"):
-            services.resolve_experiment_run(job.job_id, state_no_sim)
+            await services.resolve_experiment_run(job.job_id, state_no_sim)
 
     async def test_failed_experiment_case_with_partial_raw_is_not_analysis_source(
         self,
@@ -1378,7 +1381,7 @@ class TestCancelledExperimentReads:
         job.completeness.failed = 1
         state_no_sim.all_jobs[job.job_id] = job
         with pytest.raises(ResultError, match="did not produce a raw"):
-            services.resolve_experiment_run(job.job_id, state_no_sim)
+            await services.resolve_experiment_run(job.job_id, state_no_sim)
 
 
 def test_persist_jobs_false_submission_fails_clearly(

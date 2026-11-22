@@ -187,6 +187,7 @@ def atomic_write(
     encoding: str | None = "utf-8",
     durable: bool = True,
     overwrite: bool = True,
+    mtime: float | None = None,
 ) -> Iterator[IO[Any]]:
     """Open ``path`` for atomic, durable writing via tempfile-then-rename.
 
@@ -214,6 +215,11 @@ def atomic_write(
         When ``True`` (default), replace ``path`` if it exists. When
         ``False``, raise ``FileExistsError`` instead (race-free on POSIX
         via ``os.link``; best-effort on Windows via ``os.rename``).
+    mtime
+        When given, the access and modification time (seconds since the
+        epoch) the file has from the moment it appears at ``path``: set on
+        the tempfile before the rename, so no reader of ``path`` ever sees
+        another time.
 
     Guarantees
     ----------
@@ -269,6 +275,8 @@ def atomic_write(
         if existing_mode is not None:
             with contextlib.suppress(OSError):
                 os.chmod(tmp_path, existing_mode)
+        if mtime is not None:
+            os.utime(tmp_path, (mtime, mtime))
 
         _commit(tmp_path, path, overwrite=overwrite)
     except BaseException:
@@ -313,9 +321,11 @@ def atomic_write_json(
     indent: int = 2,
     durable: bool = True,
     overwrite: bool = True,
+    mtime: float | None = None,
 ) -> None:
-    """Write ``data`` as JSON to ``path`` atomically (and durably, by default)."""
-    with atomic_write(path, durable=durable, overwrite=overwrite) as f:
+    """Write ``data`` as JSON to ``path`` atomically (and durably, by
+    default), with ``mtime`` as its time from the moment it appears."""
+    with atomic_write(path, durable=durable, overwrite=overwrite, mtime=mtime) as f:
         json.dump(data, f, indent=indent, default=default)
 
 

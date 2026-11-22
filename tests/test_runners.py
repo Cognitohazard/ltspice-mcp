@@ -17,6 +17,7 @@ from spicelib.sim.run_task import RunTask
 from spicelib.sim.simulator import Simulator
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.lib.deck_staging import LibraryReader
 from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import (
     SUBPROCESS_TIMEOUT_CEILING_S,
@@ -331,20 +332,33 @@ class TestExtractMosfetInstances:
             ".END\n"
         )
         instances = extract_mosfet_instances(text, deck=True)
-        refs = {i.ref: i for i in instances}
+        assert instances.unsized == ()
+        refs = {i.ref: i for i in instances.sized}
         assert "M1" in refs and "M2" in refs
         assert refs["M1"].width_m == pytest.approx(10e-6)
         assert refs["M1"].length_m == pytest.approx(180e-9)
         assert refs["M2"].width_m == pytest.approx(2e-6)
         assert refs["M1"].model_name == "NMOS1"
 
-    def test_skips_instances_without_geometry(self):
-        from ltspice_mcp.lib.montecarlo import extract_mosfet_instances
+    def test_returns_a_device_it_cannot_size_with_the_reason(self):
+        """No W= / L=, or a size written as an expression: Pelgrom sigma is
+        undefined, so the device is returned unsized with why, never dropped
+        (a rule that reaches it is refused rather than drawn for the others
+        alone)."""
+        from ltspice_mcp.lib.montecarlo import UnsizedInstance, extract_mosfet_instances
 
-        # No W= / L= → can't compute Pelgrom σ; skipped.
-        text = "* deck\nM1 d g 0 0 NMOS1\n"
+        text = (
+            "* deck\nM1 d g 0 0 NMOS1\nM2 d g 0 0 NMOS1 W={wn} L=1u\n"
+            "M3 d g 0 0 NMOS1 W=1u L=1u m={k}\nM4 d g 0 0 NMOS1 W=1u L=1u\n"
+        )
         instances = extract_mosfet_instances(text, deck=True)
-        assert instances == []
+        assert [i.ref for i in instances.sized] == ["M4"]
+        assert instances.unsized == (
+            UnsizedInstance("M1", "it gives no W and it gives no L"),
+            UnsizedInstance("M2", "its W is {wn}, not a literal number"),
+            UnsizedInstance("M3", "its multiplier m is {k}, not a positive literal number"),
+        )
+        assert instances.refs == ("M4", "M1", "M2", "M3")
 
     def test_a_decks_title_is_no_device_but_an_included_files_first_line_is(self):
         """A deck's line 1 is its title (recorded deck/title_card); an
@@ -357,8 +371,8 @@ class TestExtractMosfetInstances:
             ".END\n"
             "M3 d g 0 0 NMOS1 W=1u L=1u\n"
         )
-        assert [i.ref for i in extract_mosfet_instances(text, deck=True)] == ["M2"]
-        assert [i.ref for i in extract_mosfet_instances(text, deck=False)] == ["M1", "M2"]
+        assert extract_mosfet_instances(text, deck=True).refs == ("M2",)
+        assert extract_mosfet_instances(text, deck=False).refs == ("M1", "M2")
 
     def test_finds_lowercase_w_l_geometry(self):
         from ltspice_mcp.lib.montecarlo import extract_mosfet_instances
@@ -367,7 +381,7 @@ class TestExtractMosfetInstances:
         # case-sensitive lookup silently skipped every instance, yielding a
         # zero-mismatch Monte Carlo that looked like a clean run.
         text = "* test\n.model nmos1 nmos(vto=0.7)\nm1 d g 0 0 nmos1 w=10u l=180n\n.end\n"
-        instances = extract_mosfet_instances(text, deck=True)
+        instances = extract_mosfet_instances(text, deck=True).sized
         assert len(instances) == 1
         assert instances[0].width_m == pytest.approx(10e-6)
         assert instances[0].length_m == pytest.approx(180e-9)
@@ -796,7 +810,7 @@ def test_missing_raw_detection_follows_windows_include_separators(tmp_path: Path
     outcome = collect_run_outcome(
         str(tmp_path / "main.raw"),
         str(log),
-        requirements=deck_requirements(deck),
+        requirements=deck_requirements(deck, reader=LibraryReader("ltspice")),
         exit_code=0,
         logs=captured_completion_facts(tmp_path, log),
     )

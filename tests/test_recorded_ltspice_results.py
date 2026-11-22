@@ -59,6 +59,7 @@ from ltspice_mcp.lib.raw_parser import (
     may_hold_compressed_transient,
     raw_writer_command,
     read_partial_raw_progress,
+    run_log_path,
 )
 from ltspice_mcp.lib.recipes import (
     MeasurementsRecipe,
@@ -940,26 +941,22 @@ def test_every_reader_names_a_schematic_part_by_its_reference(
 ):
     """``export/hier_plain_top_run`` places block X1 on a sheet. Its netlist
     line calls it ``X§X1`` on LTspice 26 and ``XX1`` on XVII, and each build's
-    raw names it by its reference, ``Ix(x1:in)``. XVII names every instance
-    without its X, so the netlist's spelling ``Ix(xx1:in)`` reads that trace
-    there. On LTspice 26 it reads none, and every reader names the trace and
-    says why."""
+    raw names it by its reference, ``Ix(x1:in)``. The netlist's spelling
+    ``Ix(xx1:in)`` names nothing as the result writes it, so on either build
+    it reads the part's trace (``device_names.instance_readings``)."""
     raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
-    if rec.generation(build) == "xvii":
-        api = SyncApi(state_no_sim)
-        loaded = api.load_raw(path=raw)
-        assert loaded.trace("Ix(xx1:in)") == pytest.approx(loaded.trace("Ix(x1:IN)"))
-        assert "Ix(x1:IN)" in api.load_raw(path=raw, signals=["Ix(xx1:in)"]).signals
-        return
-    for text in refusals_of(state_no_sim, raw, "Ix(xx1:in)"):
-        assert "Ix(x1:in) is in this result, which names 'xx1' as 'x1'." in text, text
-        assert SCHEMATIC_REFERENCE in text, text
+    api = SyncApi(state_no_sim)
+    loaded = api.load_raw(path=raw)
+    (written,) = [name for name in loaded.signals if name.lower() == "ix(x1:in)"]
+    assert loaded.trace("Ix(xx1:in)") == pytest.approx(loaded.trace(written))
+    assert written in api.load_raw(path=raw, signals=["Ix(xx1:in)"]).signals
 
 
 #: Names that miss a trace of ``raw/subckt_names_tran_saved`` only by the X of
 #: an instance on their path, and per build generation the trace the refusal
 #: names, what the result names otherwise, and why. None where the build
-#: reads the name as it is: XVII writes ``Id(a:Mdrv)`` itself.
+#: reads the name: XVII writes ``Id(a:Mdrv)`` itself, and reads ``xin`` with
+#: its X dropped as the ``in`` it writes (``device_names._select``).
 DECK_X_SPELLINGS: dict[str, dict[str, tuple[str, str, str] | None]] = {
     "Id(a:Mdrv)": {
         "current": ("Id(xa:Mdrv)", "'a' as 'xa'", DECK_INSTANCE_X),
@@ -967,7 +964,7 @@ DECK_X_SPELLINGS: dict[str, dict[str, tuple[str, str, str] | None]] = {
     },
     "I(a:xin:Rin)": {
         "current": ("I(xa:xin:Rin)", "'a' as 'xa'", DECK_INSTANCE_X),
-        "xvii": ("I(a:in:Rin)", "'xin' as 'in'", XVII_DROPS_X),
+        "xvii": None,
     },
 }
 
@@ -999,9 +996,16 @@ async def test_plot_waveform_names_a_deck_instances_trace_by_its_x(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):
     raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
-    trace, named, why = cast(
-        "tuple[str, str, str]", DECK_X_SPELLINGS["I(a:xin:Rin)"][rec.generation(build)]
-    )
+    expected = DECK_X_SPELLINGS["I(a:xin:Rin)"][rec.generation(build)]
+    if expected is None:
+        plotted = await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), signals=["I(a:xin:Rin)"], open=False),
+            state_no_sim,
+        )
+        assert plotted.structured_content is not None
+        assert plotted.structured_content["traces"], plotted.structured_content
+        return
+    trace, named, why = cast("tuple[str, str, str]", expected)
     with pytest.raises(ResultError) as refused:
         await analysis.handle_plot_waveform(
             analysis.PlotWaveformInput(path=str(raw), signals=["I(a:xin:Rin)"], open=False),
@@ -1047,7 +1051,7 @@ def test_the_reason_for_an_instances_x_is_the_rule_of_the_results_source(
 #: refusal is the plain pin note under the name as asked.
 X_SPELLED_PINS: dict[tuple[str, str], dict[str, tuple[str, str, str | None, str, str]]] = {
     ("export/hier_plain_top_run", "V(xx1:in)"): {
-        "current": ("x1", "Ix(x1:in)", "in, out", "'xx1' as 'x1'", SCHEMATIC_REFERENCE),
+        "current": ("xx1", "Ix(x1:in)", "in, out", "", ""),
         "xvii": ("xx1", "Ix(x1:IN)", "in, out", "", ""),
     },
     ("raw/subckt_names_tran_saved", "V(a:out)"): {
@@ -1124,21 +1128,17 @@ def test_a_device_inside_a_schematic_part_is_named_under_its_reference(
     as MB1, running a subcircuit that wraps an NMOS card M1, and calls the
     same subcircuit from a directive as XMB2. LTspice 26 names the device
     inside the part by the part's reference and the one inside the deck's
-    instance with its X, so the netlist's spelling of the part's device
-    reads nothing and the refusal names the trace. XVII names both without
-    the X and reads that spelling."""
+    instance with its X; XVII names both without the X. On either build the
+    netlist's spelling of the part's device names nothing as written, and
+    reads it (``device_names.instance_readings``)."""
     if not rec.has(build, "export/sheet_part_names.raw"):
         pytest.skip(rec.CASES.behaviours["sheet-part-trace-names"].pending)
     raw = rec.stage_run(build, "export/sheet_part_names", work_dir)
-    names = SyncApi(state_no_sim).load_raw(path=raw).signals
-    if rec.generation(build) == "xvii":
-        assert {"Id(mb1:M1)", "Id(mb2:M1)"} <= set(names), names
-        assert SyncApi(state_no_sim).load_raw(path=raw).trace("Id(xmb1:M1)").size == 1
-        return
-    assert {"Id(mb1:M1)", "Id(xmb2:M1)"} <= set(names), names
-    for text in refusals_of(state_no_sim, raw, "Id(xmb1:M1)"):
-        assert "Id(mb1:M1) is in this result, which names 'xmb1' as 'mb1'." in text, text
-        assert SCHEMATIC_REFERENCE in text, text
+    loaded = SyncApi(state_no_sim).load_raw(path=raw)
+    names = loaded.signals
+    deck = "Id(mb2:M1)" if rec.generation(build) == "xvii" else "Id(xmb2:M1)"
+    assert {"Id(mb1:M1)", deck} <= set(names), names
+    assert loaded.trace("Id(xmb1:M1)") == pytest.approx(loaded.trace("Id(mb1:M1)"))
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -1200,7 +1200,12 @@ def _step_count_reply(state: SessionState, raw: Path) -> dict[str, Any]:
 def _steps_refused(state: SessionState, raw: Path, decoded: DecodedRaw) -> str:
     """The reason every reader of how many steps ``raw`` has gives for not
     counting them: the tools' step count, the API's ``step_count`` and
-    ``steps``, and ``analyze_results``. Each gives the same one."""
+    ``steps``, and ``analyze_results``. Each gives the same one: the
+    decoder's, naming the log a reader of the path looked for where there is
+    none (``raw_parser.run_log_path``)."""
+    log = run_log_path(raw)
+    if not log.is_file():
+        decoded = decoded.without_log(log.name)
     with pytest.raises(ResultError) as counted:
         get_step_count(decoded)
     reason = str(counted.value)
@@ -1673,7 +1678,8 @@ class TestMeasurements:
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
         """The measurements recipe gives no number for a step whose row XVII
-        printed 0, and names the step as not established; LTspice 26, which
+        printed 0, and names the step as not established, which its
+        statistics count as such and not as a failure; LTspice 26, which
         prints ``failed``, has its failure counted. A bare log path names no
         build, so it may be XVII's: its zero is not established either."""
         log = work_dir / "meas_step.log"
@@ -1686,13 +1692,16 @@ class TestMeasurements:
         )
         assert "observations" not in result
         stats = result["stats"]["s_when"]
-        assert stats["failure_count"] == 1
         assert stats["valid_count"] == 2
         assert stats["min"] > 0
         if rec.generation(build) == "xvii":
+            assert stats["failure_count"] == 0
+            assert stats["no_number"] == {"not_established": 1}
             assert result["not_established"]["s_when"]["steps"] == [2]
             assert "failed_measurements" not in result
         else:
+            assert stats["failure_count"] == 1
+            assert stats["no_number"] == {}
             assert "not_established" not in result
             assert result["failed_measurements"] == ["s_when"]
 
@@ -2295,7 +2304,9 @@ class TestSubcircuitDeviceNames:
             assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
         else:
             assert names == ["xa:mdrv", "xa:xin:mtail", "xb:mdrv", "xb:xin:mtail"]
-        assert sorted(path_text(table_device_path(n)) for n in names) == _NESTED_MOSFETS
+        xvii = rec.generation(build) == "xvii"
+        paths = sorted(path_text(table_device_path(n, xvii=xvii)) for n in names)
+        assert paths == _NESTED_MOSFETS
 
     def test_the_api_keys_each_device_by_its_path_on_either_build(
         self, build: str, state_no_sim: SessionState, work_dir: Path
@@ -2330,7 +2341,7 @@ class TestSubcircuitDeviceNames:
         devices = {
             path_text(path)
             for name in saved
-            if name.startswith("Id(") and (path := owner_path(name, xvii=xvii))
+            if name.startswith("Id(") and (path := owner_path(name, xvii=xvii, schematic=False))
         }
         assert sorted(devices) == _NESTED_MOSFETS
         # The only MOSFETs are inside the subcircuits, and they are found there.
@@ -2338,7 +2349,7 @@ class TestSubcircuitDeviceNames:
         ports = {
             path_text(path)
             for name in saved
-            if name.startswith("Ix(") and (path := owner_path(name, xvii=xvii))
+            if name.startswith("Ix(") and (path := owner_path(name, xvii=xvii, schematic=False))
         }
         assert ports == {"xa", "xb", "xa.xin", "xb.xin"}
 
@@ -2713,7 +2724,7 @@ async def test_an_attached_analysis_reads_a_jobs_fra_results(
 
     stored = await attached_analysis_callback(state_no_sim)(job)
 
-    [row] = render_attached_analysis(stored, fields=None)["results"]["loop"]["values"]
+    [row] = render_attached_analysis(stored)["results"]["loop"]["values"]
     assert row["value"]["unity_gain_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
 
 
@@ -3134,9 +3145,9 @@ def test_a_time_step_that_collapses_part_way(build: str):
 BLOCK_DEVICE_IN_THE_TABLE = {"current": "@u1:d1[id]", "xvii": "@d:u1:1[id]"}
 
 
-#: What ``api.device_op_points`` calls that device: a deck instance X1's M1 is
-#: ``x1.m1`` on both builds, and this one has no name the two builds share.
-BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD = {"current": "u1d1", "xvii": "xu1.d1"}
+#: What ``api.device_op_points`` calls that device on both builds: the
+#: instance as the export names it without the ``§`` (``XU1``), then D1.
+BLOCK_DEVICE_NAMED_BY_THE_API = "xu1.d1"
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -3146,9 +3157,8 @@ def test_a_device_inside_a_block_not_named_with_x(
     """LTspice 26 prints the table only under ``.options logopinfo``, which
     XVII refuses ("unrecognized option") and prints the table without. Both
     exports name the block X§U1 (26) or XU1 (XVII). The API reads the device
-    by a name of its own on each build: on LTspice 26 the path's two words
-    run together, and on XVII the path with the X the export gives U1, so
-    one device is asked for by two names."""
+    by one name on both builds, the path with the X the export gives U1, and
+    keeps the table's own name beside it."""
     generation = rec.generation(build)
     shown = (
         "export/hier_device_logopinfo" if generation == "current" else "export/hier_device_plain"
@@ -3170,5 +3180,6 @@ def test_a_device_inside_a_block_not_named_with_x(
     log = work_dir / "hier_device.log"
     log.write_bytes(rec.recorded(build, f"{shown}.log").read_bytes())
     by_device = SyncApi(state_no_sim).device_op_points(log)
-    name = BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD[generation]
+    name = BLOCK_DEVICE_NAMED_BY_THE_API
     assert by_device == {name: {"id": 2.26e-3, "vd": 0.676, "req": 11.5, "cap": 0.0}}
+    assert by_device.table_names == {name: BLOCK_DEVICE_IN_THE_TABLE[generation][1:-4]}

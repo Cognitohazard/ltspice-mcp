@@ -6,7 +6,9 @@ index matches it.
 
 Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 `api.guide("<name>")` in Python. A pointer elsewhere such as
-"guide section 'signals'" names one of them.
+"guide section 'signals'" names one of them, and "heading '<text>'" one part,
+which `"heading"` (`api.guide(name, heading=...)`) returns alone; an unknown
+heading is refused, listing the section's headings.
 
 ## How to work
 
@@ -62,6 +64,23 @@ Use Python for anything past a single call. Use a tool for one call whose
 reply you will read as it is, for a chart you want to see, and for a job that
 must outlive the `run_code` worker.
 
+## Ask a recipe before numpy
+
+A recipe of `analyze_results` (`api.analyze_results` in Python) answers these
+over every run at once, with checks behind each number. Compute over the
+samples yourself only what no recipe answers.
+
+- Amplitude and phase at one frequency: `tone`, or `.four` in the deck, read
+  with `summary` (guide section 'signals'). `tone` also reads a ratio
+  (`V(out)/V(in)`) and each case at its own frequency (`frequency_param`).
+- A step response (rise, overshoot, settling): `transient_response`.
+- The `.meas` values of each run, failed ones named: `measurements`.
+- A loop's gain and phase margin: `stability`.
+- Which run collapsed its time step, and where: `time_steps` (guide section
+  'signals').
+
+`api.reference("analyze_results")` lists every recipe.
+
 `plot_waveform` shows its chart in the chat where the client can, and
 otherwise opens it on this machine's desktop. When the person is not at this
 machine, on a phone for example, send them the file it returns as `path`.
@@ -79,11 +98,19 @@ receipt = api.run_experiments(  # waits until the job is terminal
     circuits=[{"path": "ldo.cir"}],
     variations=[{"kind": "assign", "assign": {"ILOAD": ["1m", "10m", "100m"]}}],
 )
-for row in receipt["runs"]["items"]:  # one row per case
-    r = api.load_raw(job_id=receipt["job_id"], case_id=row["case_id"])
-    t, v = r.axis(step=0), r.trace("V(out)", step=0)
-    t_w, v_w, _ = window_and_clean(t, v, 4e-3, None)  # from 4 ms to the end
-    print(row.get("assignments", {}), compute_signal_stats(t_w, v_w)["mean"])
+stats = api.analyze_results(  # one recipe over every case
+    sources=[{"job_id": receipt["job_id"]}],
+    recipes=[
+        {"key": "vout", "metric": "signal_stats", "signal": "V(out)", "window": {"start": "4m"}}
+    ],  # from 4 ms to the end
+)
+for row in stats["results"]["vout"]["values"]:  # one row per case
+    print(row.get("assignments", {}), row["value"]["mean"])
+row = receipt["runs"]["items"][0]  # the samples, for what no recipe answers
+r = api.load_raw(job_id=receipt["job_id"], case_id=row["case_id"])
+t, v = r.axis(step=0), r.trace("V(out)", step=0)
+t_w, v_w, _ = window_and_clean(t, v, 4e-3, None)
+print(compute_signal_stats(t_w, v_w)["mean"])  # weighted by time
 ```
 
 - The methods take the tools' arguments as keywords and return complete

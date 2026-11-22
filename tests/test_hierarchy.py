@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib.device_names import raw_name, trace_key
+from ltspice_mcp.lib.device_names import raw_name, trace_keys
 from tests import _ltspice_recorded as rec
 from tests.test_inspect_tools import _run
 
@@ -15,6 +15,13 @@ def hierarchy_deck(work_dir: Path) -> Path:
         ".lib tt\n.model n NMOS(level=1 vto=.5 kp=100u)\n.endl tt\n"
         ".lib ff\n.model n NMOS(level=1 vto=.4)\n.endl ff\n",
         encoding="utf-8",
+    )
+    # LTspice reads the rest of a .lib line as one path (recorded:
+    # deck/lib_path_space_unquoted), so the deck's corner line names a file
+    # "models.lib tt" to it; here that file holds the tt corner, so both
+    # readers read the same model.
+    (work_dir / "models.lib tt").write_text(
+        ".model n NMOS(level=1 vto=.5 kp=100u)\n", encoding="utf-8"
     )
     (work_dir / "leaf.inc").write_text(
         ".param r=3k extra=7\nR1 p internal {r}\nR2 internal 0 {twice}\n"
@@ -226,7 +233,7 @@ async def test_profile_section_interpretation_and_offline_default(
     monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
     result = await _inspect(state_no_sim, hierarchy_deck, simulator="ngspice")
     assert not result["ok"]
-    assert "lt, ps or s3" in result["error"]["message"]
+    assert "two plain includes" in result["error"]["message"]
     result = await _inspect(state_no_sim, hierarchy_deck, ngbehavior="hsa")
     assert not result["ok"]
     assert result["error"]["code"] == "invalid_query"
@@ -279,7 +286,7 @@ async def test_capture_hashes_parsed_bytes_and_pure_resolve_ignores_disk(
 
 async def test_section_filename_collision_is_refused(state_no_sim, hierarchy_deck):
     (hierarchy_deck.parent / "tt").write_text("* colliding filename\n", encoding="utf-8")
-    result = await _inspect(state_no_sim, hierarchy_deck)
+    result = await _inspect(state_no_sim, hierarchy_deck, simulator="ngspice", ngbehavior="hsa")
     assert not result["ok"]
     assert "malformed .endl" in result["error"]["message"]
 
@@ -573,11 +580,12 @@ async def test_inactive_include_is_not_followed_and_missing_section_fails(state_
         ".lib tt\nR1 a 0 1k\n.endl tt\n.lib ff\n.include missing\n.endl ff\n", encoding="utf-8"
     )
     path.write_text("* sections\n.lib corners.lib tt\n.end\n", encoding="utf-8")
-    result = await _inspect(state_no_sim, path)
+    corner = {"simulator": "ngspice", "ngbehavior": "hsa"}
+    result = await _inspect(state_no_sim, path, **corner)
     assert result["ok"], result
     assert result["data"]["instances"][0]["value"]["value"] == 1000
     path.write_text("* sections\n.lib corners.lib absent\n.end\n", encoding="utf-8")
-    result = await _inspect(state_no_sim, path)
+    result = await _inspect(state_no_sim, path, **corner)
     assert not result["ok"] and "missing library section" in result["error"]["message"]
 
 
@@ -810,7 +818,9 @@ def test_a_name_spelled_for_a_build_reads_back_as_its_path(xvii):
     """What an address writes for a build is what that build's raw is read by."""
     spelled = raw_name(("Xa", "Xin"), "Mid", xvii=xvii)
     assert spelled == ("a:in:mid" if xvii else "xa:xin:mid")
-    assert trace_key(f"V({spelled})", xvii=xvii) == ("v", ("xa", "xin", "mid"))
+    assert trace_keys(f"V({spelled})", xvii=xvii, schematic=False) == (
+        ("v", ("xa", "xin", "mid")),
+    )
 
 
 async def test_a_named_build_spells_for_itself(state_no_sim, work_dir):

@@ -20,11 +20,14 @@ so batch a whole build into one call. Place components with the
 nets, and `warnings` reports any overlap. A pin on a net that no label names
 has no `net`; with a `compare`, it has `net_export`, the name LTspice's
 export gives it (`N001`). `inspect(kind="symbol")` previews the same geometry
-before you place anything, and lists every attribute the symbol has
+before you place anything (pass `rotation` when you know the placement, to get
+that one instead of all eight), and lists every attribute the symbol has
 (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes
 hold the model name and parameters that an instance is netlisted with.
 Change a directive or comment with `replace_directive`, which keeps its place
 on the sheet; a `regex:` instruction saves typing the old text.
+
+### Finding the sheet the user has open
 
 When the user says "this circuit" and names no file, find out what they have
 open with `inspect(kind="open_in_ltspice")`. It lists the sheets and netlists
@@ -32,31 +35,43 @@ open in LTspice and marks the one in front `active`. Work on that path as on
 any other. A sheet with `differs_from_file: true` has changes in the window
 that are not in the file, so a run would simulate something other than what
 they see. Tell them, and ask whether to keep those changes; `edit_schematic`
-saves or drops them with `open_window` (below). `only_in_window` and `only_in_file`
+saves or drops them with `open_window` (guide section 'schematics',
+heading 'Edits and unsaved changes in an open LTspice window').
+`only_in_window` and `only_in_file`
 list the `.asc` lines where the two differ; a part whose value changed appears
 in both, once with each value. They hold 25 entries a side; past that,
 `difference_omitted` counts the rest, and the same query with that `path` and
 `pid` pages through every entry. Use them to tell the user what is unsaved,
 and do not treat them as the circuit to work on.
 
+### Showing a sheet in the user's LTspice
+
 When they ask to see a sheet you built or changed, `verify_circuit(path=...,
 in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
 `ltspice` block has `differs_from_file: true`, the window already had the
 sheet open and shows an older copy than the one you checked, so tell them and
-settle it with `open_window` (below) once they choose.
+settle it with `open_window` (guide section 'schematics',
+heading 'Edits and unsaved changes in an open LTspice window') once they choose.
 With no LTspice window open, `in_ltspice` starts LTspice (`started: true` in
 the block), and LTspice comes to the front of their screen. Pass it only when
 they asked to see something there, never to check your own work. If the block
 reports that none was started, starting is turned off
 (`[schematic] start_ltspice`), so ask them to open LTspice.
 
+### Plotting a run by clicking the sheet in LTspice
+
 When they want to plot nets by clicking the sheet in LTspice, show them a run
 of the sheet with `plot_waveform(job_id=..., signals=[...], in_ltspice=true)`
 on a job that ran an `.asc`. The run's results are written beside the sheet
-under its name, replacing any results there, and opened from the sheet, which
-makes LTspice tie the plot to the sheet. The reply's `ltspice` block then
-names the `sheet` and has `tied: true`, and a click on a net in the sheet
-plots it. Results already beside a sheet under its name, as a run in LTspice
+under its name, replacing the results and log there, and opened from the
+sheet, which makes LTspice tie the plot to the sheet. The reply's `ltspice`
+block then names the `sheet` and has `tied: true`, and a click on a net in the
+sheet plots it. The copy is the one `jobs(action="place_beside_sheet")` makes,
+and the block's `not_checked` and `left_in_place` say what it did not check
+and which of the sheet's result files from another run it left beside it. A
+sheet changed since the run is not given its results: the run opens on its
+own instead, and the block's `not_placed` says why and what to do (run the
+sheet again). Results already beside a sheet under its name, as a run in LTspice
 leaves them, open the same way when you pass them as `path`. LTspice reads
 a plot only when it opens it, so a plot of these results that is already open
 is closed and reopened, and the block reports `reopened: true`. Traces the
@@ -69,43 +84,59 @@ file. If it has changes that are not in the file, the sheet stays open and the
 plot opens separately, with `tied: false` and `differs_from_file: true` in the
 block. Ask the user whether to keep those changes, then call
 `edit_schematic(path=..., expected_sha256=..., ops=[], open_window=...)` with
-`"save"` or `"discard"` (below). After `"discard"`, showing the run again ties
+`"save"` or `"discard"` (guide section 'schematics',
+heading 'Edits and unsaved changes in an open LTspice window'). After
+`"discard"`, showing the run again ties
 the plot to the sheet. After `"save"`, the sheet holds their changes, so a new
 run of it opens tied to it. A netlist's run has no sheet to
 tie to and opens as a separate plot; it is also closed and reopened if it was
 already open.
+
+### Putting a run's results beside the sheet
 
 A run's results stay in the job's folder, which LTspice never looks in, so a
 sheet's run leaves nothing beside the sheet; its receipt says so
 (`results_not_beside_sheet`). When the user wants a run as the sheet's own
 results, to open it in LTspice themselves, `jobs(action="place_beside_sheet",
 job_id=..., case_id=...)` copies that case's results beside the sheet under
-its name, replacing any there, without opening anything. It refuses a case
-whose sheet has changed since the run, since the results would not match it,
-and, like every read of a job's runs, a case of a job whose runs have not all
-finished (`job_not_terminal`; `jobs(action="wait", wait_for="runs")` first).
+its name, replacing any there, without opening anything. It does the same for
+a netlist, beside which LTspice also writes a netlist's results; what
+LTspice's window does with results put there has not been checked, and the
+reply's `not_checked` says so, so tell the user. It refuses a case whose
+circuit has changed since the run, since the results would not match it; a
+netlist with a sheet of its name beside it (`results_belong_to_sheet`),
+since LTspice shows that file as the sheet's run: run the sheet, or copy the
+netlist under another name; and a case of a job whose runs have not all
+finished (`job_not_terminal`; `jobs(action="wait", wait_for="runs")` first),
+although a finished case can be read before then.
 When the user wants that before the run starts, pass
 `execution={"results_beside_sheet": true}` to `run_experiments` instead: each
 sheet's results are copied beside it as the runs finish, and the receipt's
 `results_placed_beside_sheet` or `results_not_placed` says what happened. It
-takes LTspice runs of sheets with one case each, so for a sweep, copy the
-chosen case afterwards with the action.
+takes LTspice runs of sheets and netlists with one case per results file
+(`foo.asc` and `foo.net` share `foo.raw`), so for a sweep, copy the chosen
+case afterwards with the action.
 A case with variations shows values the sheet does not; the reply's
 `assignments` lists them, so tell the user. A plot with no sampled axis (a
 stepped `.op`, say) has no chart, and `plot_waveform(..., in_ltspice=true)`
 still puts it beside the sheet and opens it there, with no traces named.
+
+### LTspice's own MCP server
 
 LTspice ships its own MCP server, which a session may have beside this one
 (its tools include `set_design_content` and `start_simulation`). It acts on
 the copy in the LTspice window instead of the file. Make edits with
 `edit_schematic`. A sheet changed through LTspice's server changes only in the
 window, and `edit_schematic` then refuses that sheet until the window's copy is
-saved or dropped with `open_window` (below).
+saved or dropped with `open_window` (guide section 'schematics',
+heading 'Edits and unsaved changes in an open LTspice window').
 A run started through LTspice's server simulates the window's copy and leaves
 no job, so run with `run_experiments`. When one of its tools reports that it
 could not start or attach an LTspice instance, no LTspice window is open. Do
 not try its `start_headless`; show the user what they asked for with
 `in_ltspice`, which opens one.
+
+### Edits and unsaved changes in an open LTspice window
 
 LTspice does not read an open file again, so when the user has a sheet open in
 LTspice (Windows, LTspice 26.1 or later), the server shows each commit to it
@@ -134,6 +165,8 @@ are gone, and `"discard"` drops every copy. Every `open_window` call quotes the
 file's `sha256` as `expected_sha256` and is refused without it: after a refused
 edit the one that edit sent, after a commit the reply's, and otherwise the
 `sha256` that `inspect(kind="open_in_ltspice")` with the sheet as `path` gives.
+
+### Component attributes and bus notation
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
   `Prefix` replaces its symbol's element letter on export, on both builds, so
@@ -191,8 +224,8 @@ with a level-1 model as having its bulk at the source. A three-node
   toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at
   M180 (gate left, toward center) — gates face each other.
-- Use `inspect(kind="symbol")` and read the pins for the intended rotation to
-  verify pin directions before placing.
+- Use `inspect(kind="symbol", rotation=...)` with the intended rotation and
+  read its pins to verify pin directions before placing.
 
 ### Schematic layout best practices
 
@@ -205,7 +238,8 @@ itself, and verifies before it returns. `verify_circuit` with the `export` and
 `compare` checks must match the source netlist, and `inspect(kind="net")` must
 show no multi-label shorts. Review the result with `inspect(kind="components")`.
 
-**Component placement:**
+#### Component placement
+
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current
   mirrors, bias mirrors) must share the same y-coordinate. Plan horizontal
   tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
@@ -230,7 +264,8 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   bounding boxes of adjacent tiers. Use `inspect(kind="symbol")` to check bbox
   extents at the intended rotation.
 
-**Wiring:**
+#### Wiring
+
 - **All wires must be orthogonal** — strictly horizontal or vertical. Never
   route diagonal wires. Use waypoints in the `wire_pins` op for L-shaped or
   multi-segment routes.
@@ -253,12 +288,17 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
 - **Heed the `wire_pins` op's errors and junctions**: it refuses diagonal
   wires, pin collisions, and wire junction overlaps. Where the route joins its
   own net on the way, its `results` entry lists the point under `junctions`.
-  The sheet findings below report a crossed wire or a route through a part.
+  The sheet findings (guide section 'schematics', heading 'Reading the
+  wiring profile and the sheet findings') report a
+  crossed wire or a route through a part.
 - **Keep wires short; nothing reports wire length.** In LTspice's own example
   schematics 50% of wire segments are 32 units or shorter, 90% are 192 or
   shorter, and about 3% exceed 400. A long wire is not an error, but if it
   only runs a signal across the sheet, a net label at each end is easier
   to read.
+
+#### Reading the wiring profile and the sheet findings
+
 - **Read the `wiring` profile `edit_schematic` returns.** It reports
   `pins_wired` and `pins_label_only` out of `pins_total`. A high
   `pins_label_only` with `wire_segments` near zero means you tagged pins with
@@ -274,7 +314,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   inside one, a part's name, value or other attribute text drawn across a
   wire, another part or other text, a wire LTspice leaves out of the netlist), returned by the edit
   that caused them. A part's text moves with the part and no op moves the text
-  alone, so move the part (`move` with `drag: true`, below) or the item its
+  alone, so move the part (`move` with `drag: true`, guide section
+  'schematics', heading 'Moving what
+  is drawn') or the item its
   text crosses.
 - **On an existing sheet, the reply lists only your edit's findings.**
   `warnings` lists only the findings your ops made or changed, and
@@ -288,7 +330,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   `return_views: ["preexisting"]` (on an op-less read,
   `ops: []`, that is the whole sheet) or run `verify_circuit`.
 
-**Moving what is drawn:** the `move` op shifts parts, wires, labels and
+#### Moving what is drawn
+
+The `move` op shifts parts, wires, labels and
 texts by one offset (`dx`, `dy`), chosen by name or by a `region`. With
 `drag: true`, other wires' ends and the labels and grounds on a moved pin move
 with it, so they stay attached. To move one part with the labels and grounds
@@ -310,7 +354,8 @@ name, place and value, its pins pair with the new symbol's by name (or as
 names the old pins whose wiring was left with nothing (`left_at`) and the new
 pins left unconnected (`unpaired_pins`).
 
-**Ground and net labels:**
+#### Ground and net labels
+
 - **Ground**: give each grounded pin its own ground (`0`) label with an
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,
   and no ground flag is shared or reached by a long wire. A `GND` label in any
@@ -335,13 +380,15 @@ pins left unconnected (`unpaired_pins`).
   behavioral `B`-source referencing `V(name)` silently breaks unless that exact
   net has an `add_net_label`. A net you never name needs no label.
 
-**Sources:**
+#### Sources
+
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at
   bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
 - **Current source direction**: Current flows from `+` (top) to `-` (bottom)
   externally. Place with `+` on the higher-voltage rail.
 
-**Models:**
+#### Models
+
 - **Model names must not collide with type keywords**: Use `NMOS_3V3` not
   `NMOS` for `.model` names when the symbol Value is also a MOSFET type.
 - **Diode default-model collision**: The `diode` symbol defaults its Value to

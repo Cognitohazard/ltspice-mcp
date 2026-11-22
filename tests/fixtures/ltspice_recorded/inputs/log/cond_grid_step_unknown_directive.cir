@@ -1,0 +1,7 @@
+* a directive LTspice does not have, over two steps
+V1 a 0 1
+R1 a 0 {r}
+.frobnicate 1 2
+.step param r list 1k 2k
+.op
+.end

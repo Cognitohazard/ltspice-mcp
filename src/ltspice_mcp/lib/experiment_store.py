@@ -19,6 +19,7 @@ from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
+    CaseSteps,
     Completeness,
     ExperimentCase,
     ExperimentJob,
@@ -36,6 +37,7 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws, result_digest
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
+from ltspice_mcp.lib.redirect import canonical, redirect_below, same_location
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
@@ -147,6 +149,14 @@ def request_cancellation(
     The marker contains no authority token. The latest persisted coordinator
     record is re-read while the cross-process gate is held so a stale in-memory
     view cannot authorize cancellation.
+
+    The gate's promise: once this returns, no case of the job passes the gate
+    (``ExperimentRunner._submit_case_under_cancel_gate``), and every case that
+    passed it before and is still running when the job's owner reads the
+    marker is stopped by it, before its simulator starts or by killing it. A launch holds the gate only
+    for its decision, so this waits on no launch, no record write and no event
+    loop (``tests/test_loop_waits.py``): at most the lock's own timeout behind
+    another decision or cancel.
     """
     store = Store(working_dir)
     with file_lock(store.cancellation_lock(job_id)):
@@ -199,8 +209,8 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 "submitted_at": case.submitted_at.isoformat() if case.submitted_at else None,
                 "completed_at": case.completed_at.isoformat() if case.completed_at else None,
                 "run_token": case.run_token,
-                "step_index": case.step_index,
-                "step_values": case.step_values,
+                **(case.legacy_step_fields or {}),
+                **({"steps": case.steps.to_record()} if case.steps is not None else {}),
                 "native_statistics": (
                     case.native_statistics.to_record() if case.native_statistics else None
                 ),
@@ -212,6 +222,11 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 **(
                     {"log_diagnostics": case.log_diagnostics}
                     if case.log_diagnostics is not None
+                    else {}
+                ),
+                **(
+                    {"measurement_facts": case.measurement_facts}
+                    if case.measurement_facts is not None
                     else {}
                 ),
                 "recovery": case.recovery.to_record() if case.recovery is not None else None,
@@ -255,6 +270,9 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         pid=job.owner_pid,
         owner_start=owner_start_record(job.owner_pid, job.owner_start),
         simulator=job.simulator,
+        # Written only when recorded: a record from before the field, a
+        # recovery candidate among them, re-serializes to its own keys.
+        **({"simulator_selector": job.simulator_selector} if job.simulator_selector else {}),
         status=job.status,
         started_at=job.started_at.isoformat(),
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
@@ -278,9 +296,12 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
 def save_job(job: ExperimentJob) -> Path:
     """Persist an experiment at its validated working-store path."""
     validate_job_id(job.job_id)
-    root = job.store_path.parent.resolve()
-    expected = (root / f"{job.job_id}.json").resolve()
-    if job.store_path.resolve() != expected or expected.parent != root:
+    root = canonical(job.store_path.parent)
+    expected = root / f"{job.job_id}.json"
+    # Whether the record redirects is answered from what is on disk: a writer
+    # of the same job may create or replace the file at this moment, which on
+    # Windows can leave a resolved path's text with the ``\\?\`` prefix on.
+    if job.store_path.name != expected.name or redirect_below(expected, root) is not None:
         raise ValueError(f"Experiment store path is not contained: {job.store_path}")
     job.store_path = expected
     atomic_write_json(expected, serialize_job(job))
@@ -420,8 +441,12 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         submitted_at=parse_iso_datetime(data.get("submitted_at")),
         completed_at=parse_iso_datetime(data.get("completed_at")),
         run_token=str(data.get("run_token", "")),
-        step_index=data.get("step_index"),
-        step_values=dict(data.get("step_values") or {}),
+        steps=(
+            CaseSteps.from_record(data["steps"]) if isinstance(data.get("steps"), dict) else None
+        ),
+        legacy_step_fields=(
+            {key: data[key] for key in ("step_index", "step_values") if key in data} or None
+        ),
         native_statistics=(
             NativeCaseRecord.from_record(data["native_statistics"])
             if data.get("native_statistics") is not None
@@ -433,6 +458,11 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         log_diagnostics=(
             dict(data["log_diagnostics"])
             if isinstance(data.get("log_diagnostics"), dict)
+            else None
+        ),
+        measurement_facts=(
+            dict(data["measurement_facts"])
+            if isinstance(data.get("measurement_facts"), dict)
             else None
         ),
         recovery=(
@@ -617,6 +647,7 @@ def deserialize_job(
         error=data.get("error"),
         output_folder=_path_or_none(data.get("output_folder")),
         simulator_executable=SimulatorExecutable.from_record(data.get("simulator_executable")),
+        simulator_selector=_optional_str(data.get("simulator_selector")),
         deck_names_xvii=(
             data.get("deck_names_xvii") if isinstance(data.get("deck_names_xvii"), bool) else None
         ),
@@ -694,8 +725,11 @@ def _record_owner(data: Mapping[str, Any]) -> tuple[int | None, str | None]:
 def load_job_from_path(path: Path, working_dir: Path) -> ExperimentJob | None:
     """Load one coordinator record after validating store-root containment."""
     store = Store(working_dir)
-    resolved = path.resolve()
-    if resolved.parent != store.experiments_dir:
+    resolved = store.experiments_dir / path.name
+    if (
+        not same_location(canonical(path.parent), store.experiments_dir)
+        or redirect_below(resolved, store.experiments_dir) is not None
+    ):
         raise ValueError(f"Experiment record is outside the working store: {path}")
     validate_job_id(resolved.stem)
     data = _read_job_record(resolved)

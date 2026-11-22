@@ -9,9 +9,6 @@ no PDK installed.
 
 from __future__ import annotations
 
-from ltspice_mcp.lib.spice_lex import lex
-from ltspice_mcp.lib.spice_lex_views import InstanceLine
-
 # The device every deck here instantiates. LEVEL 54 is ngspice's
 # HSPICE-compatible BSIM4 numbering, which is the level that accepts the
 # delvto/mulu0 pair the mismatch draw writes.
@@ -34,36 +31,3 @@ BINNED_MINI_FET = (
     ".model minifet_model.0 nmos level = 54 vth0 = 0.7 u0 = 0.06\n"
     ".ends minifet\n"
 )
-
-
-def instance_line(text: str, ref: str) -> InstanceLine:
-    """The typed view over one instance card of a rendered deck."""
-    card = next(
-        c
-        for c in lex(text).cards
-        if c.kind == "instance" and c.name and c.name.casefold() == ref.casefold()
-    )
-    return InstanceLine.from_card(card)
-
-
-def instance_params(text: str, ref: str) -> dict[str, str]:
-    """One instance's parameters, plus its model/subcircuit name as ``__model__``."""
-    view = instance_line(text, ref)
-    return {"__model__": view.model or "", **view.params}
-
-
-def clone_body(text: str, clone_name: str = "minifet__mcpatch") -> str:
-    """The emitted deck's copy of one patched subcircuit, as text.
-
-    Read back out of the deck rather than off the plan, because where the copy
-    is produced — once when the plan is built, or once per run — is exactly
-    what these tests are checking.
-    """
-    lines = text.splitlines(keepends=True)
-    start = next(
-        i
-        for i, line in enumerate(lines)
-        if line.lower().startswith(".subckt") and clone_name.casefold() in line.casefold()
-    )
-    stop = next(i for i in range(start, len(lines)) if lines[i].lower().startswith(".ends"))
-    return "".join(lines[start : stop + 1])

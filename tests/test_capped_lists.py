@@ -77,6 +77,11 @@ _NOT_REPLY_LISTS: dict[str, str] = {
 #: Functions that slice or bound by a cap without the shared note, and why
 #: that is right for them.
 _ALLOWED: dict[str, str] = {
+    "lib/stored_values.py:_file_entry": (
+        "a file's examples of the values another build reads otherwise: its count is "
+        "the true number, the summary's rule names every one, and its listed_by, where "
+        "a call does, lists them all"
+    ),
     "api/_detach.py:_prune_handoff_logs": "prunes old handoff logs on disk, not a reply",
     "errors.py:compact_validation_error": (
         "a refusal's sample of validation errors, ending in 'and N more'"
@@ -84,11 +89,20 @@ _ALLOWED: dict[str, str] = {
     "lib/step_values.py:listed": (
         "a refusal's sample of steps, step values or axes, ending in '(N in all)'"
     ),
+    "lib/points.py:label_assignments": (
+        "names a case by its id in a legend label where too many assignments differ; "
+        "the reply's cases list gives every assignment, so no list is cut"
+    ),
+    "tools/analysis.py:_runs_named": (
+        "names a long runs argument by how many runs it names, for the caller to pass "
+        "the same runs again; it cuts no list of a reply"
+    ),
+    "tools/analysis.py:_unmatched_rows": (
+        "names the first few runs a selection names that the job does not hold, beside "
+        "their count in the same row; the caller's own runs lists them all"
+    ),
     "lib/signal_analysis.py:window_span": (
         "reads an axis a block of _WINDOW_CHUNK points at a time, every block; cuts nothing"
-    ),
-    "tools/analyze.py:_snapshot_from_assembly": (
-        "an internal snapshot; answer_total keeps the total and the cursor bases the route"
     ),
     "tools/receipts.py:_sample_observations": (
         "names ten assign points where every sample computed one result and gives "
@@ -109,10 +123,13 @@ _ALLOWED: dict[str, str] = {
         "line numbers inside one diagnostic, ending in a '(+N more)' tail"
     ),
     "lib/log_parser.py:extract_error_context": "bounds how much of a log is read",
-    "lib/raw_parser.py:_read_plot_header": "bounds how much of a raw header is read",
     "lib/raw_parser.py:_ascii_plot_end": "bounds how much of an ASCII raw is scanned",
     "lib/raw_parser.py:_ascii_last_point": "bounds how much of an ASCII raw is scanned",
     "lib/runner_manager.py:_get_or_create": "bounds a cache, not a reply",
+    "tools/analyze.py:_bounded_evidence": (
+        "an observation's sample of the rows it was made of; row_count is the total, "
+        "and each row's index, with its cursor when the rows are cut, reads it"
+    ),
     "tools/analyze.py:_collapse_failures": "a row's sample of places; its count is the total",
     "tools/analyze.py:_no_rows_warning": "a sample of places, ending in 'and N more'",
     "tools/analyze.py:_relay_solve_failures": "a sample of runs; run_count is the total",
@@ -120,9 +137,12 @@ _ALLOWED: dict[str, str] = {
     "tools/inspect_tools.py:_do_reference": "names the cap in the hint's lever; slices nothing",
     "tools/jobs.py:_collect_circuit_groups": "a sample of recent jobs; recent_jobs_total is the total",
     "tools/receipts.py:_render_failures": "a row's sample of cases; its count is the total",
-    "tools/verify.py:render_verify_circuit": (
-        "each capped rule's findings_omitted entry states its total and carries the "
-        "cursor that lists the rest, and the hint names both"
+    "lib/not_shown.py:worst_bound": (
+        "builds the largest part on entries left out to measure its bound; not a reply"
+    ),
+    "lib/not_shown.py:not_shown": (
+        "a kind's sample of entries left out; its count is the total, and each "
+        "entry's cursor and the reply's cut read every entry"
     ),
 }
 
@@ -217,8 +237,7 @@ def _unnoted(found: Mapping[str, set[str]]) -> set[str]:
 
 def test_every_capped_reply_list_states_its_total_and_route() -> None:
     found = _capping_functions(modules())
-    assert "tools/verify.py:render_verify_circuit" in found
-    assert "tools/analyze.py:_assemble" in found
+    assert "tools/analyze.py:for_session" in found
     missing = sorted(_unnoted(found) - set(_ALLOWED))
     assert not missing, (
         "these cut a list at a cap without saying the total and the route to the rest "

@@ -28,6 +28,7 @@ EXPECTED_ALL = [
     "Api",
     "RawResult",
     "LogResult",
+    "DeviceOpPoints",
     "ApiError",
     "ApiCallError",
     "ApiSessionError",
@@ -62,6 +63,8 @@ EXPECTED_ALL = [
     "compute_measurement_stats",
     "analyze_ac_structure",
     "parse_spice_value",
+    "result_numbers",
+    "no_number_reasons",
     "Quantity",
     "SearchDirection",
     "CrossingDirection",
@@ -97,12 +100,13 @@ EXPECTED_ALL = [
     "Observation",
 ]
 
-METRIC_NAMES = EXPECTED_ALL[10:36]
-# Not a metric: a value reader, published because SPICE literals cross the
-# boundary in both directions and nothing else on the facade parses one.
-VALUE_HELPER_NAMES = EXPECTED_ALL[36:37]
-ALIAS_NAMES = EXPECTED_ALL[37:43]
-OUTPUT_TYPE_NAMES = EXPECTED_ALL[43:]
+METRIC_NAMES = EXPECTED_ALL[11:37]
+# Not metrics: a value reader, published because SPICE literals cross the
+# boundary in both directions and nothing else on the facade parses one, and
+# the readers of a measurement's results and of why a step has none.
+VALUE_HELPER_NAMES = EXPECTED_ALL[37:40]
+ALIAS_NAMES = EXPECTED_ALL[40:46]
+OUTPUT_TYPE_NAMES = EXPECTED_ALL[46:]
 
 
 def test_raw_result_xor_step_slicing_and_mutation_isolation(
@@ -433,8 +437,8 @@ def test_device_op_points_group_by_device_and_keep_a_value_the_log_left_out():
         device_key("M1", "Vth"): None,
         device_key("x1:M1", "gm"): 8.64e-4,
     }
-    assert device_op_points_of(section) == {
+    assert device_op_points_of(section, xvii=False) == {
         "m1": {"gm": 5.86e-4, "vth": None},
         "x1.m1": {"gm": 8.64e-4},
     }
-    assert device_op_points_of(None) == {}
+    assert device_op_points_of(None, xvii=False) == {}

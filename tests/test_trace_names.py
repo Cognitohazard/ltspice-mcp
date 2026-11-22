@@ -59,27 +59,24 @@ def test_only_an_instance_on_the_path_is_read_without_its_x(tmp_path: Path):
     assert refusal(plot, "V(xout)") == "Signal 'V(xout)' not found."
 
 
-def test_the_schematics_rule_is_the_reason_on_ltspices_run_of_a_schematic_only(tmp_path: Path):
+def test_a_schematic_parts_netlist_spelling_reads_its_trace_on_ltspices_run_of_a_schematic_only(
+    tmp_path: Path,
+):
     """A name with an X more than an instance's in the trace is a schematic
-    part's netlist spelling on LTspice's run of a sheet. On a deck's run, or
-    another simulator's, nothing puts the X there: the trace is named, and no
-    rule is given as the reason."""
+    part's netlist spelling on LTspice's run of a sheet, and reads the part's
+    trace there, as the name matches nothing as written
+    (``device_names.instance_readings``). On a deck's run, or another
+    simulator's, nothing puts the X there: the trace is named, and no rule is
+    given as the reason."""
     names = ("V(out)", "Ix(x1:in)")
-    for command, title, reason in (
-        (LTSPICE_26, r"C:\work\sheet.net", True),
-        (LTSPICE_26, r"C:\work\deck.cir", False),
-        ("ngspice-42", r"* C:\work\sheet.asc", False),
-    ):
+    sheet = operating_point(tmp_path, r"C:\work\sheet.net", names, command=LTSPICE_26)
+    assert read_in_plot(sheet, "Ix(xx1:in)").traces == ("Ix(x1:in)",)
+    for command, title in ((LTSPICE_26, r"C:\work\deck.cir"), ("ngspice-42", r"* C:\work\sheet.asc")):
         plot = operating_point(tmp_path, title, names, command=command)
         text = refusal(plot, "Ix(xx1:in)")
-        assert text == "Signal 'Ix(xx1:in)' not found. Ix(x1:in) is in this result, " + (
+        assert text == (
+            "Signal 'Ix(xx1:in)' not found. Ix(x1:in) is in this result, "
             "which names 'xx1' as 'x1'."
-            + (
-                " LTspice names a part placed on a schematic by its reference, without "
-                "the X its netlist line adds in front."
-                if reason
-                else ""
-            )
         ), text
 
 

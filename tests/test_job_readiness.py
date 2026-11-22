@@ -1,13 +1,18 @@
-"""One answer to "can this job's runs be read now?" from every route that asks.
+"""One answer to "can this case be read now?" from every route that asks, and
+one to "are this job's runs done?" from the wait.
 
 The reads by job (``services.experiment_run_context``, behind ``inspect``,
 ``plot_waveform`` and the Python API, and ``analyze_results``' source
-resolution), ``jobs(place_beside_sheet)`` and ``jobs(wait, wait_for="runs")``
-each answer it. A wait that returns while a read refuses, or a copy beside the
-sheet of a case a read refuses, is three answers to one question. Whether a
-status means the runs are done (``job_lifecycle.runs_terminal``) is banned
-outside its owner in ``pyproject.toml``, and whether a case kept a raw is
-decided only in ``services.case_unreadable``.
+resolution) each ask the case (``services.case_unreadable``), whatever its
+job's status or its siblings: a produced case is read on every route at every
+status, and a case still running is refused on every route with
+``run_not_finished``. ``jobs(wait, wait_for="runs")`` and
+``jobs(place_beside_sheet)`` answer the job's question
+(``job_lifecycle.runs_done``): a placement waits for the copy a job run with
+``execution.results_beside_sheet`` makes when its runs end
+(``sheet_results.check_case``). Whether a status means the runs are done
+(``job_lifecycle.runs_terminal``) and ``runs_done`` itself are banned outside
+their owners in ``pyproject.toml``.
 """
 
 from __future__ import annotations
@@ -43,10 +48,10 @@ _LIVE_STATUSES = ("queued", "running", "analyzing")
 _MIXES = {"sibling_running": "running", "all_terminal": "failed"}
 
 
-def _expected(status: str, mix: str) -> bool:
-    """The documented rule, written out: a job's runs are read once they are all
-    terminal, which a status from ``analyzing`` on guarantees and a record whose
-    cases are all terminal shows."""
+def _runs_done(status: str, mix: str) -> bool:
+    """The documented rule for the wait, written out: a job's runs are done once
+    they are all terminal, which a status from ``analyzing`` on guarantees and a
+    record whose cases are all terminal shows."""
     return status not in {"queued", "running"} or mix == "all_terminal"
 
 
@@ -67,32 +72,52 @@ def _job(work_dir: Path, status: str, mix: str) -> ExperimentJob:
     return job
 
 
-async def _answers(job: ExperimentJob, state: SessionState) -> dict[str, bool]:
-    """Whether each route accepts a read of ``job``'s produced case now."""
-    case_id = job.cases[0].case_id
-    answers: dict[str, bool] = {}
-    refusal: ResultError | None = None
+async def _read_answers(job: ExperimentJob, case_id: str, state: SessionState) -> dict[str, str]:
+    """What each route that reads a case answers for ``case_id`` now: ``read``,
+    or the code it refuses with."""
+    answers = await _reads(job, case_id, state)
+    return answers
+
+
+async def _place_answer(job: ExperimentJob, case_id: str, state: SessionState) -> str:
+    """What ``jobs(place_beside_sheet)`` answers for ``case_id`` now."""
+    placed = _assert_jobs_schema(
+        await handle_jobs(_args("place_beside_sheet", job_id=job.job_id, case_id=case_id), state)
+    )
+    # A case it may place goes on to be refused as a run of a simulator whose
+    # results are not put beside a circuit, which an LTspice run's would not
+    # be; one of a job still running is refused before that.
+    code = placed["error"]["code"]
+    return "placed" if code == "not_ltspice" else code
+
+
+async def _reads(job: ExperimentJob, case_id: str, state: SessionState) -> dict[str, str]:
+    answers: dict[str, str] = {}
     try:
-        services.experiment_run_context(job, state, case_id=case_id)
+        await services.experiment_run_context(job, state, case_id=case_id)
+        answers["experiment_run_context"] = "read"
     except ResultError as exc:
-        refusal = exc
-    assert refusal is None or "no readable runs yet" in str(refusal), refusal
-    answers["experiment_run_context"] = refusal is None
+        answers["experiment_run_context"] = exc.code
     source = AnalyzeSourceInput.model_validate(
         {"job_id": job.job_id, "label": "dut", "runs": {"case_ids": [case_id]}}
     )
     _, missing, _, _ = await analyze._resolve_sources([source], state)
-    answers["analyze_results"] = all(row["code"] != "job_not_terminal" for row in missing)
-    placed = _assert_jobs_schema(
-        await handle_jobs(_args("place_beside_sheet", job_id=job.job_id, case_id=case_id), state)
-    )
-    # A case it may read goes on to be refused as a netlist's run, which a
-    # sheet's would not be; one it may not read is refused before that.
-    assert placed["error"]["code"] in {"job_not_terminal", "not_a_sheet"}, placed["error"]
-    answers["place_beside_sheet"] = placed["error"]["code"] == "not_a_sheet"
-    _, timed_out = await state.job_registry.wait(job, 0, wait_for="runs")
-    answers["jobs_wait_runs"] = not timed_out
+    answers["analyze_results"] = missing[0]["code"] if missing else "read"
     return answers
+
+
+async def _check(job: ExperimentJob, state: SessionState, status: str, mix: str) -> None:
+    produced, sibling = job.cases
+    answers = await _read_answers(job, produced.case_id, state)
+    assert answers == dict.fromkeys(answers, "read"), answers
+    if mix == "sibling_running":
+        refused = await _read_answers(job, sibling.case_id, state)
+        assert refused == dict.fromkeys(refused, "run_not_finished"), refused
+    done = _runs_done(status, mix)
+    placed = "placed" if done else "job_not_terminal"
+    assert await _place_answer(job, produced.case_id, state) == placed
+    _, timed_out = await state.job_registry.wait(job, 0, wait_for="runs")
+    assert (not timed_out) is done
 
 
 @pytest.mark.asyncio
@@ -109,10 +134,7 @@ async def test_another_process_s_job_reads_one_way_on_every_route(
     loaded = await state_no_sim.job_registry.get_or_load_async(job.job_id)
     assert loaded is not None and loaded.status == status
 
-    answers = await _answers(loaded, state_no_sim)
-
-    expected = _expected(status, mix)
-    assert answers == dict.fromkeys(answers, expected), answers
+    await _check(loaded, state_no_sim, status, mix)
 
 
 @pytest.mark.asyncio
@@ -129,10 +151,7 @@ async def test_this_process_s_job_reads_one_way_on_every_route(
     if mix == "all_terminal" or status == "analyzing":
         live.mark_runs_done()
 
-    answers = await _answers(job, state_no_sim)
-
-    expected = _expected(status, mix)
-    assert answers == dict.fromkeys(answers, expected), answers
+    await _check(job, state_no_sim, status, mix)
 
 
 _DECK = "* divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"

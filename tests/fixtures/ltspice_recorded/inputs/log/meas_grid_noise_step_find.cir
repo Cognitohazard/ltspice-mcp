@@ -1,0 +1,10 @@
+* a FIND with no point in a noise analysis, stepped
+V1 in 0 0 AC 1
+R1 in out {r}
+C1 out 0 159.154943n
+.param r=1k z=(100-k)/99
+.step param k list 1 100
+.noise V(out) V1 dec 10 10 100k
+.meas noise find_v FIND V(onoise)
+.meas noise find_sz FIND V(onoise)*z
+.end

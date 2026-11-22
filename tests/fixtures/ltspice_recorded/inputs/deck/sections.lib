@@ -1,0 +1,8 @@
+* a parameter outside every section, and one in each of two sections
+.param rout=1k
+.lib tt
+.param rtt=2k
+.endl tt
+.lib ff
+.param rff=3k
+.endl ff

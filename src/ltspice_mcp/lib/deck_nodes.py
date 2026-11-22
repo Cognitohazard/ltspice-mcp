@@ -38,6 +38,8 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Literal
 
+from ltspice_mcp.lib.device_names import fold_name
+
 #: Ground as a deck writes it, and as the readers name it.
 GROUND = "0"
 #: The names read as ground outside a subcircuit that has a port of the
@@ -63,21 +65,22 @@ def node_kind(
     (none at the top level) in a deck whose ``.global`` cards list
     ``global_names``, to ``simulator`` (``"ltspice"`` or ``"ngspice"``) and,
     for ngspice, in its compatibility mode ``ngbehavior``, which it then
-    requires. Names are compared in any case, as both simulators compare them.
+    requires. Names are compared in any ASCII case (``device_names.fold_name``),
+    as both simulators compare them.
     ``unestablished`` where that reading is not known (the module's notes)."""
-    folded = name.casefold()
+    folded = fold_name(name)
     reader = simulator.casefold()
     if reader == "ngspice":
         if ngbehavior is None:
             raise ValueError("an ngspice reading of a node needs its ngbehavior")
         if folded == "gnd" and ngbehavior not in _GND_ESTABLISHED_MODES:
             return "unestablished"
-    is_port = any(port.casefold() == folded for port in ports)
+    is_port = any(fold_name(port) == folded for port in ports)
     if is_port and folded != GROUND and reader == "ltspice":
         return "port"
     if folded in GROUND_NAMES:
         return "ground"
-    if any(other.casefold() == folded for other in global_names):
+    if any(fold_name(other) == folded for other in global_names):
         return "global"
     if is_port:
         return "port"

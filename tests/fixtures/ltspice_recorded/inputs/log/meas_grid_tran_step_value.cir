@@ -1,0 +1,11 @@
+* every form with a result: a transient, stepped
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.step param r list 1k 2k
+.tran 0 1m 0 1u
+.meas tran min_v MIN V(out) FROM 0.1m TO 0.6m
+.meas tran pp_v PP V(out) FROM 0.1m TO 0.6m
+.meas tran rms_v RMS V(out) FROM 0.1m TO 0.6m
+.meas tran integ_v INTEG V(out) FROM 0.1m TO 0.6m
+.end

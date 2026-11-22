@@ -3,7 +3,8 @@ name: signals
 description: >
   Naming a trace in a recipe, `V(a,b)` and ratios, trace math in Python with
   time-weighted statistics, the amplitude and phase of one frequency (the
-  `tone` recipe, and LTspice's `.four`), and reading a deck with `.step`.
+  `tone` recipe, a ratio and a frequency per case, and LTspice's `.four`), and
+  reading a deck with `.step`.
 ---
 
 # Signals, trace math, and `.step`
@@ -18,8 +19,10 @@ spellings name a quantity that the simulator did not write as a trace:
   lists. A `.noise` run stores spectral densities, which cannot be subtracted,
   so name the pair in the directive (`.noise V(a,b) ...`) and read `V(onoise)`.
 - On the AC recipes (`bode_*`, `stability`, `ac_structure`, `resonance`,
-  `return_loss`), `A/B` divides two complex responses and a leading `-` flips
-  the sign. For example, `V(out)/V(inp,inn)` is an open-loop gain.
+  `return_loss`) and on `tone`, `A/B` divides two responses, `1/A` is the
+  reciprocal of one, and a leading `-` negates the whole expression (`-A/B`,
+  `-1/A`). For example, `V(out)/V(inp,inn)` is an open-loop gain. No other
+  operator is read, so write any other combination in Python.
 
 `value` reads the sample nearest `at` on the run's axis, without
 interpolation, and needs `at` whenever that axis has more than one sample. A
@@ -94,6 +97,47 @@ the same on arrays cut by `window_and_clean`. Prefer either to a `.meas`
 correlation integral or to numpy over the samples, which weights LTspice's
 clustered samples by count.
 
+A ratio, `"signal": "V(out)/V(in)"`, is the phasor of `V(out)` divided by that
+of `V(in)`, both read over the same whole periods: `amplitude` is the gain,
+`phase_deg` the phase shift, and `sin_component` and `cos_component` the
+quotient's real and imaginary parts; a ratio has no `dc`. A denominator with no
+component at the frequency is refused as singular.
+
+### A frequency per case of a sweep
+
+When each case of a sweep injects its own frequency, name the parameter that
+sets it instead of one frequency: `"frequency_param": "FINJ"` reads each run at
+its value of `FINJ`, the step's value in a stepped deck or else the case's
+assignment, and each row's `frequency_hz` says which. A run that has neither is
+refused. Margins from those per-case points combine runs, so compute them in
+Python:
+
+```python
+import numpy as np
+from ltspice_mcp.api import compute_stability_metrics
+
+loop = api.analyze_results(
+    sources=[{"job_id": job_id}],
+    recipes=[
+        {
+            "key": "t",
+            "metric": "tone",
+            "signal": "V(a)/V(b)",
+            "frequency_param": "FINJ",
+            "window": {"start": "2m"},
+        }
+    ],
+)
+rows = sorted(loop["results"]["t"]["values"], key=lambda row: row["value"]["frequency_hz"])
+f = np.array([row["value"]["frequency_hz"] for row in rows])
+h = np.array(
+    [complex(row["value"]["sin_component"], row["value"]["cos_component"]) for row in rows]
+)
+margins = compute_stability_metrics(f, h)  # h as the loop gain your injection measures
+```
+
+### LTspice's `.four` table
+
 LTspice's `.four <freq> [Nharmonics] [Nperiods] <trace>` prints a Fourier
 table to the log, and the `summary` recipe returns it as `fourier`, with each
 harmonic's `magnitude` and `phase`. The number after the frequency is the
@@ -107,6 +151,24 @@ convention. For a `SINE(0 1 1k)` source, LTspice XVII prints the fundamental at
 phases to the other's. Read phase with `tone`. ngspice skips `.four` when it
 writes a raw file, which is how the server runs it, and the run's warnings
 report the skip.
+
+## How a transient stepped: `time_steps`
+
+The `time_steps` recipe reads a transient's time axis, not a signal, and gives
+one row per run (and per step with `all_steps`): `points`, `min_step` and
+`min_step_at` (where it starts), `max_step`, `median_step`, and with
+`"threshold_s": "1n"` the count `steps_below` and `first_below_at` and
+`last_below_at`. Two stored points at one time are counted as `zero_steps`,
+never as a step of zero. The file holds the points the simulator stored, not
+every step its solver tried: ngspice stores no step it rejected. `stored` says
+which points those are: `accepted` (every accepted point: ngspice without
+`.options interp`, LTspice XVII with compression off), `reduced` (LTspice XVII
+compresses a transient by default and keeps fewer; `.options plotwinsize=0`
+turns that off), `print_step` (ngspice under `.options interp`) or
+`not_checked` (LTspice 26, which logs no count of accepted steps, any other
+simulator, or a run saved from a `.tran` start time). Every answer but
+`accepted` comes with a `time_steps_coverage` observation saying what that
+leaves out.
 
 ## Reading a deck with `.step`
 

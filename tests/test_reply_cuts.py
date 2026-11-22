@@ -232,11 +232,14 @@ def test_a_list_of_rows_names_key_fields_its_rows_carry():
 
 def test_lists_of_one_series_sit_in_one_object():
     # A series is thinned together, so its lists are siblings of one reply object.
-    parents: dict[tuple[str, str], set[str]] = {}
+    # One schema fragment used in two places (a recipe's per_run rows and
+    # its values) is one object: its lists are siblings in either place.
+    parents: dict[tuple[str, str], set[int]] = {}
     for name, item in _lists():
         if item.kind == "series":
             assert item.series is not None
-            parents.setdefault((name, item.series), set()).add(item.path.rpartition(".")[0])
+            parents.setdefault((name, item.series), set()).add(id(item.parent))
+    assert parents
     assert all(len(found) == 1 for found in parents.values()), parents
 
 
@@ -245,6 +248,7 @@ def test_lists_of_one_series_sit_in_one_object():
 # ---------------------------------------------------------------------------
 
 _UNBOUNDED = "unbounded: no cap where it is made"
+_STEP_PARAMETERS = "one per .step parameter of the case's deck"
 
 #: Each list declared ``never``, by handler and path (union branches left out),
 #: with what bounds it where it is made. A list with no bound says so; it is
@@ -258,7 +262,49 @@ _CASE_FAILURES = (
 )
 _CASE_IDS = "receipts._FAILURE_CASE_ID_CAP (10), with count the true number"
 
+_NOT_COMPARED = (
+    "one line for connections, one for included files, and one per name a deck "
+    "defines more than once in one scope (netlist_diff.structural_delta)"
+)
+
+_READ_OTHERWISE = "one per build and kind of reading: at most four (stored_values.summaries)"
+_READ_OTHERWISE_FILES = "stored_values.FILES (3), with files the true number"
+_READ_OTHERWISE_EXAMPLES = "stored_values.EXAMPLES (3), with count the true number"
+_READ_OTHERWISE_EVIDENCE = "the recordings that show the readings: at most five"
+
 NEVER_BOUNDS: dict[tuple[str, str], str] = {
+    **{
+        (handler, f"{at}{key}"): bound
+        for handler, at in (
+            ("inspect_tools.handle_inspect", "results[].data.values_read_otherwise"),
+            ("verify.handle_verify_circuit", "comparison.values_read_otherwise"),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.values_read_otherwise",
+            ),
+        )
+        for key, bound in (
+            ("", _READ_OTHERWISE),
+            ("[].by_file", _READ_OTHERWISE_FILES),
+            ("[].by_file[].examples", _READ_OTHERWISE_EXAMPLES),
+            ("[].evidence", _READ_OTHERWISE_EVIDENCE),
+        )
+    },
+    **{
+        (handler, f"{at}_not_checked"): "one per side of a comparison: at most two"
+        for handler, at in (
+            ("verify.handle_verify_circuit", "comparison.values_read_otherwise"),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.values_read_otherwise",
+            ),
+        )
+    },
+    ("verify.handle_verify_circuit", "comparison.not_compared"): _NOT_COMPARED,
+    ("verify.handle_verify_circuit", "export.diff_vs_prior.not_compared"): _NOT_COMPARED,
+    ("schematic_edit.handle_edit_schematic", "verification.comparison.not_compared"): (
+        _NOT_COMPARED
+    ),
     **{
         (handler, path): _UNBOUNDED
         for handler in (
@@ -294,13 +340,21 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ("analyze.handle_analyze_results", "results.*.values[].value.failed_measurements"): (
         _MEASUREMENT_NAMES
     ),
-    ("analyze.handle_analyze_results", "results.*.per_run.items[].value.not_finite"): (
-        _MEASUREMENT_NAMES
-    ),
-    ("analyze.handle_analyze_results", "results.*.values[].value.not_finite"): (
-        _MEASUREMENT_NAMES
-    ),
     ("inspect_tools.handle_inspect", "results[].data.failed_measurements"): _MEASUREMENT_NAMES,
+    **{
+        (handler, f"{rows}.{field}"): bound
+        for handler, rows in (
+            ("experiments.handle_run_experiments", "runs.items[]"),
+            ("jobs.handle_jobs", "runs.items[]"),
+            ("jobs.handle_jobs", "items[]"),
+        )
+        for field, bound in (
+            ("failed_measurements", _MEASUREMENT_NAMES),
+            ("failed_measurement_steps.*", _STEP_INDICES),
+            ("measurements_not_established.*", _STEP_INDICES),
+            ("measurements_not_printed", _MEASUREMENT_NAMES),
+        )
+    },
     (
         "analyze.handle_analyze_results",
         "results.*.per_run.items[].value.not_established.*.steps",
@@ -309,6 +363,17 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "analyze.handle_analyze_results",
         "results.*.values[].value.not_established.*.steps",
     ): _STEP_INDICES,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.per_run.items[].value.unreadable.*.steps",
+    ): _STEP_INDICES,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.values[].value.unreadable.*.steps",
+    ): _STEP_INDICES,
+    ("inspect_tools.handle_inspect", "results[].data.measurements[].unreadable.steps"): (
+        _STEP_INDICES
+    ),
     # Failures.
     ("experiments.handle_run_experiments", "failures"): _CASE_FAILURES,
     ("jobs.handle_jobs", "failures"): _CASE_FAILURES,
@@ -320,6 +385,28 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ),
     ("analyze.handle_analyze_results", "failures[].wheres"): (
         "analyze._FAILURE_WHERE_CAP (10), with count the true number"
+    ),
+    ("analyze.handle_analyze_results", "signals_available[].signals"): (
+        "the traces one raw file holds: the file bounds them, and the list of "
+        "sources they sit in is cut"
+    ),
+    ("analyze.handle_analyze_results", "results.*.reduced"): (
+        "one row per field and statistic the recipe asks for; never cut, so a "
+        "summary is never missing while its rows are shown"
+    ),
+    **{
+        ("analyze.handle_analyze_results", f"results.*.{rows}[].value.series[].*"): (
+            "a signal's samples, at most the recipe's max_points; thinned with the "
+            "series that holds them, never cut apart from its axis"
+        )
+        for rows in ("per_run.items", "values")
+    },
+    ("analyze.handle_analyze_results", "rows_not_shown.*.rows"): (
+        "not_shown.NAMED (3) rows over every recipe, and the whole part "
+        "analyze.ROWS_NOT_SHOWN_BOUND_TOKENS"
+    ),
+    ("analyze.handle_analyze_results", "rows_not_shown.*.rows[].kinds"): (
+        "not_shown.KINDS_PER_ENTRY (2)"
     ),
     ("verify.handle_verify_circuit", "failures"): "one per check that failed",
     # What a check looked at, what a write did, and fixed shapes.
@@ -334,16 +421,82 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the signals the call asks for in that panel; no cap"
     ),
     ("analysis.handle_plot_waveform", "ltspice.saved_panes"): _UNBOUNDED,
+    ("analysis.handle_plot_waveform", "cases_not_drawn[].run_indices"): (
+        "at most _UNMATCHED_NAMED (5), the total in the row's count"
+    ),
+    ("analysis.handle_plot_waveform", "cases_not_drawn[].case_ids"): (
+        "at most _UNMATCHED_NAMED (5), the total in the row's count"
+    ),
+    ("analysis.handle_plot_waveform", "signals_not_in_cases"): "one per signal drawn",
+    ("experiments.handle_run_experiments", "runs.items[].steps.parameters"): _STEP_PARAMETERS,
+    ("jobs.handle_jobs", "items[].steps.parameters"): _STEP_PARAMETERS,
+    ("jobs.handle_jobs", "runs.items[].steps.parameters"): _STEP_PARAMETERS,
+    ("analysis.handle_plot_waveform", "signals_not_in_cases[].case_ids"): (
+        "one per case drawn, bounded by the job's cases"
+    ),
     ("analysis.handle_plot_waveform", "ltspice.saved_panes[].traces"): _UNBOUNDED,
     ("inspect_tools.handle_inspect", "results"): "one per query in the call, at most 64",
     ("inspect_tools.handle_inspect", "results[].error.supported"): (
         "the values the refused argument accepts"
     ),
     ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
+    **{
+        (handler, path): bound
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for path, bound in (
+            (
+                "runs_not_shown.runs",
+                "receipts.NOT_SHOWN_NAMED (3) runs over every kind, and the whole note "
+                "receipts.NOT_SHOWN_BOUND_TOKENS",
+            ),
+            ("runs_not_shown.runs[].kinds", "receipts.NOT_SHOWN_KINDS_PER_RUN (2)"),
+        )
+    },
+    # What a job's request named, which a standing note's said_before shortens.
+    **{
+        (handler, path): bound
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for path, bound in (
+            ("source", "one per circuit the request names"),
+            ("lint", "one per circuit the request names"),
+            ("artifacts", "one per artifact the job recorded beside its runs"),
+            ("simulator_notes", "one per code of job_simulator.NOTE_CODES (3)"),
+        )
+    },
+    ("jobs.handle_jobs", "items[].recent_jobs[].simulator_notes"): (
+        "one per code of job_simulator.NOTE_CODES (3)"
+    ),
+    ("jobs.handle_jobs", "not_checked"): (
+        "at most four: the digest or the included files not compared, a netlist's "
+        "window, a dotted netlist's name, the files left in place"
+    ),
+    ("jobs.handle_jobs", "left_in_place"): (
+        "at most one per file beside a circuit its run goes to (sheet_results.ResultFiles.every)"
+    ),
+    ("analysis.handle_plot_waveform", "ltspice.not_checked"): (
+        "a sheet's placement: at most two, the digest or the included files not "
+        "compared, and the files left in place"
+    ),
+    ("analysis.handle_plot_waveform", "ltspice.left_in_place"): (
+        "at most one per file beside a sheet its run goes to (sheet_results.ResultFiles.every)"
+    ),
     # A sheet finding's own parts, in edit_schematic's preexisting view.
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,
 }
+
+
+#: The analysis attached to a run is an answer of analyze_results, declared
+#: by that tool's schema: each list in it is bounded as that tool's is.
+_ATTACHED = "analysis.result."
+NEVER_BOUNDS.update(
+    {
+        (handler, _ATTACHED + path): bound
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for (tool, path), bound in list(NEVER_BOUNDS.items())
+        if tool == "analyze.handle_analyze_results"
+    }
+)
 
 
 def test_every_list_sent_whole_states_its_bound():
@@ -393,6 +546,7 @@ CUT_TODAY: dict[tuple[str, str], tuple[str, ...]] = {
     ("schematic_edit.handle_edit_schematic", "views.pin_legend"): ("views.pin_legend.items",),
     ("schematic_edit.handle_edit_schematic", "views.preexisting"): ("views.preexisting.items",),
     ("analysis.handle_plot_waveform", "<root>:traces_truncated"): ("traces",),
+    ("analysis.handle_plot_waveform", "<root>:cases_not_drawn_truncated"): ("cases_not_drawn",),
     # What run_code cuts is its captured output, a string, not a list.
     ("run_code.handle_run_code", "<root>"): (),
     ("analyze.handle_analyze_results", "coverage.missing_cases"): (
@@ -463,9 +617,12 @@ def test_a_list_sent_whole_carries_no_sign_of_a_cut():
 # ---------------------------------------------------------------------------
 
 #: The modules whose code is the reply-size machinery. ``cursor_codec`` also
-#: holds the canonical hash, so only its cursor names count.
-_MACHINERY_MODULES = frozenset({"response_budget", "pagination", "cursor_codec"})
-_WHOLLY_MACHINERY = frozenset({"response_budget", "pagination"})
+#: holds the canonical hash, so only its cursor names count. ``presenter`` is
+#: the reply layer's own, which ``tools/_base.py`` calls.
+_MACHINERY_MODULES = frozenset(
+    {"response_budget", "pagination", "cursor_codec", "presenter", "not_shown"}
+)
+_WHOLLY_MACHINERY = frozenset({"response_budget", "pagination", "presenter"})
 
 #: Names of the machinery: the response budget, the shared page schema, the
 #: paginator in ``lib/pin_legend.py``, and the cursor functions of
@@ -490,6 +647,25 @@ _MACHINERY_NAMES = frozenset(
         "CursorError",
     }
 )
+
+#: The attached analysis's page objects, cut as analyze_results cuts them, in
+#: a run receipt and in each jobs reply that carries a receipt.
+_ATTACHED_BRANCHES = {
+    "experiments.handle_run_experiments": ("",),
+    "jobs.handle_jobs": ("<oneOf0>.", "<oneOf1>.", "<oneOf5>."),
+}
+CUT_TODAY.update(
+    {
+        (handler, f"{branch}{_ATTACHED}{place}"): tuple(
+            f"{branch}{_ATTACHED}{path}" for path in paths
+        )
+        for handler, branches in _ATTACHED_BRANCHES.items()
+        for branch in branches
+        for (tool, place), paths in list(CUT_TODAY.items())
+        if tool == "analyze.handle_analyze_results"
+    }
+)
+
 
 #: Names a cursor or a reply budget goes by, as a parameter, an argument, a
 #: field read or a variable. Matched whole: ``analysis_budget_s`` and the
@@ -592,14 +768,6 @@ def _sites() -> dict[str, list[str]]:
 #: whose move onto the reply layer takes it off this list. The list only
 #: shrinks.
 REPLY_SIZE_SITES: dict[str, str] = {
-    "tools/verify.py:<module>": "verify_circuit",
-    "tools/verify.py:FindingsCursor.encode": "verify_circuit",
-    "tools/verify.py:decode_findings_cursor": "verify_circuit",
-    "tools/verify.py:VerifyCircuitInput": "verify_circuit",
-    "tools/verify.py:render_verify_circuit": "verify_circuit",
-    "tools/verify.py:_stale_cursor_text": "verify_circuit",
-    "tools/verify.py:_refuse_unfit_cursor": "verify_circuit",
-    "tools/verify.py:handle_verify_circuit": "verify_circuit",
     "tools/inspect_tools.py:<module>": "inspect",
     "tools/inspect_tools.py:SymbolsQuery": "inspect",
     "tools/inspect_tools.py:NetQuery": "inspect",
@@ -630,55 +798,6 @@ REPLY_SIZE_SITES: dict[str, str] = {
     "tools/inspect_tools.py:_negotiate_inspect.build": "inspect",
     "tools/inspect_tools.py:_negotiate_inspect.render": "inspect",
     "lib/pin_legend.py:<module>": "edit_schematic",
-    "tools/analyze.py:<module>": "analyze_results",
-    "tools/analyze.py:PerRunInclude": "analyze_results",
-    "tools/analyze.py:ContinueInput": "analyze_results",
-    "tools/analyze.py:AnalyzeResultsInput": "analyze_results",
-    "tools/analyze.py:_page": "analyze_results",
-    "tools/analyze.py:_page_of": "analyze_results",
-    "tools/analyze.py:_assemble": "analyze_results",
-    "tools/analyze.py:_snapshot_from_assembly": "analyze_results",
-    "tools/analyze.py:_snapshot_from_assembly.coverage_cursor_base": "analyze_results",
-    "tools/analyze.py:_rebind_snapshot_cursors": "analyze_results",
-    "tools/analyze.py:_shrink_snapshot_page": "analyze_results",
-    "tools/analyze.py:render_attached_analysis": "analyze_results",
-    "tools/analyze.py:trim_analysis": "analyze_results",
-    "tools/analyze.py:fit_waveform_samples": "analyze_results",
-    "tools/analyze.py:fit_waveform_samples.fits": "analyze_results",
-    "tools/analyze.py:_degrade_analysis": "analyze_results",
-    "tools/analyze.py:_negotiate_analysis": "analyze_results",
-    "tools/analyze.py:_negotiate_analysis.candidate": "analyze_results",
-    "tools/analyze.py:_negotiate_analysis.render": "analyze_results",
-    "tools/analyze.py:_cursor_fields": "analyze_results",
-    "tools/analyze.py:_resolve_drive_start": "analyze_results",
-    "tools/analyze.py:handle_analyze_results": "analyze_results",
-    "lib/result_store.py:<module>": "analyze_results",
-    "tools/experiments.py:<module>": "run_experiments",
-    "tools/experiments.py:AnalysisPerRun": "run_experiments",
-    "tools/experiments.py:RunExperimentsInput": "run_experiments",
-    "tools/experiments.py:handle_run_experiments": "run_experiments",
-    "tools/experiments.py:_render_static_run_receipt": "run_experiments",
-    "tools/experiments.py:_dwell_and_respond": "run_experiments",
-    "tools/experiments.py:_dwell_and_respond.build": "run_experiments",
-    "tools/experiments.py:_routing_failure_response": "run_experiments",
-    "tools/experiments.py:_routing_failure_response.build": "run_experiments",
-    "tools/experiments.py:_error_response": "run_experiments",
-    "tools/experiments.py:_post_submit_error_response": "run_experiments",
-    "tools/receipts.py:<module>": "run_experiments",
-    "tools/receipts.py:_degrade_receipt": "run_experiments",
-    "tools/receipts.py:negotiate_receipt": "run_experiments",
-    "tools/receipts.py:negotiate_receipt.candidate": "run_experiments",
-    "tools/receipts.py:negotiate_receipt.render": "run_experiments",
-    "tools/receipts.py:render_run_receipt": "run_experiments",
-    "tools/jobs.py:<module>": "jobs",
-    "tools/jobs.py:JobsInput": "jobs",
-    "tools/jobs.py:JobsListInput": "jobs",
-    "tools/jobs.py:JobsRunsInput": "jobs",
-    "tools/jobs.py:_jobs_page_schema": "jobs",
-    "tools/jobs.py:_decode_jobs_cursor": "jobs",
-    "tools/jobs.py:_negotiate_jobs": "jobs",
-    "tools/jobs.py:render_jobs_data": "jobs",
-    "tools/jobs.py:handle_jobs": "jobs",
     "tools/schematic_edit.py:<module>": "edit_schematic",
     "tools/schematic_edit.py:EditSchematicInput": "edit_schematic",
     "tools/schematic_edit.py:_preexisting_block": "edit_schematic",
@@ -690,9 +809,100 @@ REPLY_SIZE_SITES: dict[str, str] = {
 }
 
 
+_BUDGET_ARGUMENT = (
+    "the budget argument, which now sets the presenter's target; kept until the "
+    "next breaking release"
+)
+_HANDS_BUDGET_ON = (
+    "hands the call's budget to the reply layer (tools/_base.present_job_answer); "
+    "kept with the argument until the next breaking release"
+)
+_READS_ON = (
+    "the cursor argument, which now takes the presenter's cursor; kept until the "
+    "next breaking release"
+)
+_PAGE_FIELDS = (
+    "the page fields of per_run, coverage.missing_cases and spec.fail_cases, which "
+    "the cut fills; kept until the next breaking release"
+)
+
+#: Each function of a tool already on the presenter that still names a cursor
+#: or a budget, with why. Each goes at the next breaking release.
+KEPT_UNTIL_BREAKING: dict[str, str] = {
+    "tools/experiments.py:<module>": (
+        "imports the budget argument's type and resolver; " + _BUDGET_ARGUMENT
+    ),
+    "tools/experiments.py:AnalysisPerRun": (
+        "the attached analysis's per_run cursor, refused at submission; " + _READS_ON
+    ),
+    "tools/experiments.py:RunExperimentsInput": _BUDGET_ARGUMENT,
+    "tools/experiments.py:handle_run_experiments": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_dwell_and_respond": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_render_static_run_receipt": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_error_response": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_routing_failure_response": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_post_submit_error_response": _HANDS_BUDGET_ON,
+    "tools/receipts.py:<module>": (
+        "the run rows' record and the shared page schema of the runs block, which "
+        "keeps its page fields until the next breaking release"
+    ),
+    "tools/jobs.py:<module>": (
+        "the record cursor of the runs action and the list's stored pages, and the "
+        "page schema of its page fields; kept until the next breaking release"
+    ),
+    "tools/jobs.py:JobsInput": _BUDGET_ARGUMENT,
+    "tools/jobs.py:JobsListInput": (
+        "the cursor argument, which now takes the presenter's cursor; kept until the "
+        "next breaking release"
+    ),
+    "tools/jobs.py:JobsRunsInput": (
+        "the cursor argument, which now takes the record cursor of the job's run "
+        "rows; kept until the next breaking release"
+    ),
+    "tools/jobs.py:_jobs_page_schema": (
+        "the page fields of the list, runs and cancel replies; kept until the next "
+        "breaking release"
+    ),
+    "tools/jobs.py:handle_jobs": (
+        "opens the runs cursor before any job is read; kept with the argument until "
+        "the next breaking release"
+    ),
+    "tools/jobs.py:_list_page": (
+        "hands the list cursor to the presenter's page reader; kept with the argument "
+        "until the next breaking release"
+    ),
+    "tools/jobs.py:_present_jobs": _HANDS_BUDGET_ON,
+    "tools/analyze.py:<module>": (
+        "imports the budget argument's type and resolver, the shared page schema of "
+        "its page fields and the presenter's types; kept until the next breaking release"
+    ),
+    "tools/analyze.py:PerRunInclude": _READS_ON,
+    "tools/analyze.py:ContinueInput": _READS_ON,
+    "tools/analyze.py:AnalyzeResultsInput": _BUDGET_ARGUMENT,
+    "tools/analyze.py:_page_of": _PAGE_FIELDS,
+    "tools/analyze.py:_read_on": (
+        "hands the call's cursor and budget to the presenter's page reader "
+        "(tools/_base.py); kept with the arguments until the next breaking release"
+    ),
+    "tools/analyze.py:handle_analyze_results": (
+        "hands the call's budget to the reply layer, and a cursor to _read_on; kept "
+        "with the arguments until the next breaking release"
+    ),
+    "tools/verify.py:VerifyCircuitInput": (
+        "the findings_cursor argument, which now takes the presenter's cursor; "
+        "kept until the next breaking release"
+    ),
+    "tools/verify.py:handle_verify_circuit": (
+        "hands findings_cursor to the presenter's page reader (tools/_base.py); "
+        "kept with the argument until the next breaking release"
+    ),
+}
+
+
 def test_only_the_reply_layer_knows_about_reply_size():
     sites = _sites()
-    unlisted = {site: said for site, said in sites.items() if site not in REPLY_SIZE_SITES}
+    allowed = REPLY_SIZE_SITES.keys() | KEPT_UNTIL_BREAKING.keys()
+    unlisted = {site: said for site, said in sites.items() if site not in allowed}
     assert not unlisted, (
         "An operation returns its whole answer; cutting it, cursors and reply budgets "
         f"are the reply layer's (tools/_base.py): {unlisted}"
@@ -711,8 +921,103 @@ def test_each_allowed_site_waits_for_an_operation():
     assert set(REPLY_SIZE_SITES.values()) <= operations
 
 
+def test_a_tool_on_the_presenter_waits_for_no_move():
+    moved = {"verify_circuit", "run_experiments", "jobs", "analyze_results"}
+    assert not moved & set(REPLY_SIZE_SITES.values())
+    assert not set(KEPT_UNTIL_BREAKING) & set(REPLY_SIZE_SITES)
+
+
+def test_the_check_returns_its_whole_answer():
+    # The evaluation knows no cursor and no budget: what a reply holds of it
+    # is the presenter's to decide.
+    assert not any(site.startswith("tools/verify.py:evaluate_verify_circuit") for site in _sites())
+
+
+def test_a_job_answer_is_computed_whole():
+    # One function gives a job's complete answer at a moment, every run row
+    # in it; it knows no cursor, no budget and no wait.
+    whole = (
+        "tools/receipts.py:render_receipt_snapshot",
+        "tools/receipts.py:snapshot_receipt",
+        "tools/receipts.py:project_receipt_runs",
+        "tools/receipts.py:render_runs_envelope",
+        "tools/jobs.py:evaluate_jobs",
+    )
+    assert not [site for site in _sites() if site.startswith(whole)]
+
+
+def test_no_function_that_evaluates_a_recipe_knows_a_cursor_a_page_or_a_budget():
+    # One evaluation gives the complete answer; what a reply holds of it, and
+    # how the rest is read, is the reply layer's.
+    evaluating = tuple(
+        f"tools/analyze.py:{name}"
+        for name in (
+            "evaluate_analysis",
+            "_evaluate_unit",
+            "_evaluate_item",
+            "_assemble",
+            "_result_entry",
+            "_spec",
+            "_group_values",
+            "complete_analysis",
+            "capture_attached_analysis",
+            "render_attached_analysis",
+            "for_session",
+            "for_api",
+        )
+    )
+    assert not [site for site in _sites() if site.startswith(evaluating)]
+    import inspect
+
+    import ltspice_mcp.tools.analyze as analyze
+
+    for name in evaluating:
+        function = getattr(analyze, name.rsplit(":", 1)[1])
+        taken = set(inspect.signature(function).parameters)
+        assert not taken & {"cursor", "budget", "limit", "limits", "page_stop", "rung"}, name
+
+
+def test_one_builder_names_the_entries_a_reply_left_out():
+    # tools/receipts.py and tools/analyze.py both call lib/not_shown.py, and
+    # neither counts kinds of fact or bounds the part on its own.
+
+    for module in ("tools/receipts.py", "tools/analyze.py"):
+        tree = parsed(PACKAGE / module)
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "not_shown"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "not_shown"
+        ]
+        assert calls, f"{module} does not call not_shown.not_shown"
+        source = (PACKAGE / module).read_text(encoding="utf-8")
+        for own in ("NOT_SHOWN_NAMED - len(", "counts[kind] = counts.get(kind, 0) + 1"):
+            assert own not in source, f"{module} groups or bounds on its own: {own!r}"
+
+
+def test_nothing_outside_the_presenter_cuts_a_verify_circuit_list():
+    import ltspice_mcp.tools.verify as verify
+    from tests._source_scan import modules
+    from tests.test_capped_lists import _capping_functions
+
+    for gone in (
+        "FINDING_RULE_CAP",
+        "FindingsCursor",
+        "decode_findings_cursor",
+        "findings_digest",
+    ):
+        assert not hasattr(verify, gone), gone
+    capping = [
+        name for name in _capping_functions(modules()) if name.startswith("tools/verify.py:")
+    ]
+    assert not capping, capping
+
+
 def test_the_allowed_sites_still_need_their_place():
-    stale = sorted(set(REPLY_SIZE_SITES) - set(_sites()))
+    stale = sorted((set(REPLY_SIZE_SITES) | set(KEPT_UNTIL_BREAKING)) - set(_sites()))
     assert not stale, f"These no longer mention reply size; take them off the list: {stale}"
     found = {
         f"{module}:{scope}" for module, tree in _scanned().items() for scope in _mentions(tree)
@@ -851,7 +1156,7 @@ def test_every_continuation_names_arguments_the_tool_takes():
 
     problems: list[str] = []
     sites = list(_continuation_calls())
-    assert len(sites) >= 8
+    assert len(sites) >= 7
     for where, call in sites:
         tool, arguments = call.args
         if not isinstance(tool, ast.Constant) or not isinstance(tool.value, str):

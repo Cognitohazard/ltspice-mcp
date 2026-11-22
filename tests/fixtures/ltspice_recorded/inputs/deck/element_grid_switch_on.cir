@@ -1,0 +1,9 @@
+* a voltage-controlled switch with its initial state after its model
+.op
+Is 0 s_a 1m
+Ss s_a s_b s_cp s_cn smod on
+Rs0 s_b 0 1k
+Vsc s_cp s_cn 1
+Rs1 s_cn 0 1k
+.model smod SW(Ron=1k Roff=1Meg Vt=0.5 Vh=0)
+.end

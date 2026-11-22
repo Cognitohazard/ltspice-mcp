@@ -140,7 +140,7 @@ async def _run_deck(state: SessionState, request_id: str, netlist: str) -> dict:
     )
     assert receipt["status"] == "completed", receipt.get("failures")
     # The point of this tier: a real LTspice binary produced this run.
-    assert receipt["source"][0]["simulator"].startswith("LTspice")
+    assert receipt["simulator"] == "ltspice"
     return receipt
 
 
@@ -272,7 +272,7 @@ class TestACAnalysis:
             {"key": "sum", "metric": "summary"},
             include={"signals_available": True},
         )
-        names = [n.lower() for names in data["signals_available"].values() for n in names]
+        names = [n.lower() for entry in data["signals_available"] for n in entry["signals"]]
         assert any(n == "v(out)" for n in names), names
 
     async def test_summary_reports_the_ac_sim_type(
@@ -396,7 +396,7 @@ class TestSweepIntegration:
         )
         assert receipt["status"] == "completed", receipt.get("failures")
         # The point of this tier: a real LTspice binary produced these runs.
-        assert receipt["source"][0]["simulator"].startswith("LTspice")
+        assert receipt["simulator"] == "ltspice"
         counts = receipt["completeness"]
         assert counts["expanded"] == counts["produced"] == 3
         assert counts["failed"] == counts["cancelled"] == counts["skipped"] == 0

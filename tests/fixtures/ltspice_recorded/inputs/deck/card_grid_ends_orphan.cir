@@ -1,0 +1,6 @@
+* a .ends with no subcircuit open
+.op
+.ends
+I01 0 n01 1
+R01 n01 0 1k
+.end

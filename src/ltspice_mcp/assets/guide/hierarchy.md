@@ -26,6 +26,8 @@ expanding subcircuits. The `hierarchy` kind reads only netlists, so export a
 schematic first. It is read-only; to change a device, pass its instance list
 to a variation (below).
 
+### What a row holds
+
 Each row contains the device's `nodes`, each with the subcircuit it belongs to
 (`scope`) and the simulator's name for its voltage (`voltage_trace`); for an
 `X` row, the `ports` of the subcircuit and the nodes they connect to; the
@@ -34,6 +36,8 @@ Each row contains the device's `nodes`, each with the subcircuit it belongs to
 an `X` row, inside its subcircuit), each as written (`expression`) and
 evaluated (`value`); MOS W and L in metres under `geometry`; and the `address`
 that the simulator uses for the device (below).
+
+### Values discovery leaves unresolved, and decks it refuses
 
 When discovery cannot evaluate a number, it reports `status: "unresolved"`, no
 value and a `reason` instead of a guess. Discovery evaluates numbers with SI
@@ -58,11 +62,17 @@ definition, a name declared twice (a subcircuit, model, reference, port, or a
 20,000 instances or 32 levels of nesting, and an explicit `.option scale` in an
 LTspice deck (use SI dimensions; the `mil` suffix is 25.4 µm).
 
+### Declaring the simulator and the ngspice mode
+
 Declare the simulator even when only inspecting. For ngspice, `ngbehavior`
 defaults to the configured mode. A deck with a sectioned
 `.lib <file> <section>` needs a mode that contains neither `lt` nor `ps`, such
 as `hsa` (guide section 'ngspice' explains why); a mode set in this query does
-not change later runs. With ngspice installed, the reply's `ngspice_check`
+not change later runs. A value written with a micro sign in a deck stored as
+UTF-8 is micro here and in LTspice 26, but LTspice XVII reads the bare number;
+when the session runs XVII, the reply's `values_read_otherwise` counts such
+values, names a few with the number XVII takes, and gives, for a netlist, the
+call that lists them all. With ngspice installed, the reply's `ngspice_check`
 compares the values discovery resolved (a resistor's value, a MOSFET's W and
 L, and the copies ngspice builds of either) with the ones ngspice reads, and
 lists any that differ. The reader's rules were established for `hsa`,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
@@ -10,7 +11,8 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import PathSecurityError, ResultError
-from ltspice_mcp.lib import result_store, services
+from ltspice_mcp.lib import services
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.tools import analyze, experiments, inspect_tools
 from tests.conftest import (
     LTSPICE_TRAN_RC_VFINAL,
@@ -99,9 +101,8 @@ def test_analysis_measurements_no_raw_and_null_identity(state_no_sim, work_dir, 
         observation["code"] == "path_without_deck_provenance"
         for observation in reply["observations"]
     )
-    stored = result_store.load(reply["result_set_id"], working_dir=work_dir)
-    assert stored.inputs["resolved_runs"][0]["raw"] is None
-    assert analyze._deserialize_runs(stored, state_no_sim)[0].source.raw is None
+    stored = json.loads(Store(work_dir).result_set(reply["result_set_id"]).read_text())
+    assert stored["inputs"]["resolved_runs"][0]["raw"] is None
 
 
 def test_malformed_raw_does_not_suppress_measurements(state_no_sim, work_dir):

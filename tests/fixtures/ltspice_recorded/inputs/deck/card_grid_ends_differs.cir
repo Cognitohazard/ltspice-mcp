@@ -1,0 +1,9 @@
+* a .ends that names another subcircuit
+.op
+.subckt cga a
+Rs a 0 1k
+.ends cgb
+I01 0 n01 1
+R01 n01 0 1k
+X1 n01 cga
+.end

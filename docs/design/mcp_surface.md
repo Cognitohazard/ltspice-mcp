@@ -15,7 +15,7 @@ document needs fixing.
 |-|-|-|
 | EXECUTE | `run_experiments` | circuits x declared variations; durable idempotent receipt (plus inline results when the job finishes within `execution.wait_s`); preflight lint; runs read copies of the inputs taken at submission, with their hashes |
 | EXECUTE | `jobs` | status / long-poll wait / cancel / resume / list / runs over receipts; resume continues the latest job of a recoverable job's resume chain, named by `job_id`; place_beside_sheet copies a case's results beside the sheet it ran |
-| UNDERSTAND | `analyze_results` | runs a batch of recipes over runs and returns typed values with case and step identity, attributed reductions and spec verdicts; replies are bounded and can be continued |
+| UNDERSTAND | `analyze_results` | runs a batch of recipes over runs and returns typed values with case and step identity, attributed reductions and spec verdicts; every recipe is evaluated in the call, and a reply too long for its target is cut and read on from the stored answer |
 | UNDERSTAND | `inspect` | reads: capabilities, symbols (list and detail), net trace, components, models, result facts, the guide, and the reference entries for the tools' arguments, recipes, ops and other branches |
 | AUTHOR | `edit_schematic` | applies a batch of typed ops to a sheet (blank or existing) as one transaction; committing to an existing file needs its current `expected_sha256`; returns pin and net tables, per-op results and findings |
 | AUTHOR | `verify_circuit` | gate: lint/syntax, symbols, export, layout, quality, compare (equivalence or structural diff), render |
@@ -32,7 +32,60 @@ point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
 a step) has no chart: it is refused with `no_axis`, which says what the plot
 holds and where its values are read, and with `in_ltspice` it is opened in
 LTspice without a chart, with no traces named for it and a `no_chart`
-observation.
+observation. With `in_ltspice`, a job's run of a sheet is put beside the sheet
+by the copy `jobs(action="place_beside_sheet")` makes, with its checks and
+locks, and opened from the sheet; the `ltspice` block then carries that copy's
+`not_checked` and `left_in_place`. Where the copy is refused (the sheet changed
+since the run or is gone, the case's results are not there, or the run was
+not LTspice's), or another server process held the sheet past the lock's wait
+(`sheet_locked`), nothing is put beside the sheet, the run opens on its own as
+a netlist's run does, and the block's `not_placed` gives the `code` and
+`message`. If LTspice's window had already closed a plot of the sheet's
+results for the copy, the `note` says so.
+
+`plot_waveform` draws several cases of one job in one chart when `runs` is
+given beside `job_id`, in the grammar of an `analyze_results` source: `"all"`,
+a list of run indices, or `{case_ids: [...]}`. Both tools select the cases
+through one function (`services.select_cases`), so one selection reads the
+same cases in both. `runs` beside `run_index`, `case_id` or `path` is refused,
+and a selection of one case reads as that case named by `case_id` does. With
+several cases, each trace's legend label is the signal, then the assignments
+that differ among the cases drawn, then the step's values where the case is
+stepped (`V(out) [R1=1000;r=22]`); where the assignments do not tell a case
+apart, or more than three differ, the case id stands in for them. One function
+writes that label (`points.point_label`), and a chart of one case keeps its
+labels. Each trace summary names its `case_id` and `run_index`, the reply's
+`cases` lists each case drawn with its `assignments` and `n_steps`, the
+number of steps of the plot it drew (a `steps_not_as_recorded` observation
+names a case whose run row's `steps` says otherwise: its results file was
+rewritten after the run, or its record is wrong), and `cases_not_drawn` names each case
+selected and not drawn, at most 20 rows with the total in
+`cases_not_drawn_truncated`: `case_not_found` and `run_not_found` as
+`analyze_results` names them (one row per code, with their count and the
+first five), `run_not_finished` and `raw_not_produced` with the case's
+`status`, `other_raw_not_written`, `result_unreadable` or `analysis_deadline`
+for a results file that cannot be parsed, `plot_not_found` for one without
+the `plot_index` asked for, `load_time_exhausted` for one not loaded within
+the chart's bound on loading, and `step_not_found` for a case without the
+`step` asked for, which applies to every case. The results files load side
+by side, two at a time, through the parse service, each under its own parse
+deadline, within one bound on the whole of it (twice one file's parse
+deadline, 240 s). Before any loads, each first plot's header (at most its
+first 256 KiB), the cases' records and the request say whether the chart
+would be over its cell limit were every case drawn; where it would, it is
+refused as soon as the cases loaded are over by themselves, and the files
+after them are not loaded. Neither count holds a case the chart will not
+draw, so neither refuses a chart that would be drawn. A signal some cases
+lack is drawn for the others, and `signals_not_in_cases` names those that lack
+it. A selection with nothing to draw is refused with why for each case. One
+chart has one kind of axis: cases whose plots differ in analysis are refused,
+named by analysis, with the advice to plot them in separate calls; cases with
+different time grids are drawn together, as steps with different axes are.
+The limits count series across cases and steps together; when the summary
+limit cuts the traces, `cases_unsummarized` counts the cases with no trace
+summarized and `hint` names the `analyze_results` call that reads the rest.
+`in_ltspice` with several cases is refused: an LTspice window shows one
+case's results from its sheet.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
@@ -113,8 +166,10 @@ Codes by kind of failure:
 | `symbol_unresolved` | the schematic opened, but a symbol it, or a hierarchical block's own sheet, places was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
+| `run_not_finished` | a read named a case of a job whose run has not finished (queued, running, or its end-of-run checks not yet made); the message names the case, what its simulator has written so far and the wait. The job's finished cases are read meanwhile |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
+| `plot_not_found` | a read named a `plot_index` its results file does not hold; the message says how many plots it holds. The file is readable: the request does not fit it. Given by `inspect(kind="results")` and `plot_waveform`; `analyze_results` gives such a recipe's failure the code `recipe_failed`, with this message |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
 | `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request, or for a file that has changed since; the `hint` says to send back the cursor the same tool returned, or the message names the argument to change |
@@ -143,8 +198,11 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
-`verify_circuit`'s `findings` is one list with a cap per rule instead: a rule
-cut at the cap has a `findings_omitted` entry with its own cursor (§3.5).
+`verify_circuit`, `run_experiments` and `jobs` are on the presenter instead
+(below): a list is cut only when its reply is too long to send whole.
+`verify_circuit`'s `findings` and `jobs(list)`'s groups are then read on from
+the stored answer (§3.5, §3.2); a job's run rows are read on from the job's
+own record (§3.1).
 
 An `inspect` item's `page` names the data key its cursor pages in a
 `collections {<data key>: {total, returned, truncated}}` block, which is how
@@ -253,6 +311,116 @@ wherever they appear in its reply, and is the whole exemption:
 
 The list is `ALWAYS_PRESENT` in `tools/_base.py`, and the suite fails any
 reply that carries a silent field not on it.
+
+**A reply too long to send whole.** A tool on the presenter
+(`lib/presenter.py`; `verify_circuit`, `run_experiments`, `jobs` and
+`analyze_results` today, `inspect` as it moves) computes its complete answer
+and hands it, with its output schema, to one function that decides what is
+sent.
+The target is one number: the tool's `budget` argument where it has one
+(at least 500 estimated tokens; a smaller one is refused), else
+`[analysis] default_budget` (4000 estimated tokens). A default of 0 and no
+`budget` is no target: every answer is sent whole, except the lists an MCP
+reply still caps by count, each named in `cut` and continued by its cursor,
+so no reply carries an unbounded collection: a job's run rows at 50, and an
+`analyze_results` recipe's `per_run` page at its `limit` (50 by default) and
+every other list of its answer the presenter may cut (`values`, `groups`,
+`spec.fail_cases`, `spec.outliers`, `coverage.missing_cases`,
+`signals_available`, `source_hashes`) at 100 (`analyze.answer_caps`). Every
+other list is declared never cut, with its bound (`tests/test_reply_cuts.py`).
+The Python API's automatic mode returns every row.
+
+- An answer within the target is sent exactly as "Fields left out" makes it.
+  It carries neither field below, and nothing is stored.
+- An answer over the target is stored whole, as one JSON file in the store's
+  `results/` folder, under the expiry of `[analysis] result_set_ttl_hours`.
+  Its id is the digest of the answer and of its snapshot, what it was computed
+  from, so the same answer of the same inputs is one file.
+- Then the lists the schema declares `items` or `rows` (`x-cut`,
+  `lib/reply_cuts.py`) are cut from the end, whole entries only, the largest
+  list first, until the reply fits or each holds one entry; a list whose cut
+  to one entry would not shorten the reply (a short list, whose `cut` entry
+  costs more than its entries) is left whole, and a list that is over at one
+  entry is held there while the next is cut. A reply is over its target only
+  when the lists, each at the least the search cuts it to, are over it
+  together. A larger target does not always give a larger reply: for lists
+  of whole entries at targets at or above that floor it gives one at most 40
+  estimated tokens smaller (`tests/test_presenter_fit_property.py`), but a
+  series is redrawn at the most points that fit, so a larger target can draw
+  it with fewer, and below the floor the note that says a reply is over its
+  target adds its own size. A list declared
+  `never` is sent whole, and nothing inside a list's entries is cut apart from
+  its entry: a list inside a row goes with the row. A reply that still does
+  not fit goes out over the target.
+- Before any list is cut, the samples a schema declares one `series` (an
+  inline waveform's axis `x` and its `series`) are redrawn at the most points
+  that let the reply fit, by a function the tool supplies, every list of the
+  series at the same points and never below 32 points drawn. A thinned series
+  is drawn for the entries the reply keeps, is not paged and has no cursor:
+  its `cut` entry, at the pointer of its axis,
+  gives the points the answer holds (`total`) and those sent (`returned`), and
+  the tool's words name how to get more (`max_points`, the CSV format). The
+  stored answer holds the series as computed, and a page thins its own.
+- Several answers can share one reply and one target
+  (`presenter.present_many`): a receipt and the analysis attached to it. Each
+  keeps its own tool, snapshot and records, and carries its own `cut` and
+  `stored_answer` at its root, so a cut list of the attached analysis is
+  stored as an answer of `analyze_results` and read on by it. One size search
+  runs over the lists of all of them: a reply that fits is whole, and no
+  answer is cut while room remains.
+
+A cut reply carries two fields, declared once in `tools/_base.py`:
+
+- `cut`: by the JSON Pointer of each list it cut, `{total, returned, offset?,
+  next?}`. `offset` is the index of the first entry the reply holds, absent
+  for 0; `next` is the cursor for the entries after them, absent on the last.
+- `stored_answer`: `{id, path, snapshot}`. `path` is the stored JSON file,
+  whose `answer` is the complete answer; `snapshot` is what it was computed
+  from, such as a file's `sha256`. When the file cannot be written (a full
+  disk), the reply is still sent, cut as it would be: `stored_answer` holds
+  only `not_kept` (`{code: "stored_answer_not_kept", message}`, saying why
+  and to ask again with a larger budget, a narrower request or, for a
+  waveform, the CSV format), and no `cut` entry carries a cursor. Every page
+  object still says what it left out (`truncated`, with a `hint` saying no
+  cursor reads the rest), and every count stands.
+
+A stored answer's file has its expiry as its modification time, so deciding
+which have expired reads none of them. A cut reply sweeps the expired ones
+at most once every `presenter.SWEEP_INTERVAL_S` (10 minutes): it spends one
+stat on the sweep, or, when one is due, one stat per stored answer.
+
+**A list the server already keeps.** A list a record of the server holds
+whole, a job's run rows in its record, is a second kind of source. When it is
+cut, nothing is stored for it: its cursor names the record and an offset, and
+a page is read from the record when it is asked for, so it carries the record
+as it stands then (for run rows, the job's `status` and `progress`) and a
+caller can tell the rows may have moved since the first page. A reply whose
+cut lists are all records carries no `stored_answer` and writes no file.
+
+**Over the target.** When the parts of a reply that are never cut already
+exceed the target, a reply on the presenter goes out over it and says so
+once, in a `budget_not_met` observation naming what it cut. No note
+says that nothing was dropped while a `cut` field is present.
+
+A cursor names the stored answer, the list's pointer and an offset. Reading
+it slices the stored file: nothing is computed again and no request is
+replayed, so a page is never refused as stale. It carries `stored_answer`, so
+the caller compares the snapshot with the file to tell whether the page
+predates a change. A page holds the list it reads from the offset on, cut to
+the target the same way, and what identifies it: `page_of`, the pointer of
+that list, so a field the page leaves out is read as given by the first reply
+and not as absent; `cut`, naming only that list (where the page starts, how
+many it holds, the cursor for the rest); and `stored_answer`. Of the rest of
+the answer it keeps only the objects on the way to the list, each with its
+text, number and flag fields and the objects its schema requires in their
+least form (`presenter.page_skeleton`): no other list, no observations, no
+notes the first reply gave. Each other list is read on from the first
+reply's own `cut` entry. The rows of a job read with `jobs(action="runs")`
+are the precedent: the rows and their counts. A cursor for an answer that has expired or is missing is
+refused with `invalid_cursor`, saying the stored answer is gone and how to
+compute a fresh one. The tool's `hint` names three ways to read the rest: the
+stored file, the call with the cursor, and the same call through the Python
+API.
 
 
 **Presentation fields.** Fields that control how a receipt is rendered, rather
@@ -412,9 +580,29 @@ selector appears twice; a run naming a left-out entry is refused with a list
 of the accepted names. `inspect(kind="capabilities")` lists the accepted
 entries under `named_executables`.
 
-A named build is recorded, parsed and linted as its family, so a record's
-`simulator` is the family and `simulator_executable` distinguishes two
-builds. Each build has its own limit on concurrent runs, so each gets the
+A named build is parsed and linted as its family. A job records the
+selector its run resolved to (`simulator_selector`; the default's selector
+when the request named none), beside the class name it ran (`simulator`, which
+resume reads) and the executable's identity (`simulator_executable`, which
+tells two builds apart byte for byte). Every reply that names a job names its
+simulator once, at the level of the job, as `simulator`, and the value is the
+selector: `"ltspice"`, or `"ltspice:xvii"` for a named build. Passed back as
+`execution.simulator` in the same session, it runs the same executable. The
+selector is a name in the configuration of the session that ran the job, and
+is the same on Windows, WSL and Wine for the same configuration. A reply adds
+`simulator_notes` when there is something to say about it:
+`simulator_not_in_session` when the session answering has no simulator under
+that name (a run naming it would be refused here); and, for a record written
+before the selector was recorded, `simulator_build_not_recorded`, with the
+recorded `executable`, when its executable is the path of none of the
+session's simulators of its family, so only the family is given. Such a
+record whose executable is the path of the family's own simulator, or of a
+named one, replies with that simulator's selector. The notes are lookups in
+the session's tables: no reply reads or hashes an executable to decide them,
+and `provenance` carries `simulator_executable` for a caller that needs the
+exact build. `inspect(kind="capabilities")` gives `default_simulator` as a
+selector too, beside `simulators` (keyed by family) and `named_executables`
+(keyed by selector). Each build has its own limit on concurrent runs, so each gets the
 full `[simulation] max_parallel` (`limits.max_parallel_sims` in
 `inspect(kind="capabilities")`), as each family does. A named LTspice build
 exports a `.asc` with its own executable, and with a sandbox set, a deck run
@@ -499,29 +687,30 @@ budget               int | null            approximate response-token cap
 ```
 
 `budget` and `analyze.include.fields` control how the durable receipt is
-rendered and do not change what runs. A reply over its budget is rendered
-again with each rung of a fixed ladder in turn until it fits. The trim rung
-empties the `source_hashes` rows (the identity echo), the answer rung drops the caller's opt-ins that enlarge the reply
-(such as `include.per_run`, `include.outliers` and `include.provenance`), and
-the shrink rung lowers the number of rows on every page. A call with no
-budget is rendered under the server default (`[analysis] default_budget`,
-default 4000), which applies only the trim rung. Trim never removes facts or
-caller opt-ins. An explicit budget replaces the default and may use all three
-rungs.
+rendered and do not change what runs. `budget` is the reply's target, at
+least 500 estimated tokens; with none, `[analysis] default_budget` (default
+4000) is the target. The receipt goes through the presenter (§1, "A reply too
+long to send whole"): its run rows are cut as rows to fit, at least one always
+stays, and the rest are read from the job's record.
 
-From the trim rung on, a reply still over its budget has its inline
-`waveform` samples thinned until it fits. The samples are already a min/max
-decimation, so they are drawn again with fewer buckets, each keeping its
-minimum and maximum, under one point limit for every series and never below
-32 points; `points_total` still counts every sample, and the recipe's
-`warnings` say how far the series was thinned and where to read the rest.
-Below the answer rung only a waveform whose call sets no `max_points` is
-thinned, since a count the caller set is an opt-in, and rows projected by
-`include.fields` are not thinned; from the answer rung on every
-inline waveform is. A receipt thins its attached analysis's waveforms at
-every rung, whatever `max_points` the request set: its rows preview what
-`analyze_results` over the `job_id` returns. Thinning a row's samples moves
-no cursor.
+The attached analysis is an answer of `analyze_results`: the complete answer
+a later `analyze_results` call with the same request over the finished job
+gives, which the job keeps with its rows unprojected, rendered in the row view
+`analyze.include.fields` of each delivery. `analysis.result` is declared with
+that tool's output schema, and the receipt presents it beside its own answer
+under one target (§1, "Several answers"): its lists are cut as that tool cuts
+them, with its caps, words and `rows_not_shown`, and stored, when cut, as an
+answer of `analyze_results`, whose cursors that tool reads with `continue`.
+Its inline `waveform` samples are thinned as a series (§1). Nothing the
+request asked to include is dropped, and no `budget_truncated` observation
+is made: a cut is said by `cut`. The job's record keeps it at a version
+(`analysis_snapshot.ANSWER_VERSION`); `analysis_snapshot.classify` alone
+says whether this build renders a stored analysis: `snapshot`, or why not,
+`earlier` (an earlier release stored it), `later` (a later release did) or
+`damaged` (a record of this version with no answer it can render). One not
+rendered leaves the receipt, its status and its run rows answering as for
+any job, and `analysis.error` with an `attached_analysis_not_rendered`
+observation say which, and to run `analyze_results` over the job.
 
 **Simulator choice.** `execution.simulator` names one of the four supported
 families, or a named executable of one (above); the schema's pattern accepts
@@ -529,7 +718,9 @@ all four. A name is accepted when it is detected (for a named executable,
 when its entry was accepted at startup) and this host can run its family.
 `inspect(kind="capabilities")` reports this per simulator and per named
 executable as `selectable`, with a `refusal` giving the reason when it is
-false. An undetected family gets a "not available" error naming what was
+false, and names the default by its selector (`default_simulator`). A job's
+replies name the simulator it ran with as that same selector (`simulator`;
+"Selecting a build" above). An undetected family gets a "not available" error naming what was
 detected, and a detected family this host cannot run gets the reason. QSPICE
 is the only such family, because it runs only when the server itself runs on
 Windows, and not under WSL or Wine. Both refusals happen before anything is
@@ -722,7 +913,11 @@ record names, which another process may have taken since.
 The dwell and `jobs(wait)` wait for full terminality by default;
 `jobs(wait, wait_for: "runs")` returns once the runs are terminal: once every
 case's status is terminal, which can be just before the job's status changes.
-From then on every read of the job's runs accepts it. Cancelling
+A read does not wait for the job: each case is read once its own run has
+finished, its status set after the checks made when its run ends
+(`services.case_unreadable`), whatever its siblings are doing. A case still
+running is refused with `run_not_finished`, naming what its simulator has
+written so far. Cancelling
 during analysis cancels the stage and keeps the run artifacts. An analysis
 failure puts the job in `completed_with_failures` with an `analysis_error`; a
 new `analyze_results` call can still analyze the runs. An analysis stage the
@@ -765,7 +960,7 @@ Provenance in the response is opt-in. Digests, staged paths, the full
 manifest, the linter version and the job's `simulator_executable` are returned
 only with `provenance: true` on `run_experiments`, or `include.provenance:
 true` on `analyze_results` (which omits the executable). The lean receipt
-keeps `{circuit, path, simulator, dialect, staged_files}` and every manifest
+keeps `{circuit, path, dialect, staged_files}` and every manifest
 entry that is live, has a reason, or is otherwise not an ordinary staged
 reference. An analysis's `source_hashes` has one row per source,
 `{manifest_id, label, plot_index, dialect, snapshot_id}` by default; the
@@ -888,18 +1083,30 @@ that copies its results. A job settled without its coordinator (one whose
 process crashed, or whose stop outlasted that bound) keeps no record that a
 copy was asked for, so its receipt carries only the general
 `results_not_beside_sheet` note, which names the same action.
-The request is refused before it runs (`commit_state: "not_started"`) when a
-circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
-(`not_ltspice`), and when a sheet would run more than one case, by a
-variation or by being named twice (`several_cases_per_sheet`): a sheet holds
-one run's results, so the caller copies the case it wants afterwards. It
+A netlist's results are copied beside it the same way, under its name, where
+LTspice's batch run writes them; its `results_placed_beside_sheet` adds
+`evidence.not_checked`, saying that what LTspice's window does with results
+beside a netlist has not been checked. The same list says when a circuit was
+not compared with the file that ran because the job holds no digest for it.
+The request is refused before it runs (`commit_state: "not_started"`) when the
+capability table does not put the job's simulator's results beside a circuit
+(`not_ltspice`); when one results file, counted by its resolved path with
+case folded, would receive more than one case, by a variation, by one circuit
+named twice or by two circuits of one name such as `foo.asc` and `foo.net`
+(`several_cases_per_sheet`, naming the circuits and the file): a results file
+holds one run's results, so the caller copies the case it wants afterwards;
+and when a netlist has a sheet of its name beside it, in the job or not
+(`results_belong_to_sheet`): that results file is what LTspice's window shows
+as the sheet's run, so the caller runs the sheet or copies the netlist under
+another name. It
 cannot be combined with `recoverable`, since a resumed job's runs would
 finish without it. Left false, it is not part of the request's identity.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, diagnostics?, diagnostics_coverage?,
-attempt?}`. Every key is optional because a
+failed_measurements?, failed_measurement_steps?, measurements_not_established?,
+measurements_not_printed?, measurements_coverage?, steps?, attempt?}`. Every key is optional because a
 run-field projection can remove any of them. `status` is the case's own
 status, which uses a separate vocabulary from the job's `status` on the
 receipt. It is `produced` once the simulator wrote its output, `failed`,
@@ -929,38 +1136,138 @@ as two builds. `diagnostics` is what the simulator said about the run, read
 from its log and console capture when the run ended: one entry per condition
 and channel,
 `{code, count, first_text, channel, severity?}`, with `severity` only where
-the simulator wrote one, and lines the server does not recognise counted under
+the simulator wrote one (the strongest word over the condition's
+occurrences), and lines the server does not recognise counted under
 `unclassified` (`docs/DESIGN.md`, "Diagnostics"). It does not change the
 case's `status`: a run the simulator warned about and finished is still
 `produced`. `diagnostics_coverage` is present only when that reading is not
 the run's own simulator and build: `build_unrecorded`, `producer_unknown`,
 `unverified`, `log_unread`, or `not_classified` for a case recorded before
 logs were classified. The `summary` recipe carries the same two fields for
-the same run. Runs are rendered as `items: [RunRecord]`, each row an object
+the same run. The measurement fields say what the run did not give of the
+`.meas` its deck requests, read from its log when it ended:
+`failed_measurements` names those LTspice printed as failed,
+`failed_measurement_steps` gives the steps (from 0) of one that failed at some
+steps of a stepped run only, `measurements_not_established` the steps whose
+printed value is not established as the result (LTspice XVII prints 0 for a
+failed step), and `measurements_not_printed` the requested ones the log
+printed nothing for. `measurements_coverage` is `not_read` for a case recorded
+before these were kept, `log_unread` when the log's measurements could not
+be read, and `simulator_unsupported` for a QSPICE or Xyce run, whose measure
+output the server does not read; the fields left out otherwise mean every
+requested `.meas` gave a value. Every other reader of the run's measurements
+gives the same reason (`services.measurements_unread`): the `summary` recipe
+reports none and says why once in a `measurements_not_read` observation, and
+the `measurements` recipe and the Python API's `measurements` refuse, naming
+it. When a row names one, the receipt's hint names the `measurements`
+recipe, and a `meas_failed_in_every_run` observation names each `.meas` that
+gave no value in any run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
 
-Under a `budget`, receipts keep the common envelope and step down the
-trim -> answer -> shrink ladder described under the input above. The trim rung
-empties the attached analysis's `source_hashes` (one identity row per run);
-`source` stays, because it lists the includes that were read in place, not
-staged, or staged with a reason. The runs page and the attached analysis's
-row surfaces may be shrunk to fewer rows, and its inline waveforms are
-thinned first (see the input above); fact channels, completeness,
-progress, verdicts, coverage and the ids, token and cursors a caller needs to
-continue are never cut. If the floor (the smallest
-response the ladder can produce) exceeds the budget, the floor is returned
-with `budget_not_met`; facts are not dropped.
+A receipt is the job's complete answer at a moment, every run row in it
+(`receipts.render_receipt_snapshot`, which knows nothing of a wait). Its run
+rows are the one list the presenter cuts; `source`, `lint`, `artifacts`,
+`failures` and `observations` are sent whole. When the rows are cut, the
+reply's `cut` names `/runs/items` with `{total, returned, next}`, the `runs`
+block's `returned`, `truncated` and `next_cursor` say the same, and the hint
+names `jobs(action="runs", job_id, cursor)`, which reads the rest from the
+job's record. At least one run row always stays, and a row is sent whole or
+not at all.
 
-One page limit applies to every row surface of a receipt, which means the run
-page and each attached recipe's values, groups, failing cases and missing
-cases. The shrink rung lowers it to the largest limit that fits, which may be
-zero. A receipt's rows preview data that other calls page (`jobs(runs)`,
-`analyze_results` over the `job_id`), so the floor has no per-case rows. In
-the floor, `completeness` and `runs.total` count the runs, `runs.next_cursor`
-starts `jobs(runs)` at the first run, each recipe's warning counts its omitted
-rows, and reductions and spec verdicts remain. The floor's size does not
-depend on the number of cases. `jobs(runs)` and `jobs(list)` keep at least one
-row at their floor.
+`steps` says how a stepped case's results are stepped: `{count, parameters}`,
+the number of steps its raw's first plot holds and the names of the stepped
+parameters (never their values, which `analyze_results` and `plot_waveform`
+read from the results). It is decided once, when the run ends, by the raw
+reader: the raw's header marks a plot stepped, and the log's `.step` lines
+give each step's values (`decoded_raw.steps_held`, kept on the case's record
+as `ExperimentCase.steps`). Where the raw and the log disagree, or where each
+step starts cannot be read, `steps` is `{not_established}` with the reason and
+no number. A case whose results are not stepped carries no `steps`; a case
+with a raw whose steps were not recorded when its run ended (recorded before
+the server kept them, recovered after its server stopped, stopped with its
+partial raw kept, one whose raw could not be read when its run ended, or one
+whose end-of-run checks are still being made) carries `{not_recorded: true}`,
+which `runs_not_shown` does not count. A failed read records nothing: like the
+log read at the end of a run, which keeps the failure as `logs_error`, it is
+not made again, so a file still locked for a moment after the simulator exits
+(as on Windows) leaves its case not recorded. A stop of the job (a cancel,
+its deadline, the process shutting down) ends the read at once, with nothing
+recorded. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
+established by the recordings it lists, per LTspice build. ngspice has no
+`.step`: its runs record one step. Every chart of a job's case, of one case
+(`run_index`, `case_id`, or `runs` naming one) or of several, gives `n_steps`
+from the plot it drew, and where this record gives another number a
+`steps_not_as_recorded` observation names the case with both
+(`tools/analysis._steps_not_as_recorded`, the one comparison). A chart by
+`path` names no case and has no record; a chart of a `plot_index` past the
+first or of an `other_raw` draws a plot this record does not describe, so
+neither is compared.
+
+**What the rows left out carry.** When run rows are left out, `runs_not_shown`
+states the facts on the rows after the ones sent, from the job's whole table
+whatever `run_fields` keeps: per kind (`diagnostics.<code>`,
+`diagnostics_coverage.<value>`, `failed_measurements`,
+`measurements_not_established`, `measurements_not_printed`,
+`measurements_coverage.<value>`, `steps_not_established` for a run whose
+steps were not established when it ended, and `status.<status>` for a run that ended
+`failed`, `cancelled` or `skipped`), `{counts, runs?}`. `counts` gives every
+kind's number of runs. `runs` names at most 3 runs over all kinds, the first
+run of each of the first kinds, each `{case_id, run_index, kinds, cursor}`
+with a record cursor that starts at its row; a kind every run of the job
+carries, shown or not (a coverage value such as
+`measurements_coverage.simulator_unsupported` on a QSPICE job), is given by
+its count alone. The whole note is held to one bound,
+`receipts.NOT_SHOWN_BOUND_TOKENS` (692 estimated tokens), built by
+`lib/not_shown.py`, the one builder of a part naming entries left out, whatever the number
+of kinds and runs, and rows are sized against the target less what the note
+reserves (its size at one row, a first estimate). The whole reply at the
+count found decides: the note can be larger there, and while the reply is
+over, a row comes off. When no count fits beside the reserve, counts are tried
+whole; a reply says it is over its target only when one row is. Rows keep their
+order, so a cursor names a row by its index. It is absent when no row is left
+out or none left out carries such a fact, and it is never cut and never
+shortened. A receipt with no job (a routing failure) has no record: its cut
+rows are stored, its `runs` block names the stored file, and its failed runs
+are left to its `failures`, which name each one. Fact channels, completeness, progress, verdicts and the
+ids, token and cursors a caller needs to continue are never cut. If they and
+one run row exceed the target, the reply goes out over it with one
+`budget_not_met` observation. The attached analysis's lists are cut beside the
+run rows, each to at least one entry, and read on with `analyze_results`.
+
+**Standing notes, said once.** Some notes describe the job or the request and
+read the same on every reply about it: the `micro_sign_folded`,
+`ngspice_mode_unverified`, `results_not_beside_sheet` and
+`value_read_otherwise` observations, each
+`lint` entry and `source` entry, and the hint's route to the `measurements`
+recipe (when a row names a `.meas` that gave no value, or, on a terminal
+receipt, when the deck has `.meas` cards, the request did not attach the
+recipe and the simulator's measure output is read). Whether the deck has
+`.meas` cards is read from the facts the job keeps for each run, never from
+the deck file; a job recorded by an earlier release kept them only beside a
+`.meas` that gave no value, so its receipt names the route only then. The session remembers each one it has sent, by job, code and a digest
+of its text (`lib/said_once.py`; bounded, never written to disk). A reply that
+repeats one sends it as its code and `said_before`, the number of replies that
+carried it before, in place of its text: an observation as `{code, kind,
+said_before}`, a `lint` or `source` entry as `{circuit, said_before}`, and the
+route as a shorter sentence. The hint then names `jobs(action="status",
+job_id)`, which sends every note in full. A note whose text changed is new and
+is sent in full. Which deliveries shorten is one table: `jobs(action="status")`
+and a replay by `request_id` never do; a `wait`, a `run_experiments` receipt
+and a `resume` do. Each note's schema has two branches: the whole entry, with
+every field it always carries, and the short one, with `said_before` and
+nothing of its text. A new
+session starts with nothing remembered. The Python API sends every note in
+full; `raw_page=True` returns the MCP reply, shortened notes included. Failures, run rows and their diagnostics and measurement fields,
+progress, and every other observation are never shortened.
+
+**Deliveries of one answer.** The run receipt, a `wait` and a `status` are
+deliveries of one job's answer. What a delivery adds is marked in the output
+schema with `x-delivery`: `replayed` on a run receipt, `action` on a `jobs`
+reply, `timed_out` on a wait, and on a resume `resumed`, `replayed`,
+`resume_request_id`, `addressed_parent_job_id` and `head_job_id`. Set those aside, and the run receipt, the
+last wait and a status of a finished job carry the same answer, read in a
+session that has sent none of its standing notes. A wait holds nothing that
+can stop its job: a cancelled wait leaves the job running.
 
 The lean row flattens `value` to its scalar leaves and keeps any `artifact`
 handle, both in `analyze_results` and in a `run_experiments` receipt. A
@@ -973,9 +1280,14 @@ ignored) are merged into one row. That row is the merged failure whose
 the same excerpt. `count` is the number of failures merged, and `case_ids`
 lists at most 10 of their case ids.
 
-Output: `job_id, request_id, control_token, status, outcome, source[],
-completeness, progress, lint findings (per circuit), runs (a page of
-RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
+Output: `job_id, request_id, control_token, job_type, status,
+analysis_status, simulator, simulator_notes?, dialect, outcome, source[],
+completeness, progress, lint
+findings (per circuit), runs (a page of RunRecords), analysis?, failures[],
+observations[], artifacts[], hint, cut?`. `simulator` is the selector the job
+ran with, given once for the job: neither a `source[]` entry nor a run row
+repeats it ("Selecting a build" above; the source record keeps the class name
+on disk).
 
 ### 3.2 `jobs` — job status and control
 
@@ -987,7 +1299,7 @@ RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
 {action: "resume", job_id, resume_request_id, control_token?, case_ids?,
  retry_failed?, retry_cancelled?, wait_s?}
 {action: "list",   circuit?: path, limit? (capped at 50), cursor?}
-{action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
+{action: "runs",   job_id | request_id, cursor?, run_fields?}   cursor absent = first page
 {action: "place_beside_sheet", job_id | request_id, case_id?}
 ```
 
@@ -1005,9 +1317,10 @@ differently names each action before its sentence. The tool refuses a field
 the action does not take, naming both. The output shape is discriminated on
 the echoed `action`:
 
-- `status` / `wait` return the §3.1 receipt **without** `control_token`, plus
-  `analysis_status` and, for `wait`, `timed_out`. The receipt includes
-  `progress`, terminal states included, and follows the same budget rules.
+- `status` / `wait` return the §3.1 receipt **without** `control_token`, plus,
+  for `wait`, `timed_out`. The receipt includes `progress`, terminal states
+  included, and follows the same rules for its target, run rows and standing
+  notes; `status` sends every standing note in full.
 - `cancel` returns a page with one row per case that had not finished,
   `{case_id, run_index, prior_status, status}`.
 - `resume` returns the receipt of the addressed parent or of the new child,
@@ -1019,22 +1332,47 @@ the echoed `action`:
   recent_jobs, recent_jobs_total}`; with no filter, the recently touched
   circuits. `interrupted_job_ids` lists the circuit's jobs with status
   `interrupted`. `recent_jobs` gives at most 5 of the circuit's jobs, newest
-  activity first, each `{job_id, status, request_id, finished_at}`, and
-  `recent_jobs_total` counts them all.
-- `runs` returns a page of `RunRecord` rows.
-- `place_beside_sheet` copies one case's results beside the `.asc` it ran,
-  under the sheet's name, where LTspice keeps a sheet's own results and opens
-  them from: the raw, the log, and each other raw the run wrote
-  (`<sheet>.op.raw`). It returns `{case_id, sheet, files, assignments}`, with
+  activity first, each `{job_id, status, request_id, simulator,
+  simulator_notes?, finished_at}`, and `recent_jobs_total` counts them all.
+- `runs` returns the job's `RunRecord` rows, read from its record when the
+  call is made, with the job's `status`, `progress` and `simulator` (with any
+  `simulator_notes`) at that moment. They
+  are cut as rows to the target like a receipt's, at least one kept; `cut`
+  names `/items` with its `offset`, and `next` is the cursor for the rows
+  after. A receipt's `cut` cursor for `/runs/items` is the same kind of
+  cursor. A cursor names the job and an offset, so it is refused for another
+  job, and a page of a job still running may show rows that changed since the
+  first page. `run_fields` projects each row, as on `run_experiments`; pass it
+  again with each cursor.
+- `list` is sent whole when it fits, else stored and cut as groups, and
+  `cursor` takes a `cut` entry's `next` to read the stored list on. `limit`
+  caps the groups one reply sends, at most 50.
+- `place_beside_sheet` copies one case's results beside the circuit it ran,
+  sheet or netlist, under its name, where LTspice keeps them
+  (`sheet_results.files_beside`): the raw, the log, and each other raw the run
+  wrote (`<name>.op.raw`). It returns `{case_id, sheet, files, assignments,
+  not_checked, left_in_place}`, `sheet` naming the circuit and `not_checked`
+  what the copy did not check, with
   one `{from, to, replaced}` per file copied; `assignments` is what the
-  case's variations set, which the sheet does not show. `case_id` may be left
+  case's variations set, which the sheet does not show. `not_checked` always
+  says that the files the circuit includes or uses were not compared with the
+  ones the run read, since only the circuit file is. `left_in_place` names
+  each of the circuit's result files beside it that this run did not write
+  (an `.op.raw` an earlier run left, say): it is not removed, and
+  `not_checked` says that what LTspice's window does with it is not recorded.
+  `case_id` may be left
   out of a job that ran one case (otherwise `case_id_required`). The copy is
-  made under the sheet's lock, and the job keeps its own. A case that
+  made under the circuit's lock and then the results file's, held until the
+  copy has ended even when the call is cancelled, and the job
+  keeps its own. Every placement takes this one path
+  (`sheet_results.place_checked`): this action, `execution.results_beside_sheet`
+  and `plot_waveform` with `in_ltspice`. A case that
   produced no results (`case_not_produced`) or whose results are no longer
   there (`results_missing`), a case of a job whose runs are not all terminal
-  yet (`job_not_terminal`, as every read of a job's runs is refused until
-  then), a netlist's run (`not_a_sheet`),
-  another simulator's run (`not_ltspice`), and a sheet that is missing
+  yet (`job_not_terminal`: a job run with `execution.results_beside_sheet`
+  copies its cases then, so a placement waits for it, although a read of a
+  finished case does not), another simulator's run (`not_ltspice`), a netlist whose results
+  file is a sheet's (`results_belong_to_sheet`), and a circuit that is missing
   (`sheet_missing`) or changed since the job read it (`sheet_changed`) are
   refused, and nothing is written. The sheet's `.plt` is left as it is.
 
@@ -1110,9 +1448,9 @@ all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
 include    {per_run?: {limit? (capped at 100), cursor?} | bool, outliers?, signals_available?,
             provenance?, fields?: [dotted row path]}
 budget     int | null
-continue   {result_set_id, cursor}   resumes a budget-truncated call; request
-                                     fields sent with it must be the stored
-                                     request's own
+continue   {result_set_id, cursor}   reads on in a cut reply: a page of the
+                                     stored answer; request fields sent with
+                                     it must be the whole request that gave it
 ```
 
 `continue` is the wire spelling; the Python attribute is `continuation`.
@@ -1121,8 +1459,9 @@ continue   {result_set_id, cursor}   resumes a budget-truncated call; request
 first plot is selected only if a RAW recipe reads one. A source whose `path`
 is a `.log` refuses plot selection. `dialect` is null or one of `ltspice`, `ngspice`,
 `qspice`, `xyce`; an explicit dialect must agree with the raw file's header
-and with the simulator the job recorded. `plot_waveform` and the attached
-`run_experiments.analyze` block accept the same selectors and the same
+and with the simulator the job recorded. `plot_waveform` (with `runs`
+beside a `job_id`) and the attached `run_experiments.analyze` block accept the
+same selectors and the same
 `{axis, value}` step selector; `plot_waveform`'s `step` also takes a 0-based
 index. Analysis type, axis and units come from the selected plot's header. A
 recipe never gives a table plot an axis, so read its quantities through the
@@ -1163,9 +1502,10 @@ their hashes, and needs no readable RAW. The server does not take the
 producing simulator from a log's contents or from the session's default
 simulator, so only a job source has one. `include.provenance` reports
 `explicit_dialect` and `producing_dialect` separately; `measurements` rows
-report only the producing dialect, which a `path` source does not have. A continuation reports `source_drift` for a source whose
-log or console file changed, or appeared after being absent, as it does for a
-changed RAW.
+report only the producing dialect, which a `path` source does not have. The
+check of every source after the recipes read it reports `source_drift` for a
+source whose log or console file changed, or appeared after being absent, as
+it does for a changed RAW.
 
 When a run has one value per `.meas` (each case of a sweep with no `.step`
 does), its `measurements` row contains `measured: {name: value}`, the number a
@@ -1199,8 +1539,37 @@ names it in one of five places, by why:
   entries and the Python API's `measurements()` carry the same
   `not_established` with those steps null in `values`, and an `inspect`
   measurements row carries its reason.
-- `not_finite: [name]`: LTspice printed a number that is not finite, such as
-  a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
+- `unreadable` also names a number that is not finite, such as a stepped
+  FRA's gain margin of `infdB`, quoted in its reason: the log decoder
+  (`log_parser.parse_measurements`) holds it as null and gives that one
+  reason, which every route carries (`steps` names the steps it concerns
+  where that is not every step).
+- `printed_once: {name: {step_count, step?, reason}}`: the log printed the
+  value once for a run of several steps. LTspice 26 prints one line for each
+  measurement of a stepped `.op`, and no `.step` line; the line holds the
+  first step's value (recorded: `log/meas_step_op`, compared with the
+  results file of `raw/step_op`), so `step` is 0 for LTspice 26 and
+  absent, with the reason saying it is not established, for any other build
+  and for a log no evidence names. The other steps' values are not in the log, and the reason
+  names the recipe that reads them from the results. The summary's entries,
+  an `inspect` measurements row and the Python API's `measurements()` carry
+  the same statement.
+
+A stepped run's `measurements` row gives each name's statistics in `stats`
+(and so does any row read with `include.fields=["value"]`). They are over the
+steps with a number (`valid_count`); the other steps are counted by the same
+reasons, as the log decoder decides them (`log_types.no_number_reasons`, from
+the one list `log_types.NO_NUMBER_REASONS`): `failure_count` counts the steps
+LTspice printed failed, and `no_number: {reason: count}` counts every other
+step under the name of the row field that gives its reason (`unreadable`,
+`answer_unknown`, `not_established`), a count of 0 left out. `total_count`
+is `valid_count` plus `failure_count` plus every count in `no_number`. A
+`not_established` count beside `failure_count` makes it a lower bound: each
+such step may be a failure or a real 0. A value printed once for several
+steps is a number, so it is counted in `valid_count`. The Python API's
+`compute_measurement_stats` takes the reasons as `reasons`; a null in a
+caller's own list that comes with no reason is counted under
+`no_number.reason_not_given`, never as a failure.
 
 `failed_measurements` means "LTspice printed it as failed" in every reply
 that carries it. The summary, `inspect(kind="results", view="measurements")`
@@ -1251,8 +1620,8 @@ way. A stepped run's row has `stats`, with `failed_measurements` and
 
 `step` and `all_steps` apply to the whole call, so every recipe reads the same
 iteration. `run_experiments`' attached `analyze` block takes
-the same two arguments (§3.1). Both are stored in the result set, so a
-continuation replays them.
+the same two arguments (§3.1). Both are part of the request a stored answer
+answers, so a page reads the steps its first reply read.
 
 - `include.fields` paths root at one of `source`, `case_id`, `run_index`,
   `step_index`, `step_values`, `assignments`, `circuit`, `deck_sha256`,
@@ -1269,20 +1638,41 @@ continuation replays them.
   `diagnostics_coverage`, `attempt`), with no bare
   names. A path that no row on the page reaches is reported in `warnings`
   with the keys that are there.
-- `include.fields` changes only the row view. Every cursor records the
-  `fields` view it was made for, and a continuation applies that view to the
-  stored request. A `per_run` cursor is checked against the request without
-  its `fields`, so sending page 1 again with different `fields` returns
-  cursors for the new view.
-- On a full request containing `include.per_run.cursor`, an omitted `fields`
-  takes the cursor's view. An explicit `fields` that differs from the cursor's
-  view is rejected with a hint to replay page 1. A cursor with no embedded
-  view uses the stored request's view. The `continue` input itself does not
-  change.
-- A continuation replays the request stored in the result set and takes its
-  view from the cursor. Request fields sent with it are compared with the
-  stored request. An echo of the original call is accepted, and a differing
-  field, such as a raised `include.per_run.limit`, is rejected by name.
+- `include.fields` changes only the row view. A fact a row's value states
+  (`failed_measurements`, `not_finite`, `unreadable`, `answer_unknown`,
+  `not_established`, `printed_once`, `diagnostics`, `diagnostics_coverage`)
+  is kept by the lean row and by any `include.fields`.
+- Every recipe of a call is evaluated in it, and its complete answer is
+  presented (§1). A cursor is a cut entry's `next`, a page's `next_cursor`
+  (the same cursor) or a `rows_not_shown` row's `cursor`. `continue` with it
+  reads a page of the stored answer: nothing is evaluated and no source is
+  read, so a page is never refused or emptied because a source moved, and it
+  carries `stored_answer.snapshot` (the result set, the request and a digest
+  of the sources it read). `include.per_run.cursor` reads the same page, sent
+  with the request that gave it, `fields` included; another request is
+  refused. Request fields sent with `continue` must be the whole request that
+  gave the cursor. A cursor from an earlier release, or one whose stored
+  answer expired (`[analysis] result_set_ttl_hours`, default 24), is refused
+  with `invalid_cursor` and the way to start again: the same request without
+  the cursor.
+- A first reply's `next` and `cursor` name the first cut list's cursor; a
+  page's name the cursor that reads on in the list the page reads, and are
+  absent on its last page, so following them ends. Every other cut list reads
+  on from its own `cut` entry. Each page object (a recipe's `per_run`, `spec.fail_cases`,
+  `coverage.missing_cases`) says what the cut holds of it in `returned`,
+  `truncated` and `next_cursor` (`spec.fail_cases` in a `hint`). These keep
+  their shapes until the next breaking release.
+- When rows of a recipe are left out and some carry a fact, `rows_not_shown`
+  names them, by recipe key: `{counts, rows?}`, built by `lib/not_shown.py`
+  as `runs_not_shown` is. `counts` gives every kind's number of rows
+  (`failed_measurements`, `unreadable`, `diagnostics.<code>`, ...); `rows`
+  names the first row of each of at most 3 kinds over all recipes, each by
+  `source`, `case_id`, `run_index` and `step_index` with a cursor that starts
+  at it; a kind every row of its recipe carries is given by its count alone.
+  The whole part is held to `analyze.ROWS_NOT_SHOWN_BOUND_TOKENS` (965
+  estimated tokens): named rows come off from the last, then the recipes
+  after the first are summed under `*` (starred again if a recipe is keyed
+  so). It is never cut.
 - A repeated run index, `case_ids` entry, `group_by` dimension or
   `include.fields` path is read once, and the `hint` reports the duplicate. A
   source without a `label` is labelled with its job_id or its raw file's stem,
@@ -1296,19 +1686,24 @@ continuation replays them.
   adds `wheres` (up to 10 distinct places) and `count` (the number of failure
   records merged). A recipe that fails on every run of a sweep, such as on a
   signal no run contains, is one row rather than one per run, so the
-  failures channel, which no budget rung trims, does not grow with the run
-  count. The page then caps rows at 100,
+  failures channel, which is never cut, does not grow with the run
+  count. An MCP reply then caps rows at 100,
   with a `failures_truncated` observation that gives the true total and says
   that `api.analyze_results` returns every record. The Python API's complete
   `analyze_results` result lists every record, one per place; an analysis
-  attached to an experiment is stored as the page renders it, except that a
-  failure whose message ends in an `api` snippet says where the snippet runs
-  for the session that shows it.
-- Under a `budget`, the shrink rung lowers one shared limit on every row
-  surface (each recipe's `values`, `groups`, `per_run` page and
-  `spec.fail_cases`, and `coverage.missing_cases`) to the largest value whose
-  rows fit, down to one row; the `per_run` and missing-cases pages continue
-  through their cursors. `reduced` is never shrunk.
+  attached to an experiment keeps every record, and each door gives them as
+  it does for `analyze_results`, a failure whose message ends in an `api`
+  snippet saying where the snippet runs for the session that shows it.
+- An observation lifted from a recipe's rows names at most 3 of them in
+  `evidence.rows`, each with its `index` in the recipe's rows (and a cursor
+  when those rows are cut), with `row_count` the number it was made of; one
+  every row of its recipe carries says `every_row` and names none. The Python
+  API names every row.
+- `reduced` is never cut: the request bounds it, one row per field and
+  statistic, and a summary is never missing while its rows are shown. The
+  counts of `spec` are fields, never cut. Every other list of rows is cut by
+  the presenter, `groups`, `spec.outliers`, `signals_available` and
+  `source_hashes` included.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
   assignments, no_value_count?}`. `no_value_count` counts the recipe's rows
@@ -1322,15 +1717,40 @@ continuation replays them.
   field, unless `allow_incomplete` is set, which judges the rows that have a
   number and still reports the count. A verdict stored with a job by an
   earlier release has no `no_value_count`; it skipped rows with no number.
-- Each call has a total time limit, `[analysis] analysis_budget_s` (default
-  60 s), on top of the deadline on each parse. Exceeding it returns partial
-  results and a `result_set_id`, stored in the working directory's store. A
-  result set that reads a job is deleted when the job is ("Job model", §3.1);
-  one that reads only `path` sources expires after
-  `[analysis] result_set_ttl_hours` (default 24). After it is gone, send the
-  request again. A request for more than one call can compute, such as every
-  waveform of a 300-run Monte Carlo, returns what was computed and that
-  continuation handle.
+- One time limit bounds the whole call, `[analysis] analysis_budget_s`
+  (default 60 s), on top of the deadline on each parse: reading the sources,
+  the checks of every source before and after the reads, every recipe and
+  the signal listing share it, and each step gets what is left of it. A
+  recipe that runs out of it fails with `analysis_deadline`, and each recipe
+  the limit leaves no time for fails alone with the same code (stage
+  `deadline`), naming the fix: ask for it in a call of its own. The recipes
+  evaluated before it are answered. The check after the reads always runs
+  (at least 50 ms). A source it reads and finds changed loses its rows, with
+  `source_drift`; a source the bound leaves it no time to read again keeps
+  the rows its recipes answered, and a `sources_not_rechecked` observation
+  names it. A signal listing the bound ends fails with `analysis_deadline` at
+  stage `signals`, naming the sources it did not read; a source whose
+  signals could not be read is named with the reason, under that reading's
+  code; `signals_available` lists only the runs read. A recipe takes the
+  digest of each file it writes as it writes it, within its own time. The
+  publish step after the bound has one allowance for the whole call,
+  `analyze.PUBLISH_ALLOWANCE_S` (30 s), to compare the new files with those
+  already published; past it, the comparisons not made are skipped and the
+  new files replace the old, so no answered recipe loses its file. One call
+  takes at most the bound plus that allowance, and the renames. A repeat of a
+  request writes to the same artifact paths; an artifact already published
+  there with the same bytes is kept as it is, never replaced or reopened for
+  writing, so a file held open by another program does not fail the repeat;
+  when the comparison cannot finish, the file is replaced. A publish's temp
+  that could not be removed (on Windows, a digest that ran out of time can
+  still hold it) is removed by `result_store.cleanup` once it is
+  `STALE_PENDING_S` (6 hours) old: at startup and before every result set. The result set the call
+  records (its request and source digests) names the folder its CSV and plot
+  artifacts are written to; its id is a digest of what it records, so the
+  same request over the same files gives the same id and the same bytes. A
+  result set that reads a job is deleted, with its artifacts, when the job
+  is ("Job model", §3.1); one that reads only `path` sources expires after
+  `[analysis] result_set_ttl_hours` (default 24).
 - A result set captures each source's RAW, log and console output, including
   their absence, with a content hash for each. Every later read checks each
   file's device, inode, size, modification time and change time (on Windows,
@@ -1348,10 +1768,16 @@ continuation replays them.
   writer whose filesystem clock runs more than that tick behind this
   machine's. A deadline never lets a changed source pass; the source is read
   again or reported.
-- A job's runs are read once they are all terminal, as `jobs(wait, wait_for:
-  "runs")` reports them, and a case is read when it produced results or kept
-  a partial raw when it was stopped. Until then the source is a
-  `coverage.missing_cases` row with code `job_not_terminal`.
+- Each case of a job is read once its own run has finished, whatever the job's
+  status: when it produced results, or kept a partial raw when it was
+  stopped. A case still queued or running is a `coverage.missing_cases` row
+  with code `run_not_finished`, whose `detail` names what its simulator has
+  written so far and whose `evidence` carries `run_progress`' fields; a case
+  that ended without results is a row with code `raw_not_produced`. One such
+  row costs only its own case. `coverage.runs_running` counts the runs asked
+  for that have not finished, so a value over the runs analyzed is not taken
+  for the result of a job that has not ended; it is left out when every run
+  asked for has finished.
 - A source that names nothing is a `coverage.missing_cases` row coded as
   every tool reports the same failure, with that failure's `hint`: an unknown
   `job_id` is `job_not_found`, and a `path` with no file is
@@ -1361,29 +1787,29 @@ continuation replays them.
   first read raises `analysis_deadline` and creates no result set or cursor;
   retry the original request with fewer sources or a larger
   `[analysis] analysis_budget_s`. The timeout is not stored, so a retry reads
-  the sources again. After that read, every call completes at least one recipe
-  evaluation, and work left over when the budget runs out continues through
-  the returned `result_set_id`.
+  the sources again.
 - A `path` source has no job provenance, so its rows have no `deck_sha256`,
   and an observation says why.
 - Full-resolution data is returned as artifact handles
   `{path, content_type, sha256, bytes}`. Inline waveform data is always
   decimated to at most `max_points`, with `points_returned` and
-  `points_total` reported, and a budget may thin it further (§3.1, the
-  response budget). An inline value is `{format, x, series[{signal, y}],
+  `points_total` reported, and a reply too long for its target thins it
+  further as a series (§1). An inline value is `{format, x, series[{signal, y}],
   points_returned, points_total}`: every trace of one plot is read at the
   same points, so the axis is sent once, as `x`. An AC series has
   `magnitude_db` and `phase_deg` for `y`, and another complex one `real` and
   `imag`. A 32-bit trace's samples are written in their shortest 32-bit
   form, which reads back as the same 32-bit value.
 
-Output: `outcome, coverage {runs_requested, runs_analyzed, missing_cases: Page},
-results {key -> {metric, units, reduced[], groups?, steps?, spec?,
-per_run?: Page, warnings}}, observations[],
-failures[] {code, stage, where, message, wheres?, count?}, signals_available?,
-source_hashes, result_set_id?, hint`.
+Output: `outcome, coverage {runs_requested, runs_analyzed, runs_running?, missing_cases: Page},
+results {key -> {metric, units, reduced[], groups?, spec?,
+per_run?: Page, values?, warnings}}, observations[],
+failures[] {code, stage, where, message, wheres?, count?},
+signals_available? [{manifest_id, signals[]}],
+source_hashes, result_set_id, rows_not_shown?, cut?, stored_answer?, cursor?,
+next?, hint`.
 
-`results` has an entry for every recipe the page reached, in the order they
+`results` has an entry for every recipe the call asked for, in the order they
 were asked for, whether or not it produced rows. A recipe that produced none
 because it failed, whether it was invalid, its source could not be read or it
 failed on every run, has empty rows and a warning `No rows: ...` naming
@@ -1765,8 +2191,8 @@ in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
 export_to     "managed" (default) | "sidecar"
 findings_cursor
-              a findings_omitted entry's next_cursor: lists that rule's next
-              25 findings in place of its first
+              a cut entry's next: reads the findings after those from the
+              stored answer, without checking again; give the same path
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1799,7 +2225,19 @@ its own window; asking for it makes the call destructive, as the annotation
 table shows. Both modes report in `diff_vs_prior` what changed since the
 schematic's previous export: `sidecar` against the `.net` it replaces,
 `managed` against the previous managed export of the same schematic, which
-the store keeps.
+the store keeps. It is the `structural_diff` delta below, each part and
+directive in its scope, plus `connections_changed`: each pin of a part both
+exports have that moved onto or off a net both exports name (ground
+included), as `{reference, pin, before, after}`, net names in lower case. The
+pins are read from the wiring comparison `equivalence` runs, with each net
+both exports name the same anchored by its name and a net the exporter
+numbered (`N001`, `NC_01`), which another export may number otherwise,
+matched by the parts on it. A move between two numbered nets is not named,
+since which pin the comparison would report there depends on the order it
+reads the parts; `not_compared` says the wiring differs there, as it does
+when an export cannot be read as a circuit. `diff_vs_prior` holds no
+difference list when nothing changed and is absent when there was no
+previous export.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
@@ -1836,17 +2274,34 @@ and whatever each side names it. A definition's own directives are its body's,
 each listed with `(in .subckt NAME)` after it, and the instance that paired
 two definitions of different names. An `.include` or `.lib` line
 is a directive, but one whose file (or section) defines subcircuits and nothing
-else is compared by those definitions instead. So the modes differ: a `.param`
-moved from a body to the top level is a difference here and not in
-`structural_diff`, a definition moved into such an include is one there and not
-here, and a subcircuit the circuit does not call is compared there only.
+else is compared by those definitions instead. Both modes compare a `.param`
+moved from a body to the top level as a difference. They differ where each
+reads the deck: a definition moved into such an include is a difference in
+`structural_diff` and not here, and a subcircuit the circuit does not call is
+compared there only.
 `equivalent` is true only when the wiring, the parts and values and the
 directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
+In either mode `values_read_otherwise` summarizes the values of each side's
+files that an LTspice build the session may run reads as another number than
+the comparison does, one summary per build and kind of reading (see
+`inspect(kind="hierarchy")`). A reference given as text has no stored bytes
+and is summarized by nothing; a sheet is summarized by its own bytes.
+`structural_diff` reads no included file, and its `not_compared` says so.
 `structural_diff` reports the added, removed and changed components and
-directives, and does not compare nodes. The modes differ on a deck they
+directives of the two files as written, each in its scope: the top level, or
+the `.subckt` definition it sits in, paired with the definition of the same
+name in the same scope on the other side, a nested definition a scope of its
+own. An entry inside a definition says which: a string ends in
+`(in .subckt NAME)`, and an object carries `subckt`, nested names joined with
+`/`. So two elements of one reference in two blocks of an exported sheet are
+two elements. It does not compare nodes, and its `not_compared` says so in the
+data; it also names a definition either deck gives more than once in one
+scope, which it does not compare on either side (which of them stands for
+which is not known; `equivalent` is then null), and says that included files'
+cards are not read when a deck includes one. The modes differ on a deck they
 cannot read.
 `equivalence` returns a compare failure with no `comparison` block, while
 `structural_diff` diffs the deck as empty, so the delta is still returned,
@@ -1891,8 +2346,9 @@ component's signature is its model or value plus its instance parameters,
 without nodes (`equivalence` is the mode that compares wiring); a parameter
 given twice contributes both copies, so a second copy counts as a change.
 
-Output: findings in the shared shape, `findings_omitted` for the rules cut
-at the cap (below), a comparison block per mode, a render block `{path,
+Output: findings in the shared shape, `cut`, `stored_answer` and
+`findings_omitted` when the reply was too long to send whole (below), a
+comparison block per mode, a render block `{path,
 sha256, source_sha256, width, height, downscaled, returned_inline, svg?,
 note, …}`, a scene summary, `outcome` and `hint`.
 
@@ -1947,39 +2403,37 @@ move the part or the item its text crosses. `wire_through_symbol` and `text_in_s
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
-A reply lists at most 25 findings of each layout and quality rule, of each
-value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
-`value_suffix_nonascii`) and of `dropped_wire`. A rule with more has an entry
-in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
-next_cursor}`, where `omitted` counts its findings after the ones listed and
-`total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
-that rule's next 25 findings in place of its first; the entry in that reply
-carries the cursor for the page after, and the last page has none. The rest
-of the reply, `rules_run` included, is the same as without the cursor. The
-`hint` counts every finding, not only those listed, names each rule cut short
-with the check that reports it, so a caller can narrow `checks` to that check
-to skip the others, and on a cursor's page says which findings it lists.
+Findings are sent whole when the reply fits the target, however many a rule
+has; the check returns every finding, in the order the checks found them,
+and that order is their identity. A reply over the target is presented as
+"A reply too long to send whole" (§2) describes, with the snapshot
+`{path, sha256, reference_sha256?}`: the checked file's digest, and the
+reference's when one was compared (of its text when the reference is netlist
+text). `findings` is declared `items`, cut from the end; `observations`,
+`warnings`, `failures`, `checks_run` and `checks_skipped` are `never` lists
+and go out whole. The `hint` counts every finding the check found, not only
+those sent, and names the stored file, the `findings_cursor` call and its
+Python form.
 
-A cursor is bound to every finding of its rule as the call that returned it
-found them, which depends on more than the checked file: the symbols a sheet
-uses, its export, the build that reads a deck. A call that does not run the
-check that reports the rule is refused with `invalid_cursor` before any check
-runs, and the refusal names what to change (add the check to `checks`, or
-leave `render.mode` at `with_checks`). A call whose findings of the rule are
-not the ones the cursor was counted against is refused with `invalid_cursor`
-once they are found, and the refusal says why: the check did not run, with
-its reason; it failed, with its error; or what the findings are read from
-changed. Either refusal says to call again without `findings_cursor`, and
-neither carries the generic cursor hint. A malformed cursor is refused with
-`invalid_cursor` too.
+`findings_cursor` takes a `cut` entry's `next`. The call reads the next
+findings from the stored answer and runs no check; it needs the same `path`,
+and a cursor for another circuit's answer is refused with `invalid_cursor`.
+The page's `hint` says which findings it holds and that they were read from
+the stored answer. `findings_omitted`, keyed by `rule_id`, keeps the shape it
+had while findings were capped per rule, `{omitted, total, next_cursor}`, and
+is filled from the cut: `omitted` counts that rule's findings after the ones
+sent, `total` all of them, and `next_cursor` is the `cut` entry's `next`,
+which continues the whole list rather than that rule alone. It and
+`findings_cursor` go at the next breaking release.
+
 `api.verify_circuit` returns every finding and takes no `findings_cursor`
-unless called with `raw_page=True`.
+unless called with `raw_page=True`, which returns the reply a client reads.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
-which include `rule_id`, `at` and `subject`. Diff complete lists: follow each
-`findings_omitted` cursor to the end, or diff the findings
-`api.verify_circuit` returns, which are never capped.
+which include `rule_id`, `at` and `subject`. Diff complete lists: the stored
+answer's when the reply was cut, or the findings `api.verify_circuit`
+returns, which are never cut.
 
 ### 3.6 `inspect` — pure read
 
@@ -2022,8 +2476,11 @@ cursors where listed:
     the symbol names the libraries resolve, and resolution order; `path` adds
     the sheet's own folder, where only a symbol directly in it is found by its
     bare name, to the reported precedence
-{kind: "symbol", name, path?}
-    pins per rotation, bbox, origin
+{kind: "symbol", name, path?, rotation?}
+    pins per rotation, bbox, origin; a `rotation` (one of R0, R90, R180, R270,
+    M0, M90, M180, M270, as edit_schematic names them) gives `pins_by_rotation`
+    and `bbox_by_rotation` that rotation alone, and omitted gives all eight. Any
+    other value fails the item as `invalid_query`, naming the eight
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | "NAME" | [x, y], cursor?}
     .asc gives a geometric trace; an [x, y] on a wire's interior traces that
     wire, reported as snapped_to_wire; a netlist gives the membership of the
@@ -2108,11 +2565,18 @@ cursors where listed:
     branches — recipes, ops, variation kinds, query kinds, checks and job
     actions. A plain-words `query` returns the closest entries with their full
     field tables; no `query` returns the table of contents, one line per entry
-{kind: "guide", section?}
+{kind: "guide", section?, heading?}
     the packaged guide: no `section` returns the core a
     session reads first, ending in an index of the topic sections and task
     playbooks; a `section` from that index returns that section. An unknown name
-    fails the item as `unknown_section`, listing the names that exist
+    fails the item as `unknown_section`, listing the names that exist. A
+    `heading` with the `section` returns that heading's part of it, down to the
+    next heading of the same or a higher level, matched by its text whatever its
+    case, and the reply's `heading` names it as the section spells it. A heading
+    the section does not have fails the item as `unknown_heading`, listing the
+    section's headings under `supported`; a `heading` with no `section` fails
+    as `invalid_query`. A pointer in a reply may name a heading:
+    "guide section 'schematics', heading '...'"
 {kind: "simulator_docs", name?, cursor?}
     the reference documents the simulator's vendor installs with it; for
     LTspice 26.1 and later, about fifteen Markdown files about the program
@@ -2339,16 +2803,21 @@ Suppression is per call, and `linter_version` is reported in provenance.
 
 | rule | disposition | condition |
 |-|-|-|
-| `save-meas-coverage` | blocking | the deck has a `.save`, no `.save` saves all (`all`, `*`), names a signal by a pattern or cannot be read, and a `.meas` reads a signal no `.save` names. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved |
+| `save-meas-coverage` | blocking | a `.meas` reads a signal the run's simulator will not store, as the build that runs it reads names (`device_names.deck_signal`). Under a `.save` list (no `.save` saves all (`all`, `*`), names a signal by a pattern, or cannot be read): a signal no `.save` stores. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved. A name inside subcircuit instances is stored only in the build's own spelling: LTspice 26 with each instance's X (`xa:xin:mid`), XVII without (`a:in:mid`), ngspice with dots (`xa.xin.mid`); with or without a `.save` list, a `.meas` of a name LTspice spells otherwise, or whose first instance names no instance in either spelling, reads nothing on either build. Names are compared in ASCII case only. Where the build's spelling is not established, the signal is reported by `save-meas-spelling-unestablished` instead |
 | `save-pattern-unrecorded` | warning | any `.save` of the deck names signals by a pattern (`V(*)`, `I(R*)`), no `.save` saves all or cannot be read, and a `.meas` reads a signal no `.save` names: which signals a pattern saves is not recorded, so the signal is reported as not checked rather than refused, whichever kind of signal the pattern names |
+| `save-name-not-stored` | warning | a `.save` name the run's simulator stores nothing for: inside subcircuit instances, LTspice's other build's spelling, a first instance that names no instance in either spelling, or on ngspice a path spelled with colons, which ngspice-42 drops without a word. The finding gives the simulator's own spelling where it is known |
+| `save-meas-spelling-unestablished` | warning | a `.save` or `.meas` name inside subcircuit instances whose reading by the run's simulator is not established, so no rule refuses on it: a dotted path in an LTspice deck, a deck for an LTspice build whose spelling is not recorded or not known, or a first segment that names an instance in both spellings or one exported with a `§` |
+| `meas-subckt-node-unsaved-ltspice` | warning | LTspice, a deck with no `.save` list: a `.meas` of a node inside a subcircuit, spelled as the build stores it, which LTspice keeps only with its "Save subcircuit node voltages" setting, off by default on both builds; the measurement fails without it |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
-| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them |
+| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them: a `.lib <file> <section>` in the deck or any file it reaches |
+| `lib-without-section-ngspice` | blocking | ngspice in a mode that does not read `.lib` as an include (native, `hsa`, any mode with `s3`): a `.lib <file>` that names no section, which ngspice stops on ("unimplemented dot command '.lib'"), or an `.include` of a file that declares sections, whose own section line it stops on. The finding names the fix: a section the file declares, or `.include` for a file with none |
+| `lib-sections-dropped-ngspice` | blocking | ngspice in a mode that reads `.lib` as an include (`lt` or `ps` set, `kiltpsa` among them): a `.lib <file>` with no section, or an `.include`, of a file that declares sections. ngspice reads the file's own `.lib <section>` line as an include of a missing file and reads none of the file's cards; ngspice-42 then runs on without them (a wrong number), ngspice-45 stops. In the deck or any file it reaches |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
 | `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
-| `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
+| `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: a `.lib` line of more than one word that names no file. LTspice reads the rest of the line as one path, quoted or not, so `.lib file section` looks for a file named `file section` and stops; a path holding a space that does exist runs |
 | `step-without-values-ltspice` | blocking | refused by LTspice 26 and XVII: a `.step` with nothing after it, or `.step param <name>` with no values. `edit_schematic` refuses to write it and `verify_circuit`'s `syntax` check reports it |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
@@ -2360,6 +2829,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `include-relative` | warning | an include or library reference with a relative path, which depends on where the deck is placed |
 | `suffix-mega-milli` | warning | a number followed by an upper-case `M` that does not start `Meg` or `Mil`, which SPICE reads as milli |
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
+| `node-non-ascii-ngspice` | warning | ngspice: a node name holding a character beyond ASCII, each byte of which ngspice-42 replaces with `_`, so two names that differ only there are one node, shorted with no word in its output |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
 | `subckt-defined-twice` | blocking | a subcircuit name defined more than once at the top level of the deck, which the reader refuses: LTspice 26 (recorded). `verify_circuit`'s `syntax` check reports the same as `subckt_defined_twice`. ngspice (the first) and LTspice XVII (the last of two) run a definition, which every check reads, and get no finding |
@@ -2385,6 +2855,23 @@ each tool's `inputSchema`.
 
 ### A.1 Variation
 
+A case's id is `<circuit id>-case-<number>` (`variations.format_case_id`): the
+number counts that circuit's cases from 0, padded to four digits and wider
+past 9999, and names the case's staged deck (`case-<number>` and the deck's
+own extension, `.cir`, `.net` or `.sp`). The circuit
+id is the circuit's `id`, else its file stem made valid
+(`sanitize_circuit_id`), with `-2`, `-3` for a repeated stem
+(`derive_circuit_ids`, said in a `circuit_id_derived` observation). A run
+row's `run_index` counts the whole job's cases from 0, circuits in the order
+given. The order (`expand_variations`): circuits in the order given; entries
+in the order given, the last changing fastest; inside one grid entry the last
+target changing fastest; a zip entry pairing its targets; the samples of a
+`random` or `pdk_native` entry changing fastest of all, wherever that entry
+stands. A resume copies the job's cases and expands nothing again, so each
+keeps its id, run index and order. These are a contract a caller may write
+ids against before a job runs; `tests/test_case_ids_and_order.py` names the
+test that pins each.
+
 ```
 {kind: "assign", id?, combine: "grid"|"zip" (default grid),
  applies_to?: [circuit id],
@@ -2398,11 +2885,18 @@ each tool's `inputSchema`.
        (the corner idiom: {"M*@model": ["NTT", "NSS", "NFF"]})
     "INSTANCE:{delvto|mulu0}"            -> explicit per-instance mismatch
        value; "X1:delvto" for a single-FET body, or the qualified
-       "X1.M0:delvto" for a multi-FET body. Supported only on
-       ngspice-compatible BSIM3/4 devices through exactly one X -> M wrapper
-       level as this convenience spelling. Use an ordered `instances` selector
+       "X1.M0:delvto" for a multi-FET body. Supported only through
+       exactly one X -> M wrapper level as this convenience spelling, and
+       only where the simulator is known to apply the parameter to the
+       device's model (`subckt_mismatch.require_instance_parameter`): on
+       ngspice a BSIM3/4 model (`unsupported_model` otherwise); on LTspice
+       `delvto` on a level 54 model, the one its recordings show taken
+       (`instance_parameter_not_taken` where they show it refused or
+       ignored, `instance_parameter_unestablished` where none covers the
+       level). Use an ordered `instances` selector
        for arbitrary supported depth; never construct a selector by joining
-       segments with punctuation.
+       segments with punctuation. Refused on QSPICE and Xyce
+       (`mismatch_inside_subcircuit_unmodelled`).
   Otherwise, a declared .param name -> parameter substitution;
   else a component reference        -> value substitution;
   else                              -> ambiguous_target.
@@ -2463,7 +2957,10 @@ of the same name inside a `.subckt` body is another device and is left as
 it is. A
 `rule: "mismatch"` can also select a MOS inside subcircuits by its exact
 instance list, or every MOS inside a subcircuit instance by that instance's
-list. On ngspice such a device gets its draw as `delvto` and `mulu0` instance
+list. On QSPICE and Xyce, whose reading of a subcircuit body the server does
+not model, such a rule (an `instance` list, or a `prefix` that names an `X`
+instance) is refused with `mismatch_inside_subcircuit_unmodelled` before any
+case runs; run the deck on LTspice or ngspice. On ngspice such a device gets its draw as `delvto` and `mulu0` instance
 parameters, which needs its model to resolve to a BSIM3 or BSIM4 model.
 LTspice takes neither `mulu0` nor `delvto` on BSIM3, so there the device gets
 its own copy of its `.model` inside a private copy of its subcircuit, as a
@@ -2588,8 +3085,8 @@ it, and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed), `unreadable` or `not_finite`; its default row shows only those (§3.3) |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth. `errors`, `warnings` and `meas_errors` are built from the run's conditions, the source of `diagnostics`: each distinct line the simulator wrote an error or a warning word on is listed by that word (`log_conditions.said_lines`, `said_as`), a line with no word is in neither list, and a relayed line carries that word as its `severity`, or none. Past 50 distinct lines of one condition, `lines_left_out` gives how many more there were, by code. For QSPICE and Xyce, with no recorded wording, a line is read by the generic patterns the server used before it had recordings, under `simulator_error` and `simulator_warning` |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed) or `unreadable`, and a value printed once for a stepped run carries `printed_once`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran, dc, ac, noise | `signal` | `window?`, on tran and dc only; `quantiles?`, tran only — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes. An AC or FRA run gives the magnitude in dB and the phase; a noise run has no `mean`. `metrics.signal_stats_defined` decides which runs it reads, over a window or whole |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
@@ -2597,12 +3094,13 @@ it, and reported when the caller names it.
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7, held to 50), `window?` |
-| `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
+| `tone` | tran | `signal`, exactly one of `frequency_hz` / `frequency_param` | `frequency_param` names a parameter whose value at the step read (its `.step` value) or else the case's assignment is that run's frequency; a run with neither is refused. `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap. A ratio `A/B` (or `1/A`) is the phasor of `A` over that of `B` over the same whole periods: `amplitude` is the gain, `phase_deg` the shift, the components the quotient's real and imaginary parts, and there is no `dc`; a denominator with no component at the frequency is refused as singular, and one with under 1e-3 of its peak there is warned of |
+| `time_steps` | tran | — | reads the time axis, so no `signal`; `threshold_s?`, `window?`. Per run and per step: `points`, `min_step` and `min_step_at` (where it starts), `max_step`, `median_step`, `zero_steps` (pairs of stored points at one time, never a step), `t_start`, `t_end`; with `threshold_s`, `steps_below`, `first_below_at`, `last_below_at`. `stored` is `services.stored_time_points`' answer: `accepted`, `reduced` (LTspice XVII under waveform compression), `print_step` (ngspice under `.options interp`, read from the deck and the option cards ngspice reads, `ngspice_driver.read_option_cards`) or `not_checked` (LTspice 26, an unknown build or simulator, an unread card, or a run saved from a `.tran` start time), and every answer but `accepted` adds a `time_steps_coverage` observation (kind `coverage`) to the reply. ngspice stores no step it rejected (measured with `.options acct`); for LTspice that is not established. Reducible leaves: `min_step`, `median_step`, `max_step`, `points`, `zero_steps`, and `steps_below` with `threshold_s` |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
 | `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg`; `ref_hz` with `level_db` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias. `ref_hz` measures `level_db` from the gain at that frequency, read as `bode_point` reads it, so the half-power point below a reference is one call; the value's `level` is then the absolute level crossed, and its `reference` gives `frequency_hz`, `magnitude_db` and the relative `level_db`. A `ref_hz` outside the sweep is refused |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
-| `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
+| `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db`. On FRA results the crossover and phase margin are compared with the ones LTspice printed for the same analyzer and step: the reply's `observations` carry `fra_margin_differs` (kind `reconciliation`, both values and the forms of the signal whose margin agrees) when they differ beyond the printed digits, or `fra_margin_not_checked` (kind `coverage`, with why) when the log printed none; nothing when they agree |
 | `ac_structure` | ac | `signal` | structural poles and zeros |
 | `resonance` | ac | `signal` | resonant frequency, Q, peak; the bandwidth Q is taken from is read at the half-power level below the peak |
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
@@ -2616,7 +3114,10 @@ a node-pair voltage `V(a,b)`. No simulator writes a pair as a trace, so every
 reader computes `V(a) - V(b)` from the same raw, step and axis, complex on an
 AC run. `V(a,0)` and `V(a,gnd)` are `V(a)`, a missing node is named, and a
 `.noise` run refuses a pair because spectral densities do not subtract. The AC
-recipes also accept a ratio `A/B` of two such signals and a leading `-`. Other
+recipes and `tone` also accept a ratio `A/B` of two such signals, a reciprocal
+`1/A`, and one leading `-` that negates the whole expression
+(`metrics.signal_expression` is the one reader of these; no other operator is
+read). Other
 trace math is done in Python on `RawResult.trace`. A not-found error for an
 input that looks like an expression includes the Python snippet and names
 where to run it, which is `run_code` when the session serves it and the
@@ -2837,6 +3338,53 @@ to use the mode the server runs ngspice with; setting it changes only how this
 query reads the deck, so configure simulation to use the same mode. The
 reader's rules were established against ngspice for `hsa`, `kiltpsa` and the
 empty string (native SPICE mode).
+
+`data.values_read_otherwise` says which values of the files read an LTspice
+build this session may run reads as another number than the reply gives
+(`lib/stored_values.py`). The server reads a micro sign or a Greek mu at a
+value's suffix as micro, as a run through it does (staging spells it `u`).
+LTspice XVII decodes a deck stored as UTF-8, with or without a byte order
+mark, as 8-bit text, so it reads such a sign as two letters that are no scale
+and takes the bare number (`deck/micro_utf8`, `deck/micro_utf8_bom`,
+`deck/greek_mu_utf8`). The builds a session may run are its LTspice
+executables, the detected one and each named one
+(`services.session_ltspice_builds`): one identified as before 24 is LTspice
+XVII, a later one LTspice 26, and one whose build nothing shows stands for
+every recorded build, each summary about it carrying the `note` that the
+session's build was not identified. A session with no LTspice is told
+nothing.
+
+The list holds one summary per build and kind of reading (code
+`value_read_otherwise`), at most four whatever the number of files and
+values. A summary states its values completely by a `rule`, with no list:
+every value of the files read whose scale suffix is a micro sign, as a
+two-terminal part's own value (`reading: established`, where the recordings
+show the number the build takes), or in any other position or an encoding no
+recording shows for the build (`reading: not_established`). It gives the
+totals (`count` values in `files` files), at most three files in `by_file`,
+each with its codec, its count and at most three `examples` (value, line, the
+server's number, the text the build reads, the number it takes), and
+`files_not_listed`. A file's `listed_by` names the call that lists each of its
+values with the build's reading, `verify_circuit` with the syntax check, and
+is present only for a netlist that call checks: an included library or a
+sheet has none. The syntax check's micro-sign finding gives each value its
+reading by every build the session may run; its presence and severity are
+unchanged. The list is deck-level and is carried on every page, as `profile`
+and `inputs` are. The same list rides on `verify_circuit`'s and
+`edit_schematic`'s `comparison`, and on a run's receipt as one
+`value_read_otherwise` observation per summary, over every staged file.
+
+A sheet read as the server's export of it is stated by the sheet's own bytes,
+not the export's: the export is the server's file, and LTspice 26 writes a
+part's `u` as a micro sign there whatever the sheet says. A value counts where
+the server read the export's sign as micro and the sheet's own text for it,
+read by the sheet parser (the part's value attribute, or the directive; a
+comment is never a value), holds that value with the sign; it is stated at
+that text's line. Both builds read a UTF-8 sheet byte by byte
+(`export/micro_utf8`, `export/greek_mu_utf8`) and a cp1252 or UTF-16 sheet's
+sign as micro (`export/micro_cp1252`, `export/micro_utf16le`). A sheet that
+cannot be read is listed under `values_read_otherwise_not_checked`, since an
+absent summary reads as checked.
 
 When an ngspice executable is available, `data.ngspice_check` reports how the
 values discovery resolved compare with the ones ngspice reads

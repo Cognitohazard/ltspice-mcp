@@ -392,12 +392,13 @@ class FakeXVII(FakeSim):
     spice_exe: typing.ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
 
 
-@pytest.mark.parametrize("codec", ["utf-8", "utf-8-sig", "utf-16"])
+@pytest.mark.parametrize("codec", ["utf-8", "utf-8-sig"])
 async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xvii(
     config, work_dir, codec
 ):
-    """LTspice XVII decodes a deck as cp1252, so a µ in any other encoding
-    reaches it as other characters and the value runs without its scale."""
+    """LTspice XVII decodes a UTF-8 deck as cp1252, so a µ reaches it as two
+    other characters and the value runs without its scale (deck/micro_utf8,
+    deck/micro_utf8_bom)."""
     state = SessionState.create(config, available={"ltspice": FakeXVII})
     deck = work_dir / "rc.net"
     deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23µ\n.end\n".encode(codec))
@@ -412,7 +413,28 @@ async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xv
     assert finding["evidence"]["suffix"] == "U+00B5"
     assert finding["evidence"]["reader"] == FakeXVII.spice_exe[0]
     assert finding["evidence"]["card"] == "C1 out 0 23µ"
+    (read,) = finding["evidence"]["read_otherwise"]
+    assert (read["build"], read["build_reads"], read["build_number"]) == (
+        "LTspice XVII",
+        "23Âµ",
+        23.0,
+    )
     assert data["outcome"] == "partial"
+
+
+async def test_a_utf16_micro_sign_read_by_xvii_stays_an_observation(config, work_dir):
+    """LTspice XVII reads a µ stored as UTF-16, with a mark or without, as
+    micro (deck/micro_utf16le_bom, deck/micro_utf16le): nothing is misread."""
+    state = SessionState.create(config, available={"ltspice": FakeXVII})
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23µ\n.end\n".encode("utf-16"))
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
+    assert finding["severity"] == "observation"
+    assert "Every recorded LTspice build reads them as micro" in finding["evidence"]["reason"]
+    assert data["outcome"] == "complete"
 
 
 async def test_a_cp1252_micro_sign_read_by_xvii_stays_an_observation(config, work_dir):
@@ -495,8 +517,11 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
     )
 
 
-async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, work_dir):
-    """60 values spelled with µ are 25 findings and an entry counting the rest."""
+async def test_micro_sign_warnings_past_the_reply_target_are_cut_like_every_finding(
+    config, work_dir
+):
+    """60 values spelled with µ are over the reply target: the reply holds the
+    findings that fit and an entry counting the rest."""
     state = SessionState.create(config, available={"ltspice": FakeXVII})
     cards = "".join(f"C{i} n{i} 0 {i + 1}µ\n" for i in range(60))
     deck = work_dir / "many.net"
@@ -505,10 +530,10 @@ async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, 
     data = await _run(state, path=str(deck), checks=["syntax"])
 
     shown = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
-    assert len(shown) == vc.FINDING_RULE_CAP
+    assert 1 <= len(shown) == data["cut"]["/findings"]["returned"] < 60
     omitted = data["findings_omitted"]["value_suffix_micro_sign"]
-    assert (omitted["omitted"], omitted["total"]) == (60 - vc.FINDING_RULE_CAP, 60)
-    # The hint counts what the check found, not the capped list it shows.
+    assert (omitted["omitted"], omitted["total"]) == (60 - len(shown), 60)
+    # The hint counts what the check found, not the cut list it shows.
     assert "60 warning(s): value_suffix_micro_sign" in data["hint"]
 
 
@@ -681,6 +706,9 @@ async def test_syntax_flags_trig_in_a_measurement_on_ltspice(state_no_sim, work_
     ]
     assert {f["severity"] for f in found} == {"error"}
     assert found[0]["evidence"]["reason"] == MEAS_ANGLE_REASON
+    # verify_circuit has no suppress: the reason names run_experiments' own.
+    assert 'run_experiments\' suppress: ["meas-trig-degrees"]' in MEAS_ANGLE_REASON
+    assert "left at its default (off)" in MEAS_ANGLE_REASON
 
 
 def _export_writing_a_micro_sign(_cls, asc_path, timeout=0):
@@ -978,7 +1006,7 @@ async def test_quality_reports_a_part_giving_a_parameter_twice(
     assert quality["rules_run"]["duplicate_parameter"] == 1
 
 
-async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
+async def test_the_complete_answer_holds_every_finding_and_a_reply_that_fits_sends_them(
     state_no_sim,
     work_dir,
     monkeypatch,
@@ -991,7 +1019,7 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
             refs=(f"R{index}.1",),
             points=((index * 16, 0),),
         )
-        for index in range(vc.FINDING_RULE_CAP + 7)
+        for index in range(32)
     ]
 
     def crowded_scene(path, _state, *, checks):
@@ -1002,19 +1030,17 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     args = VerifyCircuitInput(path=str(asc), checks=["layout"])
     neutral = await evaluate_verify_circuit(args, state_no_sim)
     full = [f for f in neutral.data["findings"] if f["rule_id"] == "floating_pin"]
-    assert len(full) == vc.FINDING_RULE_CAP + 7
+    assert len(full) == 32
     assert "findings_omitted" not in neutral.data
-    assert neutral.data["rules_run"]["floating_pin"] == vc.FINDING_RULE_CAP + 7
+    assert neutral.data["rules_run"]["floating_pin"] == 32
 
     mcp = await handle_verify_circuit(args, state_no_sim)
     data = _assert_schema(mcp)
     shown = [finding for finding in data["findings"] if finding["rule_id"] == "floating_pin"]
-    assert shown == full[: vc.FINDING_RULE_CAP]
-    assert len(full) - len(shown) == 7
-    # The count of a rule is of what it found, not of what the reply shows.
+    # More than the 25 a rule a reply once listed, and the reply fits.
+    assert shown == full
     assert data["rules_run"]["floating_pin"] == len(full)
-    omitted = data["findings_omitted"]["floating_pin"]
-    assert (omitted["omitted"], omitted["total"]) == (7, len(full))
+    assert "findings_omitted" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -1339,7 +1365,7 @@ async def test_equivalence_compares_each_subcircuit_s_own_directives(
     ("reference", "candidate", "files", "equivalence_says", "structural_diff_says"),
     [
         (_amp(), _amp(".param g=3\n"), {}, False, False),
-        (_amp(), _amp("", top=".param g=2\n"), {}, False, True),
+        (_amp(), _amp("", top=".param g=2\n"), {}, False, False),
         (
             "* t\nV1 in 0 5\nX1 in 0 DIV\n.subckt DIV a b\nR1 a b 1k\n.ends DIV\n.end\n",
             "* t\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n",
@@ -1359,7 +1385,7 @@ async def test_equivalence_compares_each_subcircuit_s_own_directives(
     ],
     ids=[
         "both_tell_a_body_s_param_apart",
-        "a_param_moved_from_a_body_to_the_top_differs_in_equivalence_only",
+        "a_param_moved_from_a_body_to_the_top_differs_in_both",
         "a_definition_moved_into_an_include_differs_in_structural_diff_only",
         "an_uncalled_subcircuit_differs_in_structural_diff_only",
     ],
@@ -1634,7 +1660,7 @@ def test_two_unparseable_decks_are_not_equivalent(work_dir):
     )
     assert failure is None
     assert comparison is not None
-    assert not any(comparison[key] for key in STRUCTURAL_DELTA_PROPS), (
+    assert not any(comparison.get(key) for key in _DELTA_LISTS), (
         "precondition: the delta really is empty, the shape that read as a match"
     )
     assert comparison["equivalent"] is None
@@ -1705,13 +1731,17 @@ _AMP_BY_HAND = (
 )
 
 
+#: The delta's lists of what it found; not_compared says what it did not look at.
+_DELTA_LISTS = tuple(key for key in STRUCTURAL_DELTA_PROPS if key != "not_compared")
+
+
 def _empty_delta() -> dict[str, list]:
-    return {key: [] for key in STRUCTURAL_DELTA_PROPS}
+    return {key: [] for key in _DELTA_LISTS}
 
 
 def _delta(comparison: dict) -> dict[str, list]:
     # An empty list of changes is left out of the reply, so it reads as empty here.
-    return {key: comparison.get(key, []) for key in STRUCTURAL_DELTA_PROPS}
+    return {key: comparison.get(key, []) for key in _DELTA_LISTS}
 
 
 @pytest.fixture

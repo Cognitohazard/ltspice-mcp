@@ -6,26 +6,31 @@ For .raw file parsing (waveform data, statistics), see raw_parser.py.
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
+import math
 import re
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from uuid import uuid4
 
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
 from ltspice_mcp.lib.log_conditions import classify_channels, log_lines, rules_for
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
 from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
+from ltspice_mcp.lib.log_types import PrintedOnce
+from ltspice_mcp.lib.log_types import result_unreadable as result_unreadable
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build, which_ltspice
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.store import parser_file_in
@@ -507,8 +512,8 @@ def read_device_op_points(
 
 def device_key(device: str, param: str) -> str:
     """The key ``read_device_op_points`` files a device parameter under:
-    ``@m1[gm]``, lowercased."""
-    return f"@{device.lower()}[{param.lower()}]"
+    ``@m1[gm]``, folded (``device_names.fold_name``)."""
+    return f"@{fold_name(device)}[{fold_name(param)}]"
 
 
 def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
@@ -693,7 +698,7 @@ def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] 
     return "execution_failed", None
 
 
-def _op_block_recovered(lines: list[str], idx: int) -> bool:
+def _op_block_recovered(lines: Sequence[str], idx: int) -> bool:
     """Whether the OP-solve block holding a stepping-failure at ``idx`` converged.
 
     LTspice escalates within one solve (Direct Newton -> Gmin -> Source stepping
@@ -720,12 +725,121 @@ def _op_block_recovered(lines: list[str], idx: int) -> bool:
     return False
 
 
+class LineReading(NamedTuple):
+    """What the line classifier reads at one line of a log: ``kind`` the list
+    it puts the text in (None for neither), ``text`` as listed, and ``taken``
+    how many lines it consumed."""
+
+    kind: Literal["error", "warning"] | None
+    text: str
+    taken: int
+
+
+def classify_line(lines: Sequence[str], i: int) -> LineReading:
+    """The line classifier's reading of ``lines[i]`` and the lines it takes
+    with it: the one place its patterns are applied. :func:`extract_log_diagnostics`
+    lists by it, and ``log_conditions`` reads a log by it for a simulator whose
+    wording has no recordings (the ``unverified`` rule set)."""
+    line = lines[i]
+    stripped = line.strip()
+
+    # filepath(line): message — collect the block (source line + caret)
+    if _RE_FILE_ERROR.match(line):
+        block = [stripped]
+        # Grab following source line + caret if present
+        j = i + 1
+        while j < len(lines) and j <= i + 2:
+            next_stripped = lines[j].strip()
+            if not next_stripped:
+                break
+            block.append(next_stripped)
+            if _RE_CARET.match(lines[j]):
+                j += 1
+                break
+            j += 1
+        return LineReading("error", "\n".join(block), j - i)
+
+    # Fatal Error:
+    if _RE_FATAL.match(stripped):
+        # LTspice XVII ends "Unknown subcircuit called in:" with the colon
+        # and gives the card on the next line; the two are one message.
+        follows = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if stripped.endswith(":") and follows:
+            return LineReading("error", f"{stripped} {follows}", 2)
+        return LineReading("error", stripped, 1)
+
+    # Error on line N:, and a bare "Error:" / "ERROR:" prefix (floating node,
+    # circuit-not-parsed, ...)
+    if _RE_LINE_ERROR.match(stripped) or _RE_ERROR.match(stripped):
+        return LineReading("error", stripped, 1)
+
+    # ngspice convergence FAILURES arrive "Warning:"-prefixed; classify the
+    # terminal ones as errors (substring match, so the prefix is ignored)
+    # before the generic warning rule below would downgrade a no-data run.
+    stripped_lower = stripped.lower()
+    # Gmin/source stepping "failed" is an intermediate escalation rung on
+    # LTspice — drop it when THIS solve block later converged; keep it as an
+    # error otherwise (ngspice no-data run, or a step that never converged).
+    if is_op_stepping_failure(stripped):
+        recovered = _op_block_recovered(lines, i)
+        return LineReading(None if recovered else "error", stripped, 1)
+    if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
+        return LineReading("error", stripped, 1)
+
+    # Warning: / WARNING: / Warning --
+    if _RE_WARNING.match(stripped):
+        return LineReading("warning", stripped, 1)
+
+    # Bare convergence / runtime phrases — anchored at start of line to
+    # avoid false positives on lines that merely contain the phrase as a
+    # substring (e.g., "the singular matrix decomposition succeeded").
+    if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
+        return LineReading("error", stripped, 1)
+    if _RE_UNSOLVABLE_MATRIX.search(stripped) or _RE_COMPONENT_REFUSAL.match(stripped):
+        return LineReading("error", stripped, 1)
+
+    # ngspice-specific diagnostics
+    if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
+        return LineReading(
+            "warning",
+            stripped + " Use the analyze_results 'signal_stats' or 'value' "
+            "recipes for post-processing.",
+            1,
+        )
+    if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
+        return LineReading(
+            "warning",
+            stripped + " ngspice skips .four when writing a rawfile; the "
+            "analyze_results 'tone' and 'thd' recipes read harmonics from the raw.",
+            1,
+        )
+    if _RE_NGSPICE_UNIMPLEMENTED.search(stripped):
+        return LineReading("error", stripped, 1)
+    m_note = _RE_NGSPICE_NOTE.match(stripped)
+    if m_note:
+        note_body = m_note.group(1).strip()
+        if not any(skip in note_body.lower() for skip in _NGSPICE_NOTE_SKIP):
+            return LineReading("warning", stripped, 1)
+    return LineReading(None, stripped, 1)
+
+
 def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     """Extract structured warnings and errors from a simulator log file.
 
     ``conditions`` is what the log and its console capture say under every set
     of rules ``log_conditions`` has, without knowing who wrote them; a reader
     picks its producer's set with ``log_conditions.run_diagnostics``.
+
+    How severe the simulator called a line, as any reply shows it, is the
+    conditions' answer (``log_conditions.said_as``): the ``summary`` recipe's
+    errors, warnings and ``meas_errors`` and its relays read them. The
+    ``errors`` and ``warnings`` lists here are kept for readers that ask
+    something else of the lines, each named in
+    ``tests/test_summary_says_what_the_run_row_says.py``: whether a run failed
+    (``runner_base.collect_run_outcome``), whether the simulator refused the
+    deck before it ran (``log_decode.decode_logs``, ``empty_measurements``),
+    and which lines name a failed solve or an unrecognized variable
+    (``services.solve_failure_lines``, ``metrics.read_log_warnings``).
 
     Detects all known LTspice diagnostic patterns:
     - filepath(line): message + source line + ^^^ caret blocks
@@ -779,132 +893,28 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     lines = log_lines(content)
     i = 0
     while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-
-        # filepath(line): message — collect the block (source line + caret)
-        if _RE_FILE_ERROR.match(line):
-            block = [stripped]
-            # Grab following source line + caret if present
-            j = i + 1
-            while j < len(lines) and j <= i + 2:
-                next_stripped = lines[j].strip()
-                if not next_stripped:
-                    break
-                block.append(next_stripped)
-                if _RE_CARET.match(lines[j]):
-                    j += 1
-                    break
-                j += 1
-            full_block = "\n".join(block)
-            errors.append(full_block)
-
-            # If the source line in the block is a .MEAS directive, classify
-            # it as a meas_error and attach a suggestion when the failure
-            # matches a known pattern. The source line is the second entry
-            # in the block (first is "file(line): message").
-            if len(block) >= 2:
+        reading = classify_line(lines, i)
+        head = lines[i]
+        i += reading.taken
+        if reading.kind == "warning":
+            warnings.append(reading.text)
+        elif reading.kind == "error":
+            errors.append(reading.text)
+            # A ``filepath(line): message`` block whose source line is a .MEAS
+            # directive is a meas_error, with a suggestion when the failure
+            # matches a known pattern (the source line is the block's second).
+            block = reading.text.split("\n")
+            if _RE_FILE_ERROR.match(head) and len(block) >= 2:
                 source_line = block[1].lstrip()
                 if source_line.lower().startswith(".meas"):
                     val_err = validate_directive(source_line, simulator="LTspice")
                     meas_errors.append(
                         {
                             "directive": source_line,
-                            "raw_block": full_block,
+                            "raw_block": reading.text,
                             "suggestion": val_err.suggestion if val_err else None,
                         }
                     )
-            i = j
-            continue
-
-        # Fatal Error:
-        if _RE_FATAL.match(stripped):
-            # LTspice XVII ends "Unknown subcircuit called in:" with the colon
-            # and gives the card on the next line; the two are one message.
-            follows = lines[i + 1].strip() if i + 1 < len(lines) else ""
-            if stripped.endswith(":") and follows:
-                errors.append(f"{stripped} {follows}")
-                i += 2
-                continue
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # Error on line N:
-        if _RE_LINE_ERROR.match(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # Bare "Error:" / "ERROR:" prefix (floating node, circuit-not-parsed, ...)
-        if _RE_ERROR.match(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # ngspice convergence FAILURES arrive "Warning:"-prefixed; classify the
-        # terminal ones as errors (substring match, so the prefix is ignored)
-        # before the generic warning rule below would downgrade a no-data run.
-        stripped_lower = stripped.lower()
-        # Gmin/source stepping "failed" is an intermediate escalation rung on
-        # LTspice — drop it when THIS solve block later converged; keep it as an
-        # error otherwise (ngspice no-data run, or a step that never converged).
-        if is_op_stepping_failure(stripped):
-            if not _op_block_recovered(lines, i):
-                errors.append(stripped)
-            i += 1
-            continue
-        if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # Warning: / WARNING: / Warning --
-        if _RE_WARNING.match(stripped):
-            warnings.append(stripped)
-            i += 1
-            continue
-
-        # Bare convergence / runtime phrases — anchored at start of line to
-        # avoid false positives on lines that merely contain the phrase as a
-        # substring (e.g., "the singular matrix decomposition succeeded").
-        if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
-            errors.append(stripped)
-            i += 1
-            continue
-        if _RE_UNSOLVABLE_MATRIX.search(stripped) or _RE_COMPONENT_REFUSAL.match(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-
-        # ngspice-specific diagnostics
-        if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
-            warnings.append(
-                stripped + " Use the analyze_results 'signal_stats' or 'value' "
-                "recipes for post-processing."
-            )
-            i += 1
-            continue
-        if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
-            warnings.append(
-                stripped + " ngspice skips .four when writing a rawfile; the "
-                "analyze_results 'tone' and 'thd' recipes read harmonics from the raw."
-            )
-            i += 1
-            continue
-        if _RE_NGSPICE_UNIMPLEMENTED.search(stripped):
-            errors.append(stripped)
-            i += 1
-            continue
-        m_note = _RE_NGSPICE_NOTE.match(stripped)
-        if m_note:
-            note_body = m_note.group(1).strip()
-            if not any(skip in note_body.lower() for skip in _NGSPICE_NOTE_SKIP):
-                warnings.append(stripped)
-            i += 1
-            continue
-
-        i += 1
 
     return {
         "warnings": _collapse_repeats(warnings),
@@ -1261,6 +1271,15 @@ def prints_measurement(line: str) -> bool:
     return _printed_on(line) is not None
 
 
+def failed_measurement_on(line: str) -> str | None:
+    """The measurement a log's ``line`` says LTspice could not take, as
+    printed (``Measurement "name" FAIL'ed``), or None. The one reading of
+    such a line: :func:`printed_measurements` and the log classifier
+    (``log_conditions``) both ask it."""
+    failed = _RE_MEAS_FAILED.search(line)
+    return failed[1] if failed is not None else None
+
+
 def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
     """Every measurement a log printed, by name in lower case, in the order
     printed: each result line of a run with no ``.step``, each table heading
@@ -1285,8 +1304,8 @@ def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
                     found = PrintedMeasurement(
                         found.line, columns=tuple(columns["columns"].split("\t"))
                     )
-        elif (failed := _RE_MEAS_FAILED.search(line)) is not None:
-            name, found = failed[1], PrintedMeasurement(line.strip())
+        elif (failed := failed_measurement_on(line)) is not None:
+            name, found = failed, PrintedMeasurement(line.strip())
         else:
             continue
         measurements.setdefault(name.lower(), found)
@@ -1552,6 +1571,103 @@ def _zero_steps_reason(producer: Producer, form: str) -> str | None:
     )
 
 
+def _other_steps(solves: int) -> str:
+    """Where the values of a stepped .op's other steps are, which its log
+    does not hold (:func:`_printed_once`, :func:`printed_once_refusal`)."""
+    return (
+        f"The values of the other {solves - 1} steps are not in the log: read each "
+        "step's from the run's results, with the 'value' recipe and all_steps=true "
+        "for a trace, or a recipe over the measurement's own expression."
+    )
+
+
+def printed_once_refusal(table: Mapping[str, Any], asked: str) -> str | None:
+    """Why a request for one step (``asked``, as the caller wrote it) of a
+    log's measurements cannot be read, where the log printed each of them
+    once for a run of several steps (``printed_once``,
+    :func:`answered_measurements`); None for any other log.
+
+    The refusal takes its answer from the entries' own statement: how many
+    steps the run had, which step the printed value is where a recording
+    establishes it, and how to read the others. Every route that takes a
+    step for a measurement asks it, so none says the run has one step."""
+    once = next(
+        (
+            entry["printed_once"]
+            for entry in table.get("measurements", {}).values()
+            if "printed_once" in entry
+        ),
+        None,
+    )
+    if once is None:
+        return None
+    count = once["step_count"]
+    which = (
+        f"It is step {once['step']}'s value, the first"
+        if "step" in once
+        else "Which step's value it is is not established"
+    )
+    return (
+        f"{asked} cannot be read from this log: it printed one value for each "
+        f"measurement of a run of {count} steps, with no .step line to choose a step "
+        f"by. {which}; read it with no step chosen. {_other_steps(count)}"
+    )
+
+
+def _printed_once(producer: Producer, solves: int) -> PrintedOnce:
+    """What a measurement printed on one line of a log whose run solved its
+    operating point ``solves`` times, with no ``.step`` line, says of its
+    step: a stepped ``.op``.
+
+    LTspice 26 prints one line for each measurement of a stepped ``.op``
+    (recorded: log/meas_step_op, three steps). The line holds the first
+    step's value: raw/step_op runs the same divider over the same steps, and
+    its results file holds V(out) 0.8, 1.6 and 2.4, where the log printed
+    0.800000011921. Which build wrote the log is :func:`which_ltspice`'s
+    answer. Only LTspice 26 is recorded, so the step is established for it
+    alone: for another current release (24, 25 or later), XVII, which printed
+    no such line in the recording, IV, and a log no evidence names, it is
+    not. The values of the other steps are not in the log either way."""
+    others = _other_steps(solves)
+    found = which_ltspice(producer.program, producer.build)
+    if found is not None and found.generation == "current" and found.major == 26:
+        return {
+            "step_count": solves,
+            "step": 0,
+            "reason": (
+                f"The log printed this value once for a run of {solves} steps (its "
+                f"operating point was solved {solves} times, with no .step line). It "
+                "is the first step's: LTspice 26 prints the first step's value of a "
+                "stepped .op (recorded: log/meas_step_op, compared with the results "
+                f"file of raw/step_op). {others}"
+            ),
+        }
+    if found is None:
+        who = (
+            "the log does not show which LTspice wrote it, and a recording "
+            "establishes the step for LTspice 26 alone"
+        )
+    elif found.generation == "current":
+        release = f"LTspice {found.major}" if found.major is not None else "An LTspice 24 or later"
+        who = (
+            f"{release} wrote it, and a recording establishes the step for "
+            "LTspice 26 alone"
+        )
+    else:
+        who = (
+            f"LTspice {'XVII' if found.generation == 'xvii' else 'IV'} wrote it, and "
+            "no recording shows which step's value that build prints for a stepped .op"
+        )
+    return {
+        "step_count": solves,
+        "reason": (
+            f"The log printed this value once for a run of {solves} steps (its "
+            f"operating point was solved {solves} times, with no .step line), and "
+            f"which step's value it is is not established: {who}. {others}"
+        ),
+    }
+
+
 def answered_measurements(
     table: MeasurementsOutput, producer: Producer, cards: Mapping[str, CardKind] | None = None
 ) -> MeasurementsOutput:
@@ -1566,6 +1682,14 @@ def answered_measurements(
     ``not_established`` gives the steps, from 0, and why. A step it names is
     not in ``failed_measurements``, which means the log printed ``failed``.
 
+    Where the log printed its measurements on lines for a run whose
+    operating point it solved more than once, with no ``.step`` line (a
+    stepped ``.op``: ``op_solves``), each line's entry says so in
+    ``printed_once``: how many steps the run had, the step whose value the
+    line holds where a recording establishes it (:func:`_printed_once`), and
+    how to read the others. This is the one answer to which step such a
+    value belongs to.
+
     A ``producer`` that names no build is read with the build the log's own
     first line names (``printed_by``), as the run named itself there; the
     decoder read it in the parser's process, so a reader of the log alone
@@ -1573,6 +1697,12 @@ def answered_measurements(
     banner = table.get("printed_by")
     if banner is not None and producer.build is None:
         producer = Producer(producer.family or "ltspice", banner, producer.program)
+    solves = table.get("op_solves")
+    once = (
+        _printed_once(producer, solves)
+        if solves is not None and producer.family in (None, "ltspice")
+        else None
+    )
     entries: dict[str, MeasurementEntry] = {}
     # Why a 0 is not established, by printed form, read once per table.
     zero_reasons: dict[str, str | None] = {}
@@ -1592,24 +1722,13 @@ def answered_measurements(
             if reason is not None:
                 answered["values"] = [None if v == 0 else v for v in entry["values"]]
                 answered["not_established"] = {"steps": zeros, "reason": reason}
+        if once is not None and str(form).startswith("line"):
+            answered["printed_once"] = once
         entries[name] = answered  # type: ignore[assignment]
     answered_table: dict[str, Any] = {
-        key: value for key, value in table.items() if key != "printed_by"
+        key: value for key, value in table.items() if key not in ("printed_by", "op_solves")
     }
     return {**answered_table, "measurements": entries}  # type: ignore[typeddict-item]
-
-
-def result_unreadable(entry: Mapping[str, Any]) -> Any:
-    """Why an answered measurement entry's result could not be read, or None.
-
-    An entry's ``unreadable`` says its ``values`` were printed as other than a
-    number. That is its result unless ``answer`` names ``at``: a WHEN with no
-    FIND printed its threshold there, the level it searched for, and its
-    result is the crossing, which reads. An entry whose answer is not known
-    is named by ``answer_unknown`` alone, so each null has one reason."""
-    if entry.get("answer") == "at" or "answer_unknown" in entry:
-        return None
-    return entry.get("unreadable")
 
 
 _RE_FOURIER_NAN = re.compile(
@@ -1703,6 +1822,84 @@ _REAL_ANGLE_TOLERANCE = 1e-9
 _RE_PRINTED_WITH_UNIT = re.compile(
     r"(?P<number>[-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
 )
+
+
+#: The line LTspice 26 prints at the end of an unstepped frequency response
+#: analysis's log, one per analyzer (the recorded raw/fra):
+#: ``FRA Instance @1: F(0dB) = 15.900 kHz, Phase Margin = 90.6 degrees, ...``.
+_RE_FRA_RESULT = re.compile(
+    r"^FRA Instance (?P<analyzer>@\S+): F\(0dB\) = (?P<crossover>\d+(?:\.\d*)?) "
+    r"(?P<prefix>[kMG]?)Hz, Phase Margin = (?P<margin>-?\d+(?:\.\d*)?) degrees"
+)
+#: A stepped run prints a table per analyzer instead (the recorded
+#: raw/fra_step): ``Measurement: PhaseMargin_1``, a ``step PhaseMargin at``
+#: heading, then one row a step, ``     1<TAB>90.6295°<TAB>15900.4``.
+_RE_FRA_TABLE = re.compile(r"^Measurement: PhaseMargin_(?P<analyzer>\S+)$")
+_RE_FRA_ROW = re.compile(
+    r"^(?P<step>[1-9]\d*)\t(?P<margin>-?\d+(?:\.\d*)?)°\t(?P<crossover>\d+(?:\.\d*)?)$"
+)
+_SI_PREFIX = {"": 1.0, "k": 1e3, "M": 1e6, "G": 1e9}
+
+
+def _last_digit(printed: str) -> float:
+    """The value of one unit in the last digit of a number as printed."""
+    _, dot, fraction = printed.partition(".")
+    return 10.0 ** -len(fraction) if dot else 1.0
+
+
+def _fra_margin(analyzer: str, step: int, crossover: str, scale: float, margin: str) -> dict:
+    return {
+        "analyzer": analyzer,
+        "step": step,
+        "crossover_hz": float(crossover) * scale,
+        "crossover_digit_hz": _last_digit(crossover) * scale,
+        "phase_margin_deg": float(margin),
+        "phase_margin_digit_deg": _last_digit(margin),
+    }
+
+
+def printed_fra_margins(text: str) -> list[dict[str, Any]]:
+    """The crossover and phase margin LTspice printed for each analyzer and
+    step of a frequency response analysis, as printed: each with the size of
+    the last digit it was printed to (``crossover_digit_hz``,
+    ``phase_margin_digit_deg``), which is how far a value that agrees with it
+    can differ.
+
+    An unstepped run prints one line per analyzer (step 0); a stepped one a
+    ``PhaseMargin_<analyzer>`` table with a row a step, its ``at`` column the
+    crossover. A step whose margin is printed in another form (not a finite
+    number of degrees) has no entry, and neither has a line in another form
+    than the recorded one, so a comparison with it says it was not made.
+    """
+    found = []
+    table: str | None = None
+    for raw_line in io.StringIO(text):
+        line = raw_line.strip()
+        if (match := _RE_FRA_RESULT.match(line)) is not None:
+            found.append(
+                _fra_margin(
+                    match["analyzer"],
+                    0,
+                    match["crossover"],
+                    _SI_PREFIX[match["prefix"]],
+                    match["margin"],
+                )
+            )
+            continue
+        if (match := _RE_FRA_TABLE.match(line)) is not None:
+            table = "@" + match["analyzer"]
+            continue
+        if table is None or not line or line.startswith("step\t"):
+            if not line:
+                table = None
+            continue
+        if (match := _RE_FRA_ROW.match(line)) is not None:
+            found.append(
+                _fra_margin(
+                    table, int(match["step"]) - 1, match["crossover"], 1.0, match["margin"]
+                )
+            )
+    return found
 
 
 def printed_measurement(value: str) -> float | None:
@@ -1840,34 +2037,59 @@ def parse_measurements(
         # tool surfaces the reason.
         return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
-    # A value LTspice printed that is not a number (a WHEN's threshold written
-    # as a parameter, an expression or a braced expression) fails its own
-    # entry, not the table: name (as the reader keys it) -> the text it printed.
+    # A value LTspice printed that is not a number fails its own entry, not
+    # the table: a WHEN's threshold written as a parameter, an expression or a
+    # braced expression, and a number that is not finite, which no reply can
+    # carry (LTspice 26 prints a stepped .fra run's gain margin as 'infdB'
+    # where the loop's phase never crosses: raw/fra_step). This is the one
+    # place that says why such a value is null: name (as the reader keys it)
+    # -> the text it printed, whether that text is a number that is not
+    # finite, and the steps, from 0, it was printed at.
     unreadable: dict[str, str] = {}
+    not_finite: set[str] = set()
+    unreadable_steps: dict[str, list[int]] = {}
     # The rows of a stepped table where LTspice 24 and later print 'failed'
     # (recorded: log/meas_step): name -> the steps, from 0.
     failed_rows: dict[str, list[int]] = {}
 
-    def _coerce(values: list, name: str) -> list[float | None]:
+    def _unread(name: str, index: int, printed: str, *, finite_text: bool) -> None:
+        unreadable.setdefault(name, printed)
+        if not finite_text:
+            not_finite.add(name)
+        unreadable_steps.setdefault(name, []).append(index)
+
+    def _coerce(values: list, name: str, *, metadata: bool = False) -> list[float | None]:
         out: list[float | None] = []
         for index, val in enumerate(values):
+            number: float | None
             if isinstance(val, str) and val.upper() == "FAILED":
                 failed_rows.setdefault(name, []).append(index)
                 out.append(None)
-            elif val is None:
+                continue
+            if val is None:
                 out.append(None)
-            elif isinstance(val, complex):
-                out.append(_complex_measurement(val))
+                continue
+            if isinstance(val, complex):
+                number = _complex_measurement(val)
             elif hasattr(val, "item") and not isinstance(val, str):
-                out.append(float(val.item()))  # numpy scalar
+                number = float(val.item())  # numpy scalar
             elif isinstance(val, str) and (number := printed_measurement(val)) is not None:
-                out.append(number)
+                pass
             else:
                 try:
-                    out.append(float(val))
+                    number = float(val)
                 except (TypeError, ValueError):
-                    unreadable.setdefault(name, str(val))
+                    _unread(name, index, str(val), finite_text=True)
                     out.append(None)
+                    continue
+            # A point or bound beside the result (``at``, ``from``, ``to``) that
+            # is not finite is not the result: it is kept as read, and the log
+            # section holds it as null and counts it, as before.
+            if not math.isfinite(number) and not metadata:
+                _unread(name, index, str(val), finite_text=False)
+                out.append(None)
+                continue
+            out.append(number)
         return out
 
     # Pass 1: split flat names into parent + metadata-suffix.
@@ -1878,10 +2100,15 @@ def parse_measurements(
         if name in skipped:
             parents[name] = _coerce([skipped[name]], name)
             continue
-        coerced = _coerce(reader.dataset.get(name.lower(), []), name)
         suffix_match = next(
             ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
             None,
+        )
+        coerced = _coerce(
+            reader.dataset.get(name.lower(), []),
+            name,
+            metadata=suffix_match is not None
+            and name[: -len(suffix_match[0])] in measure_name_set,
         )
         if suffix_match:
             suffix, meta_key = suffix_match
@@ -1934,23 +2161,36 @@ def parse_measurements(
         # ``vth^2`` as ``vth``, so a result line's value is taken from what it
         # printed. A stepped table's cell or a metadata value has no such text,
         # and is quoted as the reader holds it.
-        printed = (
-            (shown.value if shown is not None and shown.value is not None else unreadable[name])
+        unread_as = (
+            name
             if name in unreadable
             else next(
                 (
-                    unreadable[meta]
+                    meta
                     for suffix, _key in _MEAS_METADATA_SUFFIXES
                     if (meta := name + suffix) in unreadable
                 ),
                 None,
             )
         )
-        if printed is not None:
+        if unread_as is not None:
+            printed = (
+                shown.value
+                if unread_as == name and shown is not None and shown.value is not None
+                else unreadable[unread_as]
+            )
             entry["unreadable"] = {
                 "line": shown.line if shown is not None else None,
-                "reason": f"the log gives {printed!r} where a number belongs",
+                "reason": (
+                    f"the log gives {printed!r}, a number that is not finite, which a "
+                    "reply carries as null"
+                    if unread_as in not_finite
+                    else f"the log gives {printed!r} where a number belongs"
+                ),
             }
+            steps = unreadable_steps[unread_as]
+            if unread_as == name and len(steps) < len(values):
+                entry["unreadable"]["steps"] = steps
         if name in failed_rows:
             entry["failed_steps"] = failed_rows[name]
         form = printed_form(shown)
@@ -1986,6 +2226,13 @@ def parse_measurements(
     banner = log_banner_build(log_text)
     if banner is not None:
         table["printed_by"] = banner
+    # A stepped .op writes no '.step' line, and LTspice 26 prints one line for
+    # each of its measurements, not a table (log/meas_step_op). The bias-point
+    # solves the log records (one each step: scan_op_step_log) are its only
+    # count of the steps.
+    step_rows, solves = scan_op_step_log(text=log_text)
+    if not step_rows and solves > 1 and step_count == 1:
+        table["op_solves"] = solves
     return table
 
 

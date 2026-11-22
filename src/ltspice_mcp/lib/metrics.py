@@ -24,15 +24,18 @@ value the maths produced.
 from __future__ import annotations
 
 import asyncio
+import cmath
 import contextlib
 import math
+import re
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
 import numpy as np
 
-from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.errors import LTSpiceMCPError, NoAxisError, ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import (
     HALF_POWER_DB,
@@ -52,9 +55,12 @@ from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, declared_unit
 from ltspice_mcp.lib.device_names import (
+    AmbiguousName,
+    ambiguous_detail,
     current_device,
     device_names,
     device_query,
+    fold_name,
     owner_path,
     parse_device_param,
     path_text,
@@ -71,9 +77,17 @@ from ltspice_mcp.lib.log_parser import (
     DEVICE_OP_TABLE_DIGITS,
     device_key,
     measurement_cards,
+    printed_once_refusal,
     result_unreadable,
 )
-from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
+from ltspice_mcp.lib.log_types import (
+    NO_NUMBER_REASONS,
+    MeasurementsOutput,
+    measurement_failed,
+    measurement_named,
+    no_number_reasons,
+    result_numbers,
+)
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -114,6 +128,7 @@ from ltspice_mcp.lib.recipes import (
     StabilityRecipe,
     SummaryRecipe,
     ThdRecipe,
+    TimeStepsRecipe,
     TimingRecipe,
     ToneRecipe,
     TransientResponseRecipe,
@@ -146,7 +161,10 @@ from ltspice_mcp.lib.signal_analysis import (
 )
 from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.lib.trace_names import (
+    ambiguous_candidates,
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
+    is_input_noise,
+    names_sheet_parts,
     naming_note,
 )
 from ltspice_mcp.state import SessionState
@@ -375,10 +393,11 @@ def unrecognized_matches(warning: str, signal: str) -> bool:
     the signal's name or its ``@dev[param]`` token appearing in the warning. The
     only tell a ``.save``'d variable is bogus is its mention in the log, so this
     is how a read decides whether a 0.0 trace it touched is the real result."""
-    sig_l = signal.lower()
+    sig_l = fold_name(signal)
     parsed = parse_device_param(sig_l)
     at_token = None if parsed is None else device_key(*parsed)
-    return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
+    said = fold_name(warning)
+    return sig_l in said or (at_token is not None and at_token in said)
 
 
 async def solve_failures(source: services.AnalysisSource, state: SessionState) -> list[str]:
@@ -488,21 +507,100 @@ async def load_real_signal(
     return axis, wave
 
 
-def split_ratio(signal: str) -> tuple[str, str] | None:
-    """Split a transfer-function ratio ``A/B`` into ``(A, B)``, or None if it
-    isn't a ratio.
+@dataclass(frozen=True)
+class SignalExpression:
+    """What a recipe's ``signal`` names: ``numerator / denominator``, negated
+    or not. ``numerator`` None is the constant 1 (``1/A``); ``denominator``
+    None divides by nothing (``A``). Each operand is one signal as the raw
+    names it, a node pair included."""
 
-    Only a single ``/`` is supported — a two-signal quotient such as
-    ``V(out)/V(mid)``. SPICE node names don't contain ``/``, so the operator is
-    unambiguous. A ``/`` that doesn't yield exactly two non-empty operands is a
-    malformed ratio, not a plain signal, so it raises.
+    numerator: str | None
+    denominator: str | None = None
+    negated: bool = False
+
+    @property
+    def operands(self) -> tuple[str, ...]:
+        return tuple(name for name in (self.numerator, self.denominator) if name is not None)
+
+    @property
+    def unsigned(self) -> str:
+        """The expression without its sign, as a caller writes it."""
+        if self.denominator is None:
+            return self.numerator or "1"
+        return f"{self.numerator or '1'}/{self.denominator}"
+
+    @property
+    def text(self) -> str:
+        return f"-{self.unsigned}" if self.negated else self.unsigned
+
+    def forms(self) -> list[SignalExpression]:
+        """This expression, its negative, its reciprocal and its negative
+        reciprocal: the four ways a gain measured facing either way can be
+        written, in that order."""
+        reciprocal = SignalExpression(self.denominator, self.numerator, self.negated)
+        return [
+            self,
+            replace(self, negated=not self.negated),
+            reciprocal,
+            replace(reciprocal, negated=not reciprocal.negated),
+        ]
+
+
+def signal_expression(signal: str) -> SignalExpression:
+    """Read a recipe's ``signal``: ``A``, ``A/B`` or ``1/A``, each optionally
+    under one leading ``-`` that negates the whole expression. ``A`` and ``B``
+    are signals as the raw names them (``V(out)``, ``V(inp,inn)``,
+    ``gain_1``); SPICE node names hold no ``/``, so the operator is
+    unambiguous.
+
+    The one reader of these operators: every recipe that reads a ratio asks
+    here, so each reads the same forms the same way. No other operator is
+    read; a ``/`` that does not give two operands, a second ``-``, or a ``-``
+    on the denominator alone is refused rather than read as a trace name.
     """
-    if "/" not in signal:
-        return None
-    parts = [p.strip() for p in signal.split("/")]
+    text = signal.strip()
+    negated = text.startswith("-")
+    if negated:
+        text = text[1:].lstrip()
+    if not text:
+        raise ResultError(
+            f"Signal {signal!r} names nothing; expected 'A', 'A/B' or '1/A', each "
+            "optionally with one leading '-'."
+        )
+    if text.startswith("-"):
+        raise ResultError(
+            f"Signal {signal!r} has more than one leading '-'; one '-' negates the "
+            "whole expression."
+        )
+    if "/" not in text:
+        return SignalExpression(text, None, negated)
+    parts = [part.strip() for part in text.split("/")]
     if len(parts) != 2 or not all(parts):
-        raise ResultError(f"Ratio signal must be exactly 'A/B' (two signals); got {signal!r}.")
-    return parts[0], parts[1]
+        raise ResultError(
+            f"A ratio signal is 'A/B' or '1/A', two operands and one '/'; got {signal!r}."
+        )
+    numerator, denominator = parts
+    if denominator.startswith("-"):
+        raise ResultError(
+            f"Signal {signal!r} negates its denominator; only a '-' leading the whole "
+            f"signal negates it: write '-{numerator}/{denominator[1:].lstrip()}'."
+        )
+    if denominator == "1":
+        raise ResultError(
+            f"Signal {signal!r} divides by 1; name {numerator!r} alone.", show_hint=False
+        )
+    return SignalExpression(None if numerator == "1" else numerator, denominator, negated)
+
+
+def _singular_ratio(expression: SignalExpression, denominator: str, where: str) -> ResultError:
+    """The refusal of a ratio whose denominator is zero where it is read: a
+    pole of the requested transfer function, which a recipe reports rather
+    than read around."""
+    return ResultError(
+        f"Ratio {expression.unsigned} is singular {where}: the denominator "
+        f"{denominator} is ~0 there, so the transfer function has a pole. Narrow the "
+        "window to exclude the null, or pick a denominator that does not cross zero."
+    )
 
 
 async def load_ac_signal(
@@ -513,24 +611,17 @@ async def load_ac_signal(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load ``(freqs, H)`` for an AC signal. Rejects transient data.
 
-    ``signal`` may be a single trace (``V(out)``) or a transfer-function ratio
-    of two traces (``V(out)/V(mid)``), in which case the two complex AC waves
-    are divided element-wise — the way to express an inter-stage gain, loop
-    gain, or PSRR that the simulator never stores as its own trace. Either
-    side may be a node pair, so an open-loop gain reads as
-    ``V(out)/V(inp,inn)``.
-
-    A single leading ``-`` negates the whole expression (``-V(out)/V(vsense)``
-    is −(V(out)/V(vsense))): a 180° phase flip, so a loop gain probed with an
-    inverting sense or a reversed impedance probe reads in its natural
-    convention without a behavioral inverter node in the deck.
+    ``signal`` is read by :func:`signal_expression`: a single trace (``V(out)``), a
+    transfer-function ratio of two traces (``V(out)/V(mid)``), whose two
+    complex AC waves are divided element-wise, or a reciprocal (``1/V(out)``).
+    A ratio is the way to express an inter-stage gain, loop gain or PSRR that
+    the simulator never stores as its own trace, and either side may be a node
+    pair, so an open-loop gain reads as ``V(out)/V(inp,inn)``. A leading ``-``
+    negates the whole expression: a 180° phase flip, so a loop gain probed with
+    an inverting sense reads in its natural convention without a behavioral
+    inverter node in the deck.
     """
-    signal = signal.strip()
-    negate = signal.startswith("-")
-    if negate:
-        signal = signal[1:].lstrip()
-        if not signal:
-            raise ResultError("Signal is just a '-'; expected '-V(node)' or '-A/B'.")
+    expression = signal_expression(signal)
     raw = await services.load_raw(source, state)
     if not is_ac_analysis(raw):
         # show_hint=False: precise redirect; the generic hint would misdirect.
@@ -542,13 +633,19 @@ async def load_ac_signal(
     services.validate_step(raw, step)
     axis = guarded_axis(raw, step)
 
-    ratio = split_ratio(signal)
-    if ratio is not None:
-        num = services.resolve_signal(raw, ratio[0]).wave(raw, step)
-        den_signal = services.resolve_signal(raw, ratio[1])
+    numerator = (
+        None
+        if expression.numerator is None
+        else services.resolve_signal(raw, expression.numerator).wave(raw, step)
+    )
+    if expression.denominator is None:
+        assert numerator is not None
+        wave = numerator
+    else:
+        den_signal = services.resolve_signal(raw, expression.denominator)
         den = den_signal.wave(raw, step)
         with np.errstate(divide="ignore", invalid="ignore"):
-            wave = num / den
+            wave = (1.0 if numerator is None else numerator) / den
         # A null (or non-finite) denominator makes the ratio singular at those
         # bins — a genuine pole of the requested transfer function.
         # prepare_ac_arrays would silently drop them and analyze the rest,
@@ -556,18 +653,13 @@ async def load_ac_signal(
         # (which frequencies, how many) instead of fabricating clean numbers.
         singular = ~np.isfinite(wave)
         if singular.any():
-            axis_real = np.real(axis)
-            example = float(axis_real[int(np.argmax(singular))])
-            raise ResultError(
-                f"Ratio {ratio[0]}/{ratio[1]} is singular at {int(singular.sum())} of "
-                f"{singular.size} frequencies — the denominator {den_signal.name} is ~0 there "
-                f"(e.g. {example:.6g} Hz), so the transfer function has a pole. Narrow "
-                f"the frequency window to exclude the null, or pick a denominator that "
-                f"does not cross zero."
+            example = float(np.real(axis)[int(np.argmax(singular))])
+            raise _singular_ratio(
+                expression,
+                den_signal.name,
+                f"at {int(singular.sum())} of {singular.size} frequencies (e.g. {example:.6g} Hz)",
             )
-    else:
-        wave = services.resolve_signal(raw, signal).wave(raw, step)
-    if negate:
+    if expression.negated:
         wave = -wave
     try:
         return prepare_ac_arrays(axis, wave)
@@ -618,20 +710,24 @@ def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool, schematic: bool) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched.
 
     Each name is read back to the device path it belongs to
     (``device_names.device_query``; ``xvii`` for a build that names devices as
-    XVII does), so ``device`` matches a device as the simulator spells it, a
-    top-level device (``m1``), a device in a subcircuit by its own name or
-    path (``mtail``, ``xin.mtail``, ``xa.xin.mtail``) whichever build or
+    XVII does, ``schematic`` for a run of a schematic), so ``device`` matches a
+    device as the simulator spells it, a top-level device (``m1``), a device in
+    a subcircuit by its own name or path (``mtail``, ``xin.mtail``,
+    ``xa.xin.mtail``, or as XVII writes it, ``in:tail``) whichever build or
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
     every = [name for bucket in OP_BUCKETS for name in op_data.get(bucket, {})]
-    names_device = device_query(device, xvii=xvii, among=every)
+    try:
+        names_device = device_query(device, xvii=xvii, schematic=schematic, among=every)
+    except AmbiguousName as exc:
+        raise ResultError(str(exc), show_hint=False) from None
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
@@ -684,20 +780,6 @@ def diagnostics_block(diags: list[str], empty_note: str) -> str:
     return "\n".join(f"  {d}" for d in diags)
 
 
-def _answer_numbers(entry: Mapping[str, Any]) -> list[float | None]:
-    """The numbers of the field an answered measurement entry names
-    (``log_parser.answered_measurements``), one per step; nulls for an entry
-    that names none."""
-    values = list(entry.get("values", []))
-    field = entry.get("answer")
-    if field == "value":
-        return values
-    if field == "at":
-        at = entry.get("at")
-        return list(at) if isinstance(at, list) else [at] * len(values)
-    return [None] * len(values)
-
-
 def aggregate_log_measurements(
     meas_data: MeasurementsOutput,
 ) -> tuple[
@@ -729,7 +811,7 @@ def aggregate_log_measurements(
         err_block = diagnostics_block(diags, "(log contained no .MEAS results and no diagnostics)")
         raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
-    flat_values = {name: _answer_numbers(entry) for name, entry in measurements.items()}
+    flat_values = {name: result_numbers(entry) for name, entry in measurements.items()}
     axis_map: dict[str, AggregatedField] = {
         name: entry["answer"]  # type: ignore[typeddict-item]
         for name, entry in measurements.items()
@@ -773,6 +855,15 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
     as failed at that step (:func:`measurement_failed`).
     """
     count = max(meas_data.get("step_count") or 0, 1)
+    # A log that printed one value for a run of several steps says so, and
+    # which step that value is where that is established
+    # (log_parser.printed_once_refusal), in place of a count of one step.
+    once = printed_once_refusal(meas_data, f"Step {step}")
+    if once is not None and not any(
+        entry.get("printed_once", {}).get("step") == step
+        for entry in meas_data.get("measurements", {}).values()
+    ):
+        raise ResultError(once, show_hint=False)
     if not 0 <= step < count:
         raise ResultError(
             f"Step {step} is out of range: the log's measurement tables hold {count} step(s)."
@@ -872,12 +963,6 @@ def noise_input_source_unit(netlist: Path | None) -> str | None:
     if units == {"A"}:
         return "A"
     return None
-
-
-def is_input_noise(trace: str) -> bool:
-    """Whether a noise-run trace is the input-referred noise (LTspice's
-    ``V(inoise)``, ngspice's ``inoise_spectrum``)."""
-    return "inoise" in trace.lower()
 
 
 def noise_trace_unit(
@@ -1004,6 +1089,9 @@ async def summary(
                 source_amplitudes=source_amplitudes,
                 producer=producer,
                 cards=cards,
+                # Whether the log's measurements can be read is the run
+                # row's answer, so the summary gives the same reason.
+                measurements_unread=services.source_measurements_unread(source, logs, producer),
             ),
         )
     except ResultError:
@@ -1056,6 +1144,48 @@ async def summary(
     return data
 
 
+def _row_failed(table: Mapping[str, Any], named: Mapping[str, list[int]]) -> list[str]:
+    """The measurements LTspice printed failed at the row's steps, in the
+    order the log printed them."""
+    order = list(table["failed_measurements"])
+    return sorted(named, key=lambda name: order.index(name) if name in order else len(order))
+
+
+def _row_unreadable(table: Mapping[str, Any], named: Mapping[str, list[int]]) -> dict[str, Any]:
+    """What the log printed where each measurement's number belongs."""
+    return {name: result_unreadable(table["measurements"][name]) for name in named}
+
+
+def _row_answer_unknown(
+    table: Mapping[str, Any], named: Mapping[str, list[int]]
+) -> dict[str, Any]:
+    """Why the field holding each measurement's result is not known."""
+    return {name: table["measurements"][name]["answer_unknown"] for name in named}
+
+
+def _row_not_established(
+    table: Mapping[str, Any], named: Mapping[str, list[int]]
+) -> dict[str, Any]:
+    """The row's steps whose printed value is not established, and why."""
+    return {
+        name: {"steps": steps, "reason": table["measurements"][name]["not_established"]["reason"]}
+        for name, steps in named.items()
+    }
+
+
+#: How a measurements row gives each reason a value has no number
+#: (log_types.NO_NUMBER_REASONS), from the log's answered table and the
+#: measurements it holds at the row's steps, by those steps. Every reason has
+#: one: a reason added to the list without one stops the import.
+_ROW_REASONS: dict[str, Callable[[Mapping[str, Any], Mapping[str, list[int]]], Any]] = {
+    "failed_measurements": _row_failed,
+    "unreadable": _row_unreadable,
+    "answer_unknown": _row_answer_unknown,
+    "not_established": _row_not_established,
+}
+assert set(_ROW_REASONS) == {reason.field for reason in NO_NUMBER_REASONS}
+
+
 async def measurements(
     source: services.AnalysisSource,
     recipe: MeasurementsRecipe,
@@ -1086,28 +1216,48 @@ async def measurement_rows(
     printed value is not established as the result in ``not_established``.
     The deck and the build that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
-    decoded = logs.value("measurements")
-    if decoded is None or source.log is None:
-        raise ResultError("source has no log artifact for .MEAS results")
+    decoded = services.read_measurements(source, logs)
+    # A log was captured, or read_measurements refused: it is source's log.
+    assert source.log is not None
     whole = await services.answer_measurements(source, decoded)
     tables = [whole if step is None else measurements_at_step(whole, step) for step in steps]
 
+    # Why each step has no number is the log decoder's answer, read over the
+    # whole run (a step's row keeps the run's step numbers in ``unreadable``
+    # and ``not_established``) and taken at the step a row reads.
+    whole_reasons: dict[str, list[str | None]] = {}
+    # The same, by measurement and reason: the steps it holds at, in one pass.
+    steps_by_reason: dict[str, dict[str, list[int]]] = {}
+
     def aggregate_each() -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
         rows = []
-        for table in tables:
+        whole_reasons.update(
+            {name: no_number_reasons(whole, name) for name in whole["measurements"]}
+        )
+        for name, why in whole_reasons.items():
+            grouped = steps_by_reason.setdefault(name, {})
+            for i, reason in enumerate(why):
+                if reason is not None:
+                    grouped.setdefault(reason, []).append(i)
+        for step, table in zip(steps, tables, strict=True):
             flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(table)
             stats = run_compute(
                 compute_measurement_stats,
                 flat_values,
                 histogram_bins=recipe.histogram_bins,
                 measurement=measurement,
+                reasons=(
+                    whole_reasons
+                    if step is None
+                    else {name: why[step : step + 1] for name, why in whole_reasons.items()}
+                ),
             )
             rows.append((stats, axis_map, at_map))
         return rows
 
     aggregated = await services.bounded_parse(source.log, aggregate_each)
     values: list[MetricValue] = []
-    for step, table, (stats, axis_map, at_map) in zip(steps, tables, aggregated, strict=True):
+    for step, (stats, axis_map, at_map) in zip(steps, aggregated, strict=True):
         # Surface which field each stat block was computed from so a downstream
         # consumer can tell "this is the level (constant)" from "this is the
         # WHEN-clause crossing frequency".
@@ -1128,46 +1278,40 @@ async def measurement_rows(
             chosen = {require_measurement(name, stats) for name in recipe.names}
             stats = {name: entry for name, entry in stats.items() if name in chosen}
         row: dict[str, Any] = {"stats": stats}
-        # What LTspice printed as failed, at the steps this row reads: the
-        # log decoder's answer, never a null's (a null may be unreadable or
-        # not finite instead). A row read at one step names only that step's.
-        # The run summary beside it shows the whole run's measurements at any
-        # step, and so names what failed at any step
+        # Why each value this row reads has no number, by the reasons the log
+        # decoder gives (log_types.NO_NUMBER_REASONS): the row names a
+        # measurement under each reason that holds at a step it reads, as the
+        # statistics beside it count those steps. A row read at one step names
+        # only that step's. The run summary beside it shows the whole run's
+        # measurements at any step, and so names what failed at any step
         # (raw_parser.build_simulation_summary). Pinned by
         # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
-        failed = [name for name in table["failed_measurements"] if name in stats]
-        if failed:
-            row["failed_measurements"] = failed
-        unreadable = {
-            name: reason
+        for reason in NO_NUMBER_REASONS:
+            if step is None:
+                named = {
+                    name: found
+                    for name in stats
+                    if (found := steps_by_reason.get(name, {}).get(reason.field))
+                }
+            else:
+                named = {
+                    name: [step]
+                    for name in stats
+                    if step < len(why := whole_reasons.get(name, ()))
+                    and why[step] == reason.field
+                }
+            if named:
+                row[reason.field] = _ROW_REASONS[reason.field](whole, named)
+        # A value the log printed once for a run of several steps: how many,
+        # and which step's it is where that is established
+        # (log_parser.answered_measurements). It is a number, not a reason.
+        once = {
+            name: entry["printed_once"]
             for name, entry in whole["measurements"].items()
-            if name in stats and (reason := result_unreadable(entry)) is not None
+            if "printed_once" in entry and name in stats
         }
-        if unreadable:
-            row["unreadable"] = unreadable
-        # Where the field holding a result is not known, no number is given
-        # for it, and the row says why (log_parser.measurement_answer).
-        unknown = {
-            name: entry["answer_unknown"]
-            for name, entry in whole["measurements"].items()
-            if "answer_unknown" in entry and name in stats
-        }
-        if unknown:
-            row["answer_unknown"] = unknown
-        # The steps whose printed value is not established as the result
-        # (XVII prints 0 for a failed step: log_parser.answered_measurements),
-        # by the run's step, from 0: those this row reads.
-        unset = {
-            name: {
-                "steps": [i for i in entry["not_established"]["steps"] if step in (None, i)],
-                "reason": entry["not_established"]["reason"],
-            }
-            for name, entry in whole["measurements"].items()
-            if "not_established" in entry and name in stats
-        }
-        unset = {name: item for name, item in unset.items() if item["steps"]}
-        if unset:
-            row["not_established"] = unset
+        if once:
+            row["printed_once"] = once
         values.append(row)
     return values
 
@@ -1239,7 +1383,8 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    found = find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))
+    xvii, schematic = writes_xvii_names(raw), names_sheet_parts(raw.raw_params, raw.dialect)
+    found = find_trace(list(flat), recipe.expr, xvii=xvii, schematic=schematic)
     match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
@@ -1256,16 +1401,23 @@ async def _value_from_operating_point(
                 "warnings": op.get("warnings", []),
             }
     if match is None:
+        candidates = ambiguous_candidates(
+            list(flat), recipe.expr, xvii=xvii, schematic=schematic
+        )
+        if candidates:
+            raise ResultError(ambiguous_detail(recipe.expr, candidates), show_hint=False)
         present = ", ".join(sorted(flat)[:8])
         if len(flat) > 8:
             present += f", ... ({len(flat)} total)"
+        unread = op.get("device_table_unread")
+        why = f" {unread['detail']}" if unread is not None else ""
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
             f"result.{naming_note(raw.header, recipe.expr)} Address a value by the name it "
             "carries (e.g. "
             "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
             "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "
-            f"Present here: {present}"
+            f"Present here: {present}.{why}"
         ) from None
     name, item = match
     data: MetricValue = {
@@ -1763,6 +1915,82 @@ async def periodic(
     return await relay_solve_failures(source, data, state)
 
 
+async def time_steps(
+    source: services.AnalysisSource,
+    recipe: TimeStepsRecipe,
+    step: int,
+    state: SessionState,
+) -> MetricValue:
+    """The steps between a transient's stored points over one window: how many
+    points, the smallest step and where it starts, the largest and the median,
+    and with ``threshold_s`` how many are shorter and where the first and last
+    start. Two points at one time are counted apart (``zero_steps``), never as
+    a step. Which of the solver's points the file holds is
+    ``services.stored_time_points``' answer, and an answer other than every
+    accepted point is a ``coverage`` observation on the row."""
+    raw = await services.load_raw(source, state)
+    reject_non_transient(raw)
+    services.validate_step(raw, step)
+    axis = guarded_axis(raw, step)
+    t_start, t_end = window_bounds(recipe.window)
+    lo, hi = window_indices(
+        axis, parse_time(t_start, "window.start"), parse_time(t_end, "window.end")
+    )
+    times = axis[lo:hi]
+    if not np.all(np.isfinite(times)):
+        raise ResultError(
+            "time_steps found a stored time that is not a finite number in this run; read it "
+            "with the waveform recipe to see its time axis.",
+            show_hint=False,
+        )
+    if times.size < 2:
+        raise ResultError(
+            f"time_steps needs two stored points in the window to take a step between; "
+            f"it holds {times.size}. Widen the window or drop it.",
+            show_hint=False,
+        )
+    steps = np.diff(times)
+    if np.any(steps < 0):
+        raise ResultError(
+            "time_steps found stored times that go backwards within one step of this run; "
+            "read it with the waveform recipe to see its time axis.",
+            show_hint=False,
+        )
+    moving = steps > 0
+    data: dict[str, Any] = {
+        "points": int(times.size),
+        "zero_steps": int(np.count_nonzero(~moving)),
+        "t_start": float(times[0]),
+        "t_end": float(times[-1]),
+    }
+    if np.any(moving):
+        nonzero = steps[moving]
+        smallest = int(np.flatnonzero(moving)[int(np.argmin(nonzero))])
+        data.update(
+            min_step=float(steps[smallest]),
+            min_step_at=float(times[smallest]),
+            max_step=float(nonzero.max()),
+            median_step=float(np.median(nonzero)),
+        )
+    if recipe.threshold_s is not None:
+        threshold = parse_time(spice_text(recipe.threshold_s), "threshold_s")
+        if threshold is None or not threshold > 0:
+            raise ResultError("threshold_s must be a positive time in seconds.", show_hint=False)
+        below = np.flatnonzero(moving & (steps < threshold))
+        data["threshold_s"] = threshold
+        data["steps_below"] = int(below.size)
+        if below.size:
+            data["first_below_at"] = float(times[below[0]])
+            data["last_below_at"] = float(times[below[-1]])
+    stored = await asyncio.to_thread(services.stored_time_points, source, raw)
+    data["stored"] = stored.stored
+    if stored.why is not None:
+        data["observations"] = [
+            {"code": "time_steps_coverage", "kind": "coverage", "detail": stored.why}
+        ]
+    return await relay_solve_failures(source, data, state)
+
+
 async def thd(
     source: services.AnalysisSource,
     recipe: ThdRecipe,
@@ -1796,21 +2024,155 @@ async def thd(
     return await relay_solve_failures(source, data, state)
 
 
+async def tone_frequency(
+    source: services.AnalysisSource,
+    recipe: ToneRecipe,
+    step: int,
+    state: SessionState,
+) -> float:
+    """The frequency a ``tone`` recipe reads at one step of one run, in Hz.
+
+    ``frequency_hz`` is the same for every run. ``frequency_param`` names a
+    parameter whose value at this step of this run is the frequency: the
+    step's value in a stepped deck, which is the value the run had there,
+    else the case's assignment. A run that has neither is refused.
+    """
+    if recipe.frequency_param is None:
+        assert recipe.frequency_hz is not None
+        return parse_freq(recipe.frequency_hz, "frequency_hz")
+    wanted = fold_name(recipe.frequency_param)
+    raw = await services.load_raw(source, state)
+    steps = raw.descriptor.steps
+    stepped = dict(steps[step].parameters) if step < len(steps) else {}
+    assignments = dict((source.identity or {}).get("assignments") or {})
+    for where, values in ((f"step {step}", stepped), ("the case's assignments", assignments)):
+        for name, value in values.items():
+            if fold_name(str(name)) == wanted:
+                return parse_freq(value, f"frequency_param {name!r} ({where})")
+    raise ResultError(
+        f"frequency_param {recipe.frequency_param!r}: this run neither steps nor assigns "
+        f"it (stepped: {', '.join(map(str, stepped)) or 'none'}; assigned: "
+        f"{', '.join(map(str, assignments)) or 'none'}). Name a parameter the run steps "
+        "or its case assigns, or give the frequency as frequency_hz.",
+        show_hint=False,
+    )
+
+
+#: Below this share of its peak, a ratio's denominator carries little of the
+#: frequency read, and the reply says so.
+_SMALL_DENOMINATOR = 1e-3
+
+
+def _tone_phasor(value: Mapping[str, Any]) -> complex:
+    """A tone as the complex amplitude of ``amplitude*sin(2*pi*f*t + phase)``:
+    ``sin_component + j*cos_component``."""
+    return complex(value["sin_component"], value["cos_component"])
+
+
 async def tone(
     source: services.AnalysisSource,
     recipe: ToneRecipe,
     step: int,
     state: SessionState,
 ) -> MetricValue:
-    """Amplitude and phase of one frequency over the window's whole periods."""
+    """Amplitude and phase of one frequency over the window's whole periods.
+
+    A ratio (``A/B``, ``1/A``, read by :func:`signal_expression`) is the phasor of
+    ``A`` divided by that of ``B``, both taken over the same whole periods of
+    the same samples: the gain and phase shift from ``B`` to ``A`` at that
+    frequency, with no ``dc``.
+    """
+    expression = signal_expression(recipe.signal)
+    frequency = await tone_frequency(source, recipe, step, state)
     t_start, t_end = window_bounds(recipe.window)
-    axis, wave = await load_real_signal(source, recipe.signal, step, state)
-    t, y, _ = apply_window(axis, wave, t_start, t_end)
-    frequency = parse_freq(recipe.frequency_hz, "frequency_hz")
-    data = await run_metric(source, state, analyze_tone, t, y, frequency)
-    data["signal"] = recipe.signal
-    await _label_unit(source, recipe.signal, data, state)
+
+    async def one(signal: str) -> tuple[MetricValue, float]:
+        axis, wave = await load_real_signal(source, signal, step, state)
+        t, y, _ = apply_window(axis, wave, t_start, t_end)
+        found = await run_metric(source, state, analyze_tone, t, y, frequency)
+        return found, float(np.max(np.abs(y))) if y.size else 0.0
+
+    if expression.denominator is None:
+        assert expression.numerator is not None
+        data, _ = await one(expression.numerator)
+        if expression.negated:
+            for key in ("sin_component", "cos_component", "dc"):
+                data[key] = -data[key]
+            data["phase_deg"] = _wrapped_degrees(data["phase_deg"] + 180.0)
+        data["signal"] = recipe.signal
+        await _label_unit(source, expression.numerator, data, state)
+        return await relay_solve_failures(source, data, state)
+
+    den, den_peak = await one(expression.denominator)
+    den_phasor = _tone_phasor(den)
+    if abs(den_phasor) <= 1e-9 * den_peak:
+        raw = await services.load_raw(source, state)
+        raise _singular_ratio(
+            expression,
+            services.resolve_signal(raw, expression.denominator).name,
+            f"at {frequency:g} Hz (the denominator's amplitude there is "
+            f"{abs(den_phasor):.3g} against a peak of {den_peak:.3g})",
+        )
+    num = None if expression.numerator is None else (await one(expression.numerator))[0]
+    ratio = (1.0 if num is None else _tone_phasor(num)) / den_phasor
+    if expression.negated:
+        ratio = -ratio
+    warnings = [
+        f"{name}: {warning}"
+        for name, found in ((expression.numerator, num), (expression.denominator, den))
+        if found is not None
+        for warning in found.get("warnings", [])
+    ]
+    if abs(den_phasor) < _SMALL_DENOMINATOR * den_peak:
+        warnings.append(
+            f"The denominator {expression.denominator} has an amplitude of "
+            f"{abs(den_phasor):.3g} at {frequency:g} Hz, {abs(den_phasor) / den_peak:.2g} of "
+            "its peak: little of it is at that frequency, so the ratio is that of a small "
+            "component and solver noise in it is magnified. Check that the run injects "
+            "this frequency into it."
+        )
+    data = {
+        "frequency_hz": den["frequency_hz"],
+        "amplitude": abs(ratio),
+        "phase_deg": _wrapped_degrees(math.degrees(cmath.phase(ratio))),
+        "sin_component": ratio.real,
+        "cos_component": ratio.imag,
+        "t_start": den["t_start"],
+        "t_end": den["t_end"],
+        "n_cycles": den["n_cycles"],
+        "warnings": warnings,
+        "signal": recipe.signal,
+    }
+    unit = await _ratio_unit(source, expression, state)
+    if unit:
+        data["unit"] = unit
     return await relay_solve_failures(source, data, state)
+
+
+def _wrapped_degrees(degrees: float) -> float:
+    """An angle in (-180, 180], as ``analyze_tone`` gives a phase."""
+    wrapped = math.fmod(degrees + 180.0, 360.0)
+    wrapped = wrapped + 360.0 if wrapped <= 0.0 else wrapped
+    return wrapped - 180.0
+
+
+async def _ratio_unit(
+    source: services.AnalysisSource, expression: SignalExpression, state: SessionState
+) -> str | None:
+    """The unit of a ratio of two signals: none when both share one or either
+    is not known, else ``num/den`` (``1/den`` for a reciprocal)."""
+    units = []
+    for operand in (expression.numerator, expression.denominator):
+        found: MetricValue = {}
+        if operand is not None:
+            await _label_unit(source, operand, found, state)
+        units.append(found.get("unit"))
+    numerator_unit, denominator_unit = units
+    if denominator_unit is None or (expression.numerator is not None and numerator_unit is None):
+        return None  # an operand's unit is not known, so neither is the ratio's
+    if numerator_unit == denominator_unit:
+        return None
+    return f"{numerator_unit or '1'}/{denominator_unit}"
 
 
 async def _label_unit(
@@ -2041,7 +2403,11 @@ async def stability(
     *,
     min_separation_decades: float = 0.1,
 ) -> MetricValue:
-    """Loop-gain margins: unity-gain crossovers, phase margin, gain margin."""
+    """Loop-gain margins: unity-gain crossovers, phase margin, gain margin.
+
+    On a frequency response analysis's results, the margin is checked against
+    the one LTspice printed for the same analyzer (:func:`_fra_margin_check`).
+    """
     freqs, h = await load_ac_signal(source, recipe.signal, step, state)
     data = await run_metric(
         source,
@@ -2052,7 +2418,179 @@ async def stability(
         min_separation_decades=min_separation_decades,
     )
     data["signal"] = recipe.signal
+    raw = await services.load_raw(source, state)
+    if raw.descriptor.analysis == "fra":
+        check = await _fra_margin_check(
+            source,
+            signal_expression(recipe.signal),
+            data,
+            (freqs, h),
+            step,
+            state,
+            min_separation_decades=min_separation_decades,
+        )
+        if check is not None:
+            data.setdefault("observations", []).append(check)
     return await relay_solve_failures(source, data, state)
+
+
+#: An analyzer's gain trace in a frequency response analysis's results:
+#: ``gain_1`` for the analyzer ``@1`` (the recorded raw/fra).
+_FRA_GAIN_TRACE = re.compile(r"gain_(?P<analyzer>\S+)", re.IGNORECASE)
+
+
+async def printed_fra_margin(
+    source: services.AnalysisSource, analyzer: str | None, step: int, state: SessionState
+) -> tuple[dict[str, Any] | None, str]:
+    """The crossover and phase margin LTspice printed for ``analyzer`` (``@1``)
+    at ``step`` of a frequency response analysis, with the last printed digit
+    of each (``log_parser.printed_fra_margins``), or None and why there is
+    none. ``analyzer`` None takes the run's one analyzer, if it has only one.
+    """
+    try:
+        logs = await services.load_logs(source, state)
+        printed = logs.value("fra_margins") or []
+    except LTSpiceMCPError as e:
+        return None, f"its log could not be read: {e}"
+    analyzers = {entry["analyzer"].lower() for entry in printed}
+    if analyzer is None:
+        if len(analyzers) != 1:
+            return None, "the signal names no analyzer's gain_N"
+        (wanted,) = analyzers
+    else:
+        wanted = analyzer.lower()
+    for entry in printed:
+        if entry["analyzer"].lower() == wanted and entry["step"] == step:
+            return entry, ""
+    if wanted in analyzers:
+        return None, f"its log holds no finite margin printed for step {step}"
+    return None, f"its log holds no margin printed for analyzer {analyzer or wanted}"
+
+
+def _agrees(stability: Mapping[str, Any], printed: Mapping[str, Any]) -> tuple[Any, Any, bool]:
+    """The recipe's crossover and phase margin nearest the printed crossover,
+    and whether both are within half a printed digit of LTspice's. The margins
+    are compared as angles, so one printed a turn away from the recipe's still
+    agrees."""
+    margins = stability.get("phase_margins") or []
+    if not margins:
+        return None, None, False
+    target = printed["crossover_hz"]
+    nearest = min(margins, key=lambda margin: abs(margin["frequency_hz"] - target))
+    crossover, margin = nearest["frequency_hz"], nearest["margin_deg"]
+    # Half a digit is the rounding; the 1% beyond it absorbs the binary
+    # representation of a decimal that sits on the boundary.
+    agrees = (
+        abs(crossover - target) <= 0.505 * printed["crossover_digit_hz"]
+        and abs(math.remainder(margin - printed["phase_margin_deg"], 360.0))
+        <= 0.505 * printed["phase_margin_digit_deg"]
+    )
+    return crossover, margin, agrees
+
+
+def _agreeing_forms(
+    expression: SignalExpression,
+    response: tuple[np.ndarray, np.ndarray],
+    printed: Mapping[str, Any],
+    min_separation_decades: float,
+) -> list[str]:
+    """The other three forms of ``expression`` (its negative, reciprocal and
+    negative reciprocal), computed from the response already read, whose
+    margin agrees with the printed one."""
+    freqs, h = response
+    agreeing = []
+    for form, transform in zip(
+        expression.forms()[1:], (lambda x: -x, lambda x: 1 / x, lambda x: -1 / x), strict=True
+    ):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            other = transform(h)
+        if not np.all(np.isfinite(other)):
+            continue
+        try:
+            other_data = compute_stability_metrics(
+                freqs, other, min_separation_decades=min_separation_decades
+            )
+        except (ValueError, ResultError):
+            continue
+        if _agrees(other_data, printed)[2]:
+            agreeing.append(form.text)
+    return agreeing
+
+
+async def _fra_margin_check(
+    source: services.AnalysisSource,
+    expression: SignalExpression,
+    data: MetricValue,
+    response: tuple[np.ndarray, np.ndarray],
+    step: int,
+    state: SessionState,
+    *,
+    min_separation_decades: float,
+) -> dict[str, Any] | None:
+    """Whether ``stability`` read the quantity whose margin LTspice printed.
+
+    Which form of ``gain_N`` is the loop gain the recipe takes is recorded for
+    one way of placing the analyzer only (raw/fra: ``-gain_1``), so it is not
+    established from the results. LTspice prints its own crossover and phase
+    margin in the log; a recipe margin that differs from it beyond the printed
+    digits is of another quantity, and the observation says so, gives both and
+    names the forms whose margin agrees. None when the margins agree.
+    """
+    analyzers = {
+        f"@{match['analyzer']}"
+        for operand in expression.operands
+        if (match := _FRA_GAIN_TRACE.fullmatch(operand)) is not None
+    }
+    analyzer = next(iter(analyzers)) if len(analyzers) == 1 else None
+    printed, why = await printed_fra_margin(source, analyzer, step, state)
+    if printed is None:
+        return {
+            "code": "fra_margin_not_checked",
+            "kind": "coverage",
+            "detail": (
+                f"Not checked against LTspice: {why}, so whether {expression.text} is "
+                "the quantity whose margin LTspice prints is not checked. Which form "
+                "of gain_N that is depends on how the analyzer is placed, which is not "
+                "established from the results."
+            ),
+        }
+    crossover, margin, agrees = _agrees(data, printed)
+    if agrees:
+        return None
+    agreeing = await asyncio.to_thread(
+        _agreeing_forms, expression, response, printed, min_separation_decades
+    )
+    shown = {key: printed[key] for key in ("analyzer", "crossover_hz", "phase_margin_deg")}
+    said = (
+        f"LTspice printed a crossover of {printed['crossover_hz']:g} Hz and a phase margin "
+        f"of {printed['phase_margin_deg']:g}° for {printed['analyzer']}"
+    )
+    got = (
+        "no unity-gain crossover"
+        if crossover is None
+        else f"a crossover of {crossover:.6g} Hz and a phase margin of {margin:.6g}°"
+    )
+    others = [form.text for form in expression.forms()[1:]]
+    try_next = (
+        f"{' and '.join(agreeing)} gives LTspice's margin; read stability on it."
+        if agreeing
+        else f"None of {', '.join(others)} gives it either."
+    )
+    return {
+        "code": "fra_margin_differs",
+        "kind": "reconciliation",
+        "detail": (
+            f"stability on {expression.text} gives {got}, but {said}. They differ beyond "
+            f"the printed digits, so {expression.text} is not the quantity whose margin "
+            f"LTspice printed. {try_next} Which form of gain_N is the loop gain is not "
+            "established from the results; this comparison is the check."
+        ),
+        "evidence": {
+            "found": {"crossover_hz": crossover, "phase_margin_deg": margin},
+            "printed": shown,
+            "agreeing_forms": agreeing,
+        },
+    }
 
 
 async def ac_structure(
@@ -2275,16 +2813,17 @@ async def operating_point(
     # misleading empty result when nothing matches. ``available_devs`` is
     # gathered before the filter, which empties the buckets in place.
     xvii = writes_xvii_names(raw)
+    schematic = names_sheet_parts(raw.raw_params, raw.dialect)
     if recipe.device is not None:
         available_devs = sorted(
             {
                 path_text(path)
                 for bucket in ("currents", "device_op_points")
                 for name in op_data.get(bucket, {})
-                if (path := owner_path(name, xvii=xvii)) is not None
+                if (path := owner_path(name, xvii=xvii, schematic=schematic)) is not None
             }
         )
-        if not filter_operating_point(op_data, recipe.device, xvii=xvii):
+        if not filter_operating_point(op_data, recipe.device, xvii=xvii, schematic=schematic):
             dev_list = ", ".join(available_devs) if available_devs else "none found"
             raise ResultError(
                 f"No operating-point params or terminal currents for device "
@@ -2304,7 +2843,13 @@ async def operating_point(
         op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS
     # A device inside a subcircuit is named differently in the table and in
     # the raw, and differently on each build: say which names are one device.
-    if names := device_names(table, op_data.get("currents", {}), xvii=xvii):
+    # The table is read with the raw writer's spelling: both are one run's,
+    # and the raw names its writer. api.device_op_points has the log alone
+    # and reads the build its first line names (device_names.table_naming);
+    # the two differ only for a raw and a log of different runs.
+    if names := device_names(
+        table, op_data.get("currents", {}), xvii=xvii, schematic=schematic
+    ):
         op_data["device_names"] = names
 
     # Unit per trace, only where the simulator declared the type.
@@ -2328,7 +2873,27 @@ async def operating_point(
     # (LTspice exposes those), or when the run is ngspice — whose bare .op shows
     # no device traces, so a saved-nothing run is indistinguishable from a
     # passive one. raw_dialect only gates here, never picks the wording.
-    if not op_data.get("device_op_points") and (
+    #
+    # Where the log's table is empty for another reason than the circuit having
+    # no such device (the run was made without the option that prints it, or
+    # a log read by its path cannot say whether it asked), that reason is the
+    # answer (services.device_table_unread), whatever devices the run holds:
+    # the analyze path relays it as an observation, and a device parameter's
+    # value names it in its refusal.
+    unread = (
+        await services.device_table_unread(
+            source,
+            family=raw_dialect,
+            devices=has_active_device(op_data.get("currents", {})),
+            analysis="op" if is_operating_point(raw) else "dc" if is_dc else None,
+        )
+        if not op_data.get("device_op_points")
+        else None
+    )
+    if unread is not None:
+        op_data["device_table_unread"] = unread
+        op_data["warnings"].append(unread["detail"])
+    elif not op_data.get("device_op_points") and (
         has_active_device(op_data.get("currents", {})) or raw_dialect == "ngspice"
     ):
         op_data["warnings"].append(NO_DEVICE_OP_POINTS_NOTE)
@@ -2372,6 +2937,7 @@ METRICS: dict[type[Recipe], MetricFn] = {
     PeriodicRecipe: periodic,
     TransientResponseRecipe: transient_response,
     ThdRecipe: thd,
+    TimeStepsRecipe: time_steps,
     ToneRecipe: tone,
     BodeFilterRecipe: bode_filter,
     BodePointRecipe: bode_point,
