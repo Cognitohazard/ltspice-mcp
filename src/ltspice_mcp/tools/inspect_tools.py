@@ -217,6 +217,7 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
 )
 from ltspice_mcp.lib.spice_lex import (
+    AS_WRITTEN,
     INCLUDE_HEADS,
     LexResult,
     SpiceCard,
@@ -230,6 +231,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     SubcktCard,
     global_names,
     instances_by_ref,
+    instances_by_scope,
 )
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -1932,15 +1934,18 @@ def _components_netlist_payload(
     The components are the top level's cards; a card of a ``.subckt`` body is
     listed after them, under the body it belongs to (``subcircuit``, the
     enclosing names outermost first), and a reference is one card only inside
-    its scope (``instances_by_ref``).
+    its scope (``instances_by_scope``). A name defined more than once in one
+    scope gives each body one scope, so which card a reference names there is
+    not known: those bodies' cards are left out, and a warning names them.
     """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
     lexed = lex_deck(text)
     cards = lexed.cards
-    scopes = dict.fromkeys(c.scope for c in cards if c.kind == "instance")
+    definitions = subckt_definitions(cards, AS_WRITTEN)
+    read = (c for i, c in enumerate(cards) if i not in definitions.aside)
     rows: list[dict[str, Any]] = []
-    for card in (c for s in scopes for c in instances_by_ref(cards, scope=s).values()):
+    for card in (c for refs in instances_by_scope(read).values() for c in refs.values()):
         ref = card.name
         if not ref or (prefix is not None and not matches_prefix(ref, prefix)):
             continue
@@ -1962,7 +1967,14 @@ def _components_netlist_payload(
                     entry["repeated_params"] = repeated
         rows.append(entry)
     rows.sort(key=lambda r: (r.get("subcircuit", []), r["reference"]))
-    return rows, _lex_warnings(lexed)
+    unlisted = [
+        f"subcircuit {'/'.join((*cards[answer.members[0]].scope, answer.name))} is defined "
+        f"{len(answer.members)} times in one scope, so its bodies' cards are not "
+        f"listed: which card a reference names there is not known. Rename or "
+        f"delete all but one definition of {answer.name}."
+        for answer in definitions.unsettled.values()
+    ]
+    return rows, _lex_warnings(lexed) + unlisted
 
 
 def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:

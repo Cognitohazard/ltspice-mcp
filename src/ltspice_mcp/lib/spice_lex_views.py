@@ -1331,24 +1331,34 @@ def read_instance(card: SpiceCard) -> InstanceLine | None:
         return None
 
 
-def instances_by_ref(
-    cards: Iterable[SpiceCard], *, scope: tuple[str, ...]
-) -> dict[str, SpiceCard]:
-    """Lowercased ``ref`` → instance-card lookup of one scope. Skips cards
-    with no ref.
+def instances_by_scope(
+    cards: Iterable[SpiceCard],
+) -> dict[tuple[str, ...], dict[str, SpiceCard]]:
+    """Each scope's lowercased ``ref`` → instance-card lookup, in one pass.
+    Skips cards with no ref.
 
     A reference names a card only inside its scope: ``()`` is the top level,
     where an ``M1`` inside a ``.subckt`` body is another device that only
     shares the name, and ``("A", "B")`` the body of ``B`` nested in ``A``.
     There is no lookup across scopes, since one would map a reference to a
     card of whichever scope came last. A ref the cards give twice in one
-    scope maps to its last card.
+    scope maps to its last card. Two definitions of one name in one scope
+    share a scope tuple, so a caller that must keep them apart leaves their
+    cards out first (``spice_lex.subckt_definitions``).
     """
-    return {
-        c.name.lower(): c
-        for c in cards
-        if c.kind == "instance" and c.name and c.scope == scope
-    }
+    found: dict[tuple[str, ...], dict[str, SpiceCard]] = {}
+    for c in cards:
+        if c.kind == "instance" and c.name:
+            found.setdefault(c.scope, {})[c.name.lower()] = c
+    return found
+
+
+def instances_by_ref(
+    cards: Iterable[SpiceCard], *, scope: tuple[str, ...]
+) -> dict[str, SpiceCard]:
+    """Lowercased ``ref`` → instance-card lookup of one scope
+    (:func:`instances_by_scope`)."""
+    return instances_by_scope(cards).get(scope, {})
 
 
 # ---------------------------------------------------------------------------

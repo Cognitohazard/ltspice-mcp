@@ -2,10 +2,11 @@
 
 A netlist's components are the cards of its top level; a card inside a
 ``.subckt`` body belongs to that body, names the body as its ``subcircuit``,
-and never replaces a top-level card of the same reference. ``instances_by_ref``
-decides it for one scope, and every reader of a deck's cards by reference asks
-it: the components listing of ``inspect`` and of the Python API, the members
-of a netlist net query, and the transistors a Monte Carlo run rewrites.
+and never replaces a top-level card of the same reference.
+``spice_lex_views.instances_by_scope`` decides it, and these readers of a
+deck's cards by reference ask it: the components listing of ``inspect`` and of
+the Python API, the members of a netlist net query, and the transistors a
+Monte Carlo run rewrites.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ TOP_Q1 = "Q1 c1 b1 e1 QTOP\n"
 BODY = ".subckt CE in c\nQ1 c b e QBODY\nRE e 0 1k\n.ends\n"
 
 
-async def _components(state: SessionState, deck: Path, route: str) -> list[dict[str, Any]]:
+async def _listing(state: SessionState, deck: Path, route: str) -> dict[str, Any]:
     query = {"kind": "components", "path": str(deck), "detail": "full"}
     if route == "mcp":
         reply = await dispatched(state, "inspect", queries=[query])
@@ -32,7 +33,11 @@ async def _components(state: SessionState, deck: Path, route: str) -> list[dict[
         reply = await asyncio.to_thread(lambda: SyncApi(state).inspect(queries=[query]))
     (result,) = reply["results"]
     assert result["ok"], result
-    return result["data"]["components"]
+    return result["data"]
+
+
+async def _components(state: SessionState, deck: Path, route: str) -> list[dict[str, Any]]:
+    return (await _listing(state, deck, route))["components"]
 
 
 def _rows(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
@@ -109,8 +114,8 @@ async def test_a_nested_body_repeating_its_outer_bodys_reference_keeps_both(
 async def test_an_included_files_body_does_not_replace_a_top_level_card(
     route: str, work_dir: Path, state_no_sim: SessionState
 ):
-    """The listing reads the file as written: the included file's cards are
-    not its rows, and its body's ``Q1`` does not replace the deck's."""
+    """The listing reads the file as written and does not follow the include,
+    so the included body's ``Q1`` cannot replace the deck's; this pins that."""
     (work_dir / "parts.lib").write_text(BODY)
     deck = work_dir / "deck.cir"
     deck.write_text(f"* t\n.include parts.lib\n{TOP_Q1}X1 a c1 CE\n.end\n")
@@ -135,17 +140,44 @@ async def test_a_deck_with_no_subcircuit_lists_no_scope(
     assert not any("subcircuit" in r for r in rows)
 
 
+@ROUTES
+async def test_a_body_defined_twice_in_one_scope_is_named_not_merged(
+    route: str, work_dir: Path, state_no_sim: SessionState
+):
+    """Both definitions share one scope, so no reference there names one card:
+    neither body's cards are listed, and a warning names the subcircuit."""
+    deck = work_dir / "deck.cir"
+    deck.write_text(
+        "* t\n.subckt CE p\nQ1 p b e QA\nR1 p 0 1k\n.ends\n"
+        ".subckt CE p\nQ1 p b e QB\nR2 p 0 2k\n.ends\n"
+        f"{TOP_Q1}X1 a CE\n.end\n"
+    )
+    data = await _listing(state_no_sim, deck, route)
+    assert _rows(data["components"]) == [
+        ((), "Q1", ("c1", "b1", "e1"), "QTOP"),
+        ((), "X1", ("a",), "CE"),
+    ]
+    assert [w for w in data["warnings"] if "CE" in w] == [
+        "subcircuit CE is defined 2 times in one scope, so its bodies' cards are not "
+        "listed: which card a reference names there is not known. Rename or delete "
+        "all but one definition of CE."
+    ]
+
+
 # The other readers of a deck's cards by reference ------------------------------
 
 
+@ROUTES
 async def test_a_net_querys_members_are_the_top_level_card_not_the_body_card(
-    work_dir: Path, state_no_sim: SessionState
+    route: str, work_dir: Path, state_no_sim: SessionState
 ):
     deck = work_dir / "deck.cir"
     deck.write_text(f"* t\n{TOP_Q1}{BODY}X1 a c1 CE\n.end\n")
-    reply = await dispatched(
-        state_no_sim, "inspect", queries=[{"kind": "net", "path": str(deck), "at": "c1"}]
-    )
+    query = {"kind": "net", "path": str(deck), "at": "c1"}
+    if route == "mcp":
+        reply = await dispatched(state_no_sim, "inspect", queries=[query])
+    else:
+        reply = await asyncio.to_thread(lambda: SyncApi(state_no_sim).inspect(queries=[query]))
     (result,) = reply["results"]
     assert result["ok"], result
     assert {(m["reference"], m["terminal"]) for m in result["data"]["members"]} == {
