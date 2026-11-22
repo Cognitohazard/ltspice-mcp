@@ -749,7 +749,8 @@ def case_unreadable(
 
     ``require_raw``: the read takes the case's raw (a chart, a raw read), so a
     case that has none is not read, as one that produced none is not; a read
-    of its log alone (False) takes it.
+    of its log alone (False) takes it, and takes the log a run that ended
+    without results kept, which says why it ended.
     """
     if case.status not in TERMINAL_CASE_STATUSES:
         return CaseUnreadable(
@@ -759,6 +760,9 @@ def case_unreadable(
         if not require_raw or case.raw_file is not None:
             return None
         detail = _no_raw_result(job.job_id, case)
+    elif not require_raw and case.log_file is not None:
+        # A run that ended without results keeps its log, which says why.
+        return None
     else:
         detail = _failure_detail(case)
     return CaseUnreadable(code="raw_not_produced", detail=detail)
@@ -1119,14 +1123,16 @@ def source_producer(
     (``run_producer``). For a bare path, the dialect its caller named or, when
     it named none, the one its raw's header shows (``read_dialect``, only with
     evidence), and the build its files name (``reported``, from
-    ``reported_build``); a bare path records no program."""
+    ``reported_build``); a bare path records no program. With neither, a build
+    that names LTspice (``which_ltspice``) is LTspice's: LTspice 26 writes an
+    empty results file for a run it stopped before its first point, so its
+    log's banner is all that names the writer."""
     if source.producer is not None:
         return source.producer
-    return Producer(
-        family=source.dialect or source.explicit_dialect or read_dialect,
-        build=source.simulator_version or reported,
-        program=None,
-    )
+    family = source.dialect or source.explicit_dialect or read_dialect
+    if family is None and reported is not None and which_ltspice(None, reported) is not None:
+        family = "ltspice"
+    return Producer(family=family, build=source.simulator_version or reported, program=None)
 
 
 #: What a read of a log's device table by path says of an empty one, for an

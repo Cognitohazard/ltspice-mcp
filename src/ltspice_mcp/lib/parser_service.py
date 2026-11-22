@@ -29,6 +29,7 @@ from ltspice_mcp.errors import (
     PlotNotFoundError,
     ResultError,
     ResultFileNotFoundError,
+    ResultHoldsNoPointError,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
@@ -384,6 +385,8 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
+        if exc.code == "raw_holds_no_point":
+            raise ResultHoldsNoPointError(f"{label}: {exc}", show_hint=False) from exc
         if exc.code in ("signals_not_found", "window_refused"):
             raise ResultError(f"{label}: {exc}", show_hint=False) from exc
         if exc.code == "too_large":
