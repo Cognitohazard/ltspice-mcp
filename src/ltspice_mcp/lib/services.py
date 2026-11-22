@@ -720,7 +720,11 @@ class CaseUnreadable:
 
 
 def case_unreadable(
-    job: ExperimentJob, case: ExperimentCase, *, require_raw: bool = False
+    job: ExperimentJob,
+    case: ExperimentCase,
+    *,
+    require_raw: bool = False,
+    reads_why_it_ended: bool = False,
 ) -> CaseUnreadable | None:
     """Why ``case`` of ``job`` cannot be read now, or None when it can.
 
@@ -749,8 +753,12 @@ def case_unreadable(
 
     ``require_raw``: the read takes the case's raw (a chart, a raw read), so a
     case that has none is not read, as one that produced none is not; a read
-    of its log alone (False) takes it, and takes the log a run that ended
-    without results kept, which says why it ended.
+    of its log alone (False) takes it.
+
+    ``reads_why_it_ended``: the read is a summary, which says what a run's log
+    says of why it ended, so it also takes a case whose run ended without
+    results and kept its log. Every other read leaves such a case out, with
+    its failure, because nothing it reads is there.
     """
     if case.status not in TERMINAL_CASE_STATUSES:
         return CaseUnreadable(
@@ -760,8 +768,7 @@ def case_unreadable(
         if not require_raw or case.raw_file is not None:
             return None
         detail = _no_raw_result(job.job_id, case)
-    elif not require_raw and case.log_file is not None:
-        # A run that ended without results keeps its log, which says why.
+    elif reads_why_it_ended and not require_raw and case.log_file is not None:
         return None
     else:
         detail = _failure_detail(case)
@@ -785,13 +792,19 @@ def _failure_detail(case: ExperimentCase) -> str:
 
 
 async def case_refusal(
-    job: ExperimentJob, case: ExperimentCase, *, require_raw: bool = False
+    job: ExperimentJob,
+    case: ExperimentCase,
+    *,
+    require_raw: bool = False,
+    reads_why_it_ended: bool = False,
 ) -> CaseUnreadable | None:
     """``case_unreadable``, with what a running case's simulator has written so
     far (``experiment_runner.live_run_progress``), read off the loop. The
     answer is ``case_unreadable``'s; only the refusal's wording gains the
     facts."""
-    refusal = case_unreadable(job, case, require_raw=require_raw)
+    refusal = case_unreadable(
+        job, case, require_raw=require_raw, reads_why_it_ended=reads_why_it_ended
+    )
     if refusal is None or refusal.code != "run_not_finished" or case.status == "queued":
         return refusal
     from ltspice_mcp.lib.experiment_runner import live_run_progress
@@ -947,12 +960,15 @@ def case_run_context(
     *,
     require_raw: bool = True,
     other_raw: OtherRawKind | None = None,
+    reads_why_it_ended: bool = False,
 ) -> RunContext:
     """``experiment_run_context`` for a caller already holding the case, which
     it has asked can be read (``case_refusal``). A caller reading every case of
     a job takes each this way rather than finding it again by its id."""
     job_id = job.job_id
-    refusal = case_unreadable(job, case, require_raw=require_raw)
+    refusal = case_unreadable(
+        job, case, require_raw=require_raw, reads_why_it_ended=reads_why_it_ended
+    )
     if refusal is not None:
         raise refusal.error(job, case)
     raw = case.raw_file
@@ -1024,6 +1040,7 @@ async def read_selected_case(
     *,
     require_raw: bool,
     other_raw: OtherRawKind | None = None,
+    reads_why_it_ended: bool = False,
 ) -> RunContext | CaseUnread:
     """What a read of ``case``, selected from ``job`` by ``select_cases``,
     takes, or why it is not read. The one answer ``analyze_results`` and
@@ -1034,12 +1051,22 @@ async def read_selected_case(
     ``require_raw`` is where the two differ: analyze_results reads a case
     without a raw (False), because a log recipe reads its log alone, and a
     chart draws only a raw (True), so a case without one is not drawn.
+    ``reads_why_it_ended`` is :func:`case_unreadable`'s.
     """
-    refusal = await case_refusal(job, case, require_raw=require_raw)
+    refusal = await case_refusal(
+        job, case, require_raw=require_raw, reads_why_it_ended=reads_why_it_ended
+    )
     if refusal is not None:
         return CaseUnread(code=refusal.code, detail=refusal.detail, evidence=refusal.evidence)
     try:
-        return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+        return case_run_context(
+            job,
+            case,
+            state,
+            require_raw=require_raw,
+            other_raw=other_raw,
+            reads_why_it_ended=reads_why_it_ended,
+        )
     except OtherRawNotWritten as exc:
         return CaseUnread(code=exc.code, detail=str(exc))
 

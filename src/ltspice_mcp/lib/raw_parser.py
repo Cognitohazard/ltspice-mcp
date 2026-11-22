@@ -386,9 +386,7 @@ def get_step_count(raw: RawData) -> int:
     """Get number of simulation steps (for .step directives).
 
     Args:
-        raw: The selected plot, or None for a run whose results file holds no
-            point: the summary is then what its log says, and nothing of a
-            plot (no ``sim_type``, range, signals or counts).
+        raw: The selected plot
 
     Returns:
         Number of validated step slices; a decoded plot whose step

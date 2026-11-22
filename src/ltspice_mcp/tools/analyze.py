@@ -1024,7 +1024,7 @@ def _unresolved_source(
 
 
 async def _resolve_sources(
-    inputs: list[AnalyzeSourceInput], state: SessionState
+    inputs: list[AnalyzeSourceInput], state: SessionState, *, summary_only: bool = False
 ) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[Observation]]:
     runs: list[_ResolvedRun] = []
     missing: list[dict[str, Any]] = []
@@ -1124,8 +1124,15 @@ async def _resolve_sources(
             for run in unmatched
         )
         for case in selected:
+            # A call of summaries alone reads what a failed run's log says of
+            # why it ended; any other recipe has nothing of such a run to read.
             ctx = await services.read_selected_case(
-                job, case, state, require_raw=False, other_raw=source_input.other_raw
+                job,
+                case,
+                state,
+                require_raw=False,
+                other_raw=source_input.other_raw,
+                reads_why_it_ended=summary_only,
             )
             if isinstance(ctx, services.CaseUnread):
                 row: dict[str, Any] = {
@@ -1428,16 +1435,19 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
     assert args.sources is not None and args.recipes is not None
     loop = asyncio.get_running_loop()
     initialization_deadline = max(deadline, loop.time() + _MIN_ITEM_DEADLINE_S)
-    runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
+    work = _work_items(args.recipes)
+    runs, missing, source_jobs, observations = await _resolve_sources(
+        args.sources,
+        state,
+        summary_only=all(item["recipe"].get("metric") == "summary" for item in work),
+    )
     manifests: list[dict[str, Any]] = []
     captured_logs: dict[str, DecodedLog] = {}
     captures: dict[_CaptureKey, ParsedArtifacts] = {}
     # A measurements recipe reads the raw a run may have left coarse
     # (_capture_ltspice_raws); reading it here as well makes that one read of
     # the run, which every later read of its log is answered from.
-    reads_coarse_raws = any(
-        item["recipe"].get("metric") == "measurements" for item in _work_items(args.recipes)
-    )
+    reads_coarse_raws = any(item["recipe"].get("metric") == "measurements" for item in work)
     for index, run in enumerate(runs):
         try:
             capture_key = _capture_key(run.source)
@@ -1520,10 +1530,15 @@ async def _initial_capture(
 ) -> ParsedArtifacts:
     """The run's first read: its log, and its raw where a recipe reads that
     whole raw later. A raw that cannot be read leaves the read to the log,
-    as a refused coarse-raw read does."""
+    as a refused coarse-raw read does; a read that ran out of time is not
+    tried again."""
     if with_raw and await _may_be_coarse(source):
-        with contextlib.suppress(ResultError):
+        try:
             return await services.load_artifacts(source, state, require_raw=True)
+        except AnalysisDeadlineExceeded:
+            raise
+        except ResultError:
+            pass
     return await services.load_artifacts(source, state, require_raw=False)
 
 
@@ -2645,15 +2660,17 @@ async def _evaluate_item(
                             )
                         )
                     continue
-                try:
+                captured: services.AnalysisSource | None = None
+                if not isinstance(recipe, SummaryRecipe):
                     captured = await _captured_source(
                         run.source, state, captures, require_raw=True
                     )
-                except (ResultHoldsNoPointError, ResultError) as exc:
-                    if not isinstance(recipe, SummaryRecipe) or not (
-                        isinstance(exc, ResultHoldsNoPointError) or run.source.raw is None
-                    ):
-                        raise
+                elif run.source.raw is not None:
+                    with contextlib.suppress(ResultHoldsNoPointError):
+                        captured = await _captured_source(
+                            run.source, state, captures, require_raw=True
+                        )
+                if captured is None:
                     # No point to step through, in a results file or in a job's
                     # case that kept none: the summary is what the run's log
                     # says, once for the run (``metrics.summary``).

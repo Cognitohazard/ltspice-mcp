@@ -13,6 +13,7 @@ no log was found; a results file with points is read as before.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -140,3 +141,51 @@ async def test_a_results_file_with_points_is_summarised_from_its_plots(
     )
     assert "results_hold_no_point" not in value and "log_not_found" not in value, value
     assert value.get("point_count", 0) > 0 and value.get("sim_type"), value
+
+
+_VALUE: dict[str, Any] = {
+    "recipes": [{"key": "v", "metric": "value", "expr": "V(n1)"}],
+    "include": {"per_run": {"limit": 10}, "fields": ["value"]},
+}
+
+
+@pytest.mark.asyncio
+async def test_a_results_file_without_points_fails_every_other_recipe(
+    state_no_sim: SessionState, work_dir: Path
+):
+    raw = work_dir / "alone.raw"
+    shutil.copyfile(rec.recorded("ltspice17", "log/err_timestep.raw"), raw)
+    reply = await dispatched(
+        state_no_sim, "analyze_results", sources=[{"path": str(raw), "label": "p"}], **_VALUE
+    )
+    assert "items" not in reply["results"].get("v", {}).get("per_run", {}), reply
+    (failure,) = reply["failures"]
+    assert "declares no point" in failure["message"], failure
+
+
+@pytest.mark.asyncio
+async def test_a_failed_case_read_by_job_is_left_out_of_every_other_recipe(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    build, case_id = "ltspice26", "log/err_source_loop"
+    monkeypatch.setattr(wsl, "is_wsl", lambda: False)
+    state = _state(work_dir, build, case_id)
+    run_deck = work_dir / "run" / Path(rec.CASES.case(case_id).source).name
+    run_deck.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(rec.INPUTS / rec.CASES.case(case_id).source, run_deck)
+    receipt = await terminal_experiment(
+        state,
+        {
+            "request_id": "no-point-value",
+            "circuits": [{"path": str(run_deck), "id": "dut"}],
+            "execution": {"wait_s": 30},
+            "lint": "off",
+        },
+    )
+    by_job = [{"job_id": receipt["job_id"], "label": "j"}]
+    for recipes in (
+        _VALUE,
+        {**_VALUE, "recipes": [*_VALUE["recipes"], *_SUMMARY["recipes"]]},
+    ):
+        reply = await dispatched(state, "analyze_results", sources=by_job, **recipes)
+        assert "raw_not_produced" in json.dumps(reply.get("coverage", {})), reply
