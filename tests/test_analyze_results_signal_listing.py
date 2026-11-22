@@ -1,6 +1,6 @@
 """What ``include.signals_available`` says of each run a call covers.
 
-Design principle "A check says what it did not look at" (``docs/DESIGN.md``):
+Design principle "Every check states what it did not cover" (``docs/DESIGN.md``):
 every run the call covers is in ``signals_available`` or is named, with the
 reason, in a failure at stage ``signals``. A run is named when its results
 file is missing, when that file cannot be read, and when the call's bound

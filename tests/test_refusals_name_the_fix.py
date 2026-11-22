@@ -1,6 +1,6 @@
 """Every argument refusal names the offending field and the way round.
 
-Design principle "Validate before write" (``docs/DESIGN.md``): a refusal names
+Design principle "Refusals say how to fix the request" (``docs/DESIGN.md``): a refusal names
 the field, the place and the way round, such as the fields an argument accepts.
 
 The cases are generated from every registered tool's advertised input schema

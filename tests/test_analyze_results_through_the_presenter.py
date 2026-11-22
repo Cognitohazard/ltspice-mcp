@@ -1,6 +1,6 @@
 """``analyze_results`` replies go through the presenter.
 
-Design principle "A short reply, the data behind an id" (``docs/DESIGN.md``):
+Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``):
 one call evaluates every recipe it is asked for, and the answer is sent whole
 when it fits its target; a longer one is stored whole and its lists cut, each
 cut named in ``cut`` with the cursor that reads the rest from the stored

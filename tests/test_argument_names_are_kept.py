@@ -1,6 +1,6 @@
 """A renamed argument is told to the caller that still sends the old name.
 
-Design principle "Repeatable requests" (``docs/DESIGN.md``): a client keeps its
+Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``): a client keeps its
 own copy of the tool definitions, so a renamed argument breaks it until it
 reloads them. Renames are made together, in one release, and the refusal of an
 old name says so.

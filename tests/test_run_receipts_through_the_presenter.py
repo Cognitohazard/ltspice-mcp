@@ -1,6 +1,6 @@
 """Run receipts and job replies go through the presenter.
 
-Design principle "A short reply, the data behind an id" (``docs/DESIGN.md``):
+Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``):
 a receipt's run rows are cut as rows to fit the reply's target, at least one
 always stays, and the rest are read back from the job's own record by the
 cursor the reply's ``cut`` names. A reply that cannot meet its target says so,

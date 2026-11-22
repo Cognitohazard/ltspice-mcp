@@ -43,6 +43,39 @@ a netlist's run does, and the block's `not_placed` gives the `code` and
 `message`. If LTspice's window had already closed a plot of the sheet's
 results for the copy, the `note` says so.
 
+**Waveform detail.** The analysis tools return scalars by default, such as
+time-weighted RMS, rise time or phase margin. When the waveform shape matters,
+three levels of detail are available:
+
+- **A recipe for a known shape**, such as `edges` for rise and fall times
+  or `transient_response` for a step response, returns a number for it.
+  Prefer one when it exists.
+- **The `waveform` recipe** returns the min, max, rms and mean of each bucket
+  of samples, so decimation keeps a narrow spike. To zoom in, call it again
+  with a narrower `window`. With `format: "csv"` it writes every sample to
+  disk and returns the path.
+- **`plot_waveform`** draws an interactive chart and returns its file path
+  and a summary of each trace, computed from every sample before any
+  decimation, so the model gets the chart's numbers without viewing it.
+
+Each consumer has its own channel:
+
+|consumer|channel|
+|-|-|
+|the agent, for computation|the `waveform` recipe in `format: "csv"`, written to disk|
+|a vision model|a PNG attached to a `plot_waveform` result (`attach_plot`)|
+|a person|`plot_waveform`: an in-chat widget on an MCP Apps host such as Claude Desktop, otherwise a self-contained HTML file opened on the desktop|
+|a person in LTspice|`plot_waveform(in_ltspice=true)`, which opens the run's results in the LTspice window|
+
+The HTML file is for terminal clients such as Claude Code, which do not show
+images to the user and pass a PNG only to the model. Each unit gets its own
+chart panel, so volts and amps never share a y-axis. The chart plots every
+sample of a trace up to 100,000 points (the `max_points` argument); above that
+it keeps the minimum and maximum of each interval and reports that it
+downsampled. The PNG is off by default (`[analysis] attach_plot`), costs
+about 1,000 tokens for two panels, and is drawn by `resvg-py`, a dependency.
+The chart needs no plotting dependency; its library is bundled.
+
 `plot_waveform` draws several cases of one job in one chart when `runs` is
 given beside `job_id`, in the grammar of an `analyze_results` source: `"all"`,
 a list of run indices, or `{case_ids: [...]}`. Both tools select the cases
@@ -223,6 +256,59 @@ coverage gaps. `warnings` are free text describing assumptions a measurement
 made, such as a clamped window or an ambiguous edge. `failures` list what
 failed. No field rates whether a result is trustworthy; the server reports
 facts and the caller judges them.
+
+**Simulator diagnostics.** The server reads each simulator log, and its
+console capture beside it, when the run ends, and puts what the simulator said
+on the run: each run row of `run_experiments` and `jobs`, and the `summary`
+recipe, carry `diagnostics`, one entry per condition and channel, so the agent
+learns from the reply that a run which finished was still warned about,
+without searching a log. An entry is `{code, count, first_text, channel}`,
+plus `severity` only where the simulator wrote one: `code` is the server's
+name for the condition (one code for every build's wording of it), `severity`
+the simulator's own word, kept apart because LTspice XVII calls an ignored
+model parameter an error on a run that finished. A condition's `severity` is
+the strongest word over its occurrences. A reader that lists a run's errors or
+warnings (the `summary` recipe) lists each distinct line the simulator gave a
+word, by that word (`log_conditions.said_lines`), never a line that does not
+carry it; those lines are read from the log, not kept on the row.
+`first_text` is the first occurrence as written, `channel` says whether it
+came from the log or the console, and the run's `log` holds the rest.
+
+The rules are chosen by the run's producer, the simulator and the build it
+named in its output, and are built from logs each one wrote. A line that is
+neither a known condition nor the producer's routine output (banners,
+settings, timing, step lines, solver statistics, and the result blocks other
+readers decode) is counted under `unclassified` with the first one as
+written, never dropped. `diagnostics_coverage` says when the reading is not
+the producer's own: the build has no recordings, the producer is not known,
+the simulator has no recordings at all (QSPICE and Xyce, whose lines are read
+with the generic patterns the server used before it had recordings), the log
+could not be read, or the run was recorded before logs were classified. A run
+with nothing to report carries neither field.
+
+The `summary` recipe also keeps the simulator's warnings and errors as text
+(parse errors with caret pointers, fatal errors, convergence messages, `.MEAS`
+parse failures) in `warnings` and `errors` lists. The run summary also has an
+`observations` list:
+
+|observation kind|contents|
+|-|-|
+|`relay`|the simulator's own error lines, with the simulator's severity; the server never assigns one|
+|`reconciliation`|requested `.meas`/`.four` outputs that were not produced|
+|`value`|non-finite samples and extreme node values in the trace data|
+|`coverage`|skipped checks, so an incomplete result is not mistaken for a clean one|
+
+A reply with no `observations` means that no check fired; it leaves out an
+empty list, as it leaves out every field that says nothing. It does not mean
+that the result is correct.
+
+LTspice and ngspice get full diagnostics, with ngspice's console output read
+alongside its log. For QSPICE and Xyce, whose log wording has no recordings,
+there is no word of the simulator's own to prefer, so a line is read as an
+error or a warning by the generic patterns the server used before it had
+recordings (`log_parser.classify_line`): `diagnostics` count those under
+`simulator_error` and `simulator_warning`, every other line under
+`unclassified`, and the summary's `errors` and `warnings` list them as before.
 
 **Findings shape** (lint, layout, quality):
 `{rule_id, severity, ok, evidence, at {file, line? | x, y?}, subject}`. `at`
@@ -1138,7 +1224,7 @@ and channel,
 `{code, count, first_text, channel, severity?}`, with `severity` only where
 the simulator wrote one (the strongest word over the condition's
 occurrences), and lines the server does not recognise counted under
-`unclassified` (`docs/DESIGN.md`, "Diagnostics"). It does not change the
+`unclassified` (§2, "Simulator diagnostics"). It does not change the
 case's `status`: a run the simulator warned about and finished is still
 `produced`. `diagnostics_coverage` is present only when that reading is not
 the run's own simulator and build: `build_unrecorded`, `producer_unknown`,

@@ -1,7 +1,7 @@
 """Every list in a reply declares how it may be cut, and only the reply layer
 knows about reply size.
 
-Design principle "A short reply, the data behind an id" (``docs/DESIGN.md``):
+Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``):
 a reply too long to send whole is cut, stored, and read on, the same way in
 every tool. That needs every list to say how it may be cut
 (``lib/reply_cuts.py``), one writer of the sentence that says how to read the

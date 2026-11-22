@@ -1,6 +1,6 @@
 """A list cut short says how to read the rest.
 
-Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says how
+Design principle "Every check states what it did not cover" (``docs/DESIGN.md``): a list cut short says how
 to read the rest. And "A short reply, the data behind an id": a result too
 large to read whole should be readable in part.
 

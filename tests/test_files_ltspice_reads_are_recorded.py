@@ -1,6 +1,6 @@
 """Each file the server writes for LTspice to read is one LTspice was recorded reading.
 
-Design principle "LTspice's own tools as peers" (``docs/DESIGN.md``): the server
+Design principle "The file on disk is the reference" (``docs/DESIGN.md``): the server
 writes the files LTspice reads (a sheet's netlist, its ``.plt`` plot settings,
 a run's results beside its sheet, the sheet itself) rather than imitating
 LTspice. Such a file is right only as LTspice reads it, so each is tied here

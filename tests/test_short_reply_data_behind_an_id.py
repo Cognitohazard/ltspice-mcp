@@ -1,6 +1,6 @@
 """A short reply, the data behind an id.
 
-Design principle "A short reply, the data behind an id" (``docs/DESIGN.md``): a
+Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``): a
 reply carries a summary that is true on its own, and the bulk stays on disk,
 recorded per job and case and addressed by id and path, so an old run reloads
 without simulating again.

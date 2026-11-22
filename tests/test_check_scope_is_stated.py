@@ -1,6 +1,6 @@
 """A check that did not run is reported as not run, with the reason.
 
-Design principle "Safe edits" (``docs/DESIGN.md``): a check says what it did
+Design principle "Every check states what it did not cover" (``docs/DESIGN.md``): a check says what it did
 not look at, and a check that did not run is reported as not run, because a
 verdict that reads as complete while it covered only part of the circuit is
 worse than no verdict.

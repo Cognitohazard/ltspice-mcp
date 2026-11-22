@@ -4,30 +4,32 @@
 
 > **Work in progress.** Expect breaking changes across versions.
 
-ltspice-mcp is an MCP server that lets an AI assistant simulate circuits with
-LTspice or ngspice and edit LTspice schematics. Its goals are speed,
-correctness, token efficiency and clean schematics.
+ltspice-mcp is an MCP server for circuit simulation with LTspice and ngspice. It provides tools for an AI to simulate circuits and to edit LTspice schematics.
 
-The assistant uses ready-made, well-tested tools, which know the quirks of
-SPICE and of each simulator, instead of improvised scripts.
+## Functionalities
 
-Mechanical checks catch common errors before a file is written or run, and
-direct the assistant's attention to the right place. Layout is left to the
-assistant's judgment, not an auto-router.
+* Run a circuit, a sweep, a set of corners or a Monte Carlo analysis in one call. Jobs run in the background and across sessions.
+* Well-tested tools for common measurements like gain and phase margins, step response, edge times, distortion, noise, operating points, etc.
+* Plot waveforms in an interactive chart in the chat where the client supports it.
+* Edit schematics in an aesthetic, human-readable form.
+* Co-design with a human in [the same LTspice window](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open) (LTspice 26.1 or later, on Windows).
+* Composable API that can be leveraged for complex custom tasks.
 
-Results come back as named numbers, such as a phase margin, instead of
-waveforms to read. To see a waveform yourself, ask for an interactive chart,
-shown in the chat where the client supports it.
+## Design Principles
 
-Sweeps, corners and Monte Carlo take one call and run as background jobs that
-survive a restart and can be replayed.
+The tools contain circuit design practice and the recorded behaviour of each simulator. Both are applied in every call, because AI often misses errors that are not directly related to the request.
 
-With LTspice 26.1 or later on Windows, you and the assistant can edit the same
-open schematic ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
+* Mechanical sanity checks are run automatically without needing human/AI direction, catching errors without extra context bloat.
+* Every check states what it did not cover, so a partial check is not mistaken for a pass.
+* Analyses return measured values with units, so the AI works from a number and does not spend context on raw waveform data.
+* Results are reported as facts without verdicts, leaving the engineering judgement to the AI and the human.
+* Schematic layout is directed by the AI, with every edit validated before it is written. There is no auto-router, because auto-routed schematics are hard to read.
+* Simulator and file-format quirks are recorded from real LTspice builds and covered by tests, so the tools do not depend on guesses.
+* Jobs and results are stored on disk and requests are repeatable, so work continues across sessions without re-running simulations.
+* A small set of composable tools keeps context use low, with the Python API for anything more complex.
+* Refusals say how to fix the request, so mistakes usually cost no more than one turn.
 
-Everything the tools do is also available from Python, as the
-`ltspice_mcp.api` package. The server is built on
-[spicelib](https://github.com/nunobrum/spicelib).
+[docs/DESIGN.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/DESIGN.md) has the full text.
 
 ## Quick start
 
@@ -86,7 +88,7 @@ The plugin and the extension need [`uv`](https://docs.astral.sh/uv/).
 there.** It reads each `.raw` and `.log` file in a separate process with a
 memory limit, which has not been validated on macOS.
 
-**Make sure the assistant uses the server.** Some assistants run the
+**Make sure the AI uses the server.** Some AI clients run the
 simulator from the shell instead. Name the server `spice`, as the plugin
 does, and not `ltspice`, which is the name LTspice's own MCP server takes.
 Then add this rule to your project's `CLAUDE.md` or your client's equivalent:
@@ -101,7 +103,7 @@ lists the cases in which running the simulator from the shell is acceptable.
 **LTspice's own MCP server.** LTspice 26.1 and later include an MCP server,
 which registers as `ltspice` and can run beside this one. It drives the
 LTspice window and returns raw samples and logs, leaving measurements and
-Monte Carlo setup to the assistant. This server does not need it. [Alongside
+Monte Carlo setup to the AI. This server does not need it. [Alongside
 LTspice's own MCP server](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#alongside-ltspices-own-mcp-server)
 describes an LTspice setting you may want to change.
 
@@ -125,7 +127,9 @@ describes an LTspice setting you may want to change.
 |-|-|
 | LTspice | Primary. Windows, WSL2 (runs the Windows LTspice), Linux via Wine. Required for `.asc` schematic editing. |
 | ngspice | Simulation and analysis. Does not need LTspice. |
-| QSPICE, Xyce | Secondary, selected per run. Netlists only, not `.asc`. QSPICE only when the server runs natively on Windows. |
+| QSPICE, Xyce | Secondary, selected per run, with the support that spicelib provides. Netlists only, not `.asc`. QSPICE only when the server runs natively on Windows. |
+
+Simulator detection and launch are built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Tools
 
@@ -142,7 +146,7 @@ The server has 8 tools:
 | `plot_waveform` | Interactive waveform chart, in the chat where the client supports it, otherwise in a browser |
 | `run_code` | Run a Python snippet that calls the server's Python API, for loops and calculations |
 
-The assistant reads how to use them from `inspect(kind="guide")`, which
+The AI reads how to use them from `inspect(kind="guide")`, which
 covers the simulators and common tasks, and looks up any option with
 `inspect(kind="reference")`.
 
@@ -167,7 +171,7 @@ server creates, and running the server on another machine.
 
 ## Python API
 
-Scripts and notebooks can do what the tools do by importing `ltspice_mcp.api`. Use it
+The `ltspice_mcp.api` package provides the same functions as the tools to scripts and notebooks. Use it
 for optimizers, curve fits, CI checks, or any loop where each run depends on
 the last. The API returns complete results and numpy arrays, where the tools
 return pages. Scripts and the server share the job records in the working
@@ -179,7 +183,7 @@ pip install ltspice-mcp        # or: uv add ltspice-mcp
 
 A script needs this install even if you use the plugin or the Desktop
 extension, which keep the server in an environment of their own. An
-assistant in a session does not need it, because it can use the API through
+AI in a session does not need it, because it can use the API through
 `run_code`.
 
 With an RC low-pass in `circuits/rc.cir`:
@@ -216,10 +220,10 @@ tools. The full specification is in [docs/design/python_api.md](https://github.c
 
 ## Research behind the design
 
-Published studies by other groups informed three design choices:
+Published studies by other groups informed these design choices:
 
-- **Measurements are returned as named numbers.** A study of LLM workflows for switched-mode power supply design ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639), first published as SPICEAssistant) found that GPT-4o could not reliably read a ripple value from a waveform given as numbers or as an image, so its tools extract such values from each LTspice run and return them as text. With that simulation feedback, o3 solved 84.9% of 269 power-supply design tasks, against 25.4% with no simulation. The study compared simulation feedback with none, not named numbers with raw output.
-- **Schematic edits are typed and checked.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on netlist edits with dependent steps fell from 80% at 3 steps to 26% at 15. The study measured unassisted edits to text netlists. `edit_schematic`, which checks each typed operation before it writes the file, was designed in response; its effect has not been measured.
+- **Analyses return measured values with units.** A study of LLM workflows for switched-mode power supply design ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639), first published as SPICEAssistant) found that GPT-4o could not reliably read a ripple value from a waveform given as numbers or as an image, so its tools extract such values from each LTspice run and return them as text. With that simulation feedback, o3 solved 84.9% of 269 power-supply design tasks, against 25.4% with no simulation. The study compared simulation feedback with none, not measured values with raw output.
+- **Every schematic edit is validated before it is written.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on netlist edits with dependent steps fell from 80% at 3 steps to 26% at 15. The study measured unassisted edits to text netlists. `edit_schematic`, which checks each typed operation before it writes the file, was designed in response; its effect has not been measured.
 - **The tool interface is typed.** A benchmark of agents that take chip designs from RTL to GDS ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to failures at the tool interface. That work is in a different domain, so it does not show the same effect in circuit simulation. The server follows the benchmark's recommendations: registered APIs, persistent sessions and structured results.
 
 ## Development
@@ -239,7 +243,7 @@ tags the commit. The pushed tag publishes to PyPI.
 
 ## Contributing
 
-- [docs/DESIGN.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/DESIGN.md): the architecture
+- [docs/DESIGN.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/DESIGN.md): the design principles and the architecture
 - [docs/design/](https://github.com/cognitohazard/ltspice-mcp/tree/master/docs/design): specifications of the MCP tools and the Python API
 - [docs/TESTING.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/TESTING.md): testing practice
 - [THIRD_PARTY_NOTICES.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/THIRD_PARTY_NOTICES.md): vendored components

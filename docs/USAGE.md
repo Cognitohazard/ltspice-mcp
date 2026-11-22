@@ -219,6 +219,12 @@ path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
 Simulation output goes to a Windows temp folder automatically, because
 LTspice loses `.MEAS` results when it writes to the Linux file system.
 
+The server handles the rest of the WSL boundary. It converts paths with
+`wslpath` instead of Wine's `Z:` prefix. It resolves symbol-library paths
+under `%LOCALAPPDATA%` through `cmd.exe`, because they vary by Windows user
+profile. A netlist keeps its extension (`.cir`, `.net`, `.sp`), which LTspice
+requires.
+
 `.asc` editing reads symbols from the library of the LTspice build the
 server runs, which it finds automatically on Windows, under Wine and on WSL.
 Folders in `[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS` are
@@ -269,6 +275,55 @@ you control with a stdio-to-HTTP bridge such as
 on a network you fully control, because it writes files and starts processes,
 and only `allowed_paths` together with `run_code = false` confines it to
 chosen folders. [SECURITY.md](../SECURITY.md) describes the threat model.
+
+### Simulators by platform
+
+Most users run the server natively on Windows alongside LTspice. WSL2 and
+Linux are also supported. The server uses WSL interop (the `/mnt` drive
+mapping, `wslpath`, the Windows-side temp directory for `.MEAS`) only when it
+detects WSL.
+
+|simulator|platform|
+|-|-|
+|LTspice|Windows native; Linux through Wine; WSL through Windows interop|
+|ngspice|Linux and Windows native|
+|QSPICE|Windows native only (runs are refused under WSL or Wine)|
+|Xyce|Linux and Windows native|
+
+macOS is not supported yet. The server reads every `.raw` and `.log` file in
+a parser process with a hard memory limit and cleans up that process and any
+it started (`lib/parser_process.py`). Neither has been validated on macOS, so
+the server refuses every result read there with `unsupported_platform`.
+[TESTING.md](TESTING.md) lists the tests that supporting it needs.
+
+A schematic (`.asc`) runs through the netlist LTspice exports from it, which
+is in LTspice's own dialect. The server prepares that netlist for ngspice
+only, by removing the `.backanno` line and the `§` LTspice puts in some
+instance names, so a schematic run on QSPICE or Xyce is refused and needs a
+hand-written netlist.
+ngspice runs in spicelib's default compatibility mode, `kiltpsa`, which drops
+the section name from a `.lib <file> <section>` line that selects a corner;
+set `[simulator] ngbehavior` (for example `hsa`) when a deck uses one. Every
+ngspice run starts with `-n`, so a `.spiceinit` cannot change the mode the
+server reads the deck in.
+
+## Checking a new install
+
+End-to-end smoke test for a fresh install:
+
+1. Create an RC lowpass netlist (R = 1k, C = 100n, so fc is about 1.59 kHz).
+2. Add a `.ac dec 100 1 1Meg` directive.
+3. Run it with `run_experiments`.
+4. Read it back with a `bode_filter` recipe and check that the -3 dB point
+   is near 1.59 kHz.
+5. Change R to 10k (fc about 159 Hz).
+6. Run and measure again, and check that the bandwidth moved.
+7. Include a custom library with a `.lib` or `.include` directive and use one
+   of its models in a new circuit.
+
+If a step fails, check `simulator.path` in the TOML and, when
+`ltspice-mcp.toml` sets `[security] allowed_paths`, confirm that it includes
+your working directory.
 
 ## An example session
 

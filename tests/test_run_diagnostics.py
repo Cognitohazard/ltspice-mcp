@@ -523,16 +523,18 @@ def _now():
 
 
 def test_the_design_sentence_holds_for_every_reply_it_names():
-    """``docs/DESIGN.md`` says the simulator's diagnostics are on the replies
-    of ``run_experiments`` and ``jobs`` and on the ``summary`` recipe; each of
-    those declares them."""
+    """``docs/design/mcp_surface.md``, "Simulator diagnostics", says the
+    simulator's diagnostics are on the replies of ``run_experiments`` and
+    ``jobs`` and on the ``summary`` recipe; each of those declares them."""
     from ltspice_mcp.tools.analyze import _ATTRIBUTED_VALUE_SCHEMA
     from ltspice_mcp.tools.receipts import RUN_RECORD_SCHEMA
 
     summary_schema = _ATTRIBUTED_VALUE_SCHEMA["properties"]["value"]
 
-    design = (_SRC.parents[1] / "docs" / "DESIGN.md").read_text(encoding="utf-8")
-    section = design.split("## Diagnostics", 1)[1].split("\n## ", 1)[0]
+    surface = (_SRC.parents[1] / "docs" / "design" / "mcp_surface.md").read_text(
+        encoding="utf-8"
+    )
+    section = surface.split("**Simulator diagnostics.**", 1)[1].split("\n\n**", 1)[0]
     for name in ("run_experiments", "jobs", "summary", "diagnostics", "unclassified"):
         assert name in section, name
     for schema in (RUN_RECORD_SCHEMA, summary_schema):

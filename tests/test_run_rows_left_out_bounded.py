@@ -1,7 +1,7 @@
 """``runs_not_shown`` has one bound in tokens, and the size search keeps as
 many run rows as fit beside it.
 
-Design principle "A short reply, the data behind an id": a reply that leaves
+Design principle "Jobs and results are stored on disk": a reply that leaves
 rows out names the facts on them in a part that is never cut, so that part is
 bounded by itself, whatever the number of kinds and runs. The rows are then
 sized against what that part leaves of the target.
