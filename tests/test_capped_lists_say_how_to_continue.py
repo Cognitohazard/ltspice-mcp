@@ -1,7 +1,7 @@
 """A list cut short says how to read the rest.
 
 Design principle "Every check states what it did not cover" (``docs/DESIGN.md``): a list cut short says how
-to read the rest. And "A short reply, the data behind an id": a result too
+to read the rest. And "Jobs and results are stored on disk and requests are repeatable": a result too
 large to read whole should be readable in part.
 
 Every output schema a tool or a delegated handler declares is walked. An object

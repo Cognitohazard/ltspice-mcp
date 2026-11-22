@@ -1,7 +1,7 @@
 """verify_circuit sends every finding when its reply fits, and stores the
 answer and says how to read the rest when it does not.
 
-Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``):
+Design principle "Jobs and results are stored on disk and requests are repeatable" (``docs/DESIGN.md``):
 the findings are cut by the presenter (``lib/presenter.py``) only when the
 reply is over the reply target (``[analysis] default_budget``), never at a
 number per rule. A cut reply stores the complete answer and names three ways

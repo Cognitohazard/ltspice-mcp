@@ -1,11 +1,11 @@
 """Each file the server writes for LTspice to read is one LTspice was recorded reading.
 
-Design principle "The file on disk is the reference" (``docs/DESIGN.md``): the server
+Design principle "Simulator and file-format quirks are recorded from real LTspice builds and covered by tests" (``docs/DESIGN.md``): the server
 writes the files LTspice reads (a sheet's netlist, its ``.plt`` plot settings,
 a run's results beside its sheet, the sheet itself) rather than imitating
 LTspice. Such a file is right only as LTspice reads it, so each is tied here
 to the behaviour in ``tests/fixtures/ltspice_recorded/inputs/cases.toml``
-whose recordings show LTspice reading it ("Evidence before assumption").
+whose recordings show LTspice reading it ("A recording comes before the code that uses it").
 
 A row names its writer by function, so moving or renaming the writer fails
 here and the row is revisited; a writer with no behaviour, or whose behaviours

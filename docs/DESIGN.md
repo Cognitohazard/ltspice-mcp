@@ -31,11 +31,11 @@ An agent can also write a script for each step. The tools differ from such a scr
 - **They use little context.** A call is about 50 tokens. A reply omits empty fields. Long data stays on disk, and a later call reads it by its id.
 - **They stay.** A later session uses the same tools and the same stored results. It does not write the script again.
 
-## Scope, readers and direction
+## Scope, reader and direction
 
 An engineer opens Claude Code on a Windows machine that has LTspice and asks for the phase margin of an LDO. That agent is the first reader of this server. The second reader is a person in a chat client such as Claude Desktop, who sees charts in the chat. The third reader is a script or a notebook that imports the Python API.
 
-The agent comes to the machine that has the simulator and the circuit files. The server runs locally and speaks MCP on stdio. A circuit is a file on that machine, and each tool takes its path.
+The agent comes to the machine that has the simulator and the circuit files. The server runs locally and speaks MCP on stdio. A circuit is a file on that machine, and each tool takes its path. The agent works on that machine directly, through Claude Code's Remote Control, or in a cloud container that runs ngspice.
 
 LTspice comes first, and Windows is the primary platform. WSL2 and Linux under Wine also run LTspice. ngspice runs simulations and analyses on Linux and Windows. It differs from LTspice in some behaviour, and the lint and the ngspice section of the packaged guide describe each difference.
 
@@ -47,7 +47,7 @@ The roadmap has a later platform phase. In that phase, the server gives ngspice 
 
 A tool call `run_experiments(...)` and the Python call `api.run_experiments(...)` take the same arguments. They run the same validation and the same operation. The Python API and the tools are one contract.
 
-A script gets complete results, numpy arrays and exceptions, and a reply has no size limit. A tool is for one intent whose reply the agent uses as it is. Python is for loops, for combining runs and for math on traces.
+A script gets complete results, numpy arrays and exceptions. A reply to a script has no size limit. A tool is for one intent whose reply the agent uses as it is. Python is for loops, for combining runs and for math on traces.
 
 An agent that has only MCP gets the Python surface through `run_code`. A script and the server share the stored work in the working directory, so each can read a job that the other ran.
 
@@ -75,7 +75,7 @@ A result is a fact with no verdict. A reply can report a crest factor of 8.1 for
 
 Sweeps, corners and Monte Carlo are data in one call. A `run_experiments` call lists its variations and attaches the analysis, and the reply returns the measured values of every case.
 
-## Co-design with a person
+## The person
 
 A person asks the agent for a plot of `V(out)`. `plot_waveform` draws an interactive chart in the chat where the client supports it, and in a browser otherwise. The same results can open in the LTspice window, and the server writes the `.plt` plot settings that LTspice reads.
 
@@ -125,7 +125,7 @@ In agent development, checks of this kind are called feedback sensors. They repo
 
 - **A small set of composable tools keeps context use low, with the Python API for anything more complex.** Each tool definition stays in context for every turn. A sweep, a corner set and a Monte Carlo run are three kinds of variation in one tool.
 - **One call for one intent.** The server does the steps between the request and the answer, such as staging, locking, exporting and comparing. `jobs(action="place_beside_sheet")` puts the results of a run where LTspice opens them.
-- **A small run is fast enough to try.** An agent can then run an experiment in place of a long chain of reasoning. Work added to the run path is weighed against that, and a script compares small runs with a local baseline.
+- **A small run is fast enough to try.** An agent can then run an experiment in place of a long chain of reasoning. A maintainer weighs any work added to the run path against that cost. A script compares small runs with a local baseline.
 - **A function is a tool only when it needs the server's knowledge, stored state or a transaction. If not, it is Python.** A job that continues after the call needs the server, and so does a schematic edit. The mean of a trace is a line of numpy in `run_code`.
 
 ## Architecture
@@ -156,7 +156,7 @@ The server has two surfaces and one core. The MCP tools and the Python API both 
 The core has six parts:
 
 - **Circuits** read netlists, LTspice schematics and symbols. This part decides which points of a sheet are one net, and it applies schematic edits.
-- **Runs** prepare a deck for each simulator and start the simulator. This part keeps the state of each job and limits the number of parallel simulations.
+- **Runs** prepare a deck for each simulator and start the simulator. This part keeps the state of each job and limits the number of parallel simulations. The server perturbs the values for a Monte Carlo run itself, and each perturbed case runs on the same path as every other run.
 - **Results** read `.raw` and `.log` files in a separate process with a deadline and a memory limit. The recipes compute the measured values from those results.
 - **Checks** are the netlist lint, the schematic lint, the log reader's diagnostics and the observations on a result.
 - **Records** are the store on disk. It keeps each job, its cases and its results by id.
@@ -164,7 +164,7 @@ The core has six parts:
 
 The evidence for each LTspice behaviour is a recording. `tests/fixtures/ltspice_recorded/` holds the files that LTspice 26 and LTspice XVII wrote for the inputs in `inputs/cases.toml`. A test compares the code with each recording on any machine, without LTspice. [TESTING.md](TESTING.md), "Recorded LTspice behaviour", describes the recordings.
 
-The server uses [spicelib](https://github.com/nunobrum/spicelib) to find and start the simulators. Its `.raw` reader and its log reader start from spicelib's readers, and the server adds its own decoding where a recording differs. The schematic editor writes the `.asc` file through spicelib's editor.
+The server uses [spicelib](https://github.com/nunobrum/spicelib) to find and start the simulators. Its `.raw` reader and its log reader start from spicelib's readers, and the server adds its own decoding where a recording differs. The schematic editor writes the `.asc` file through spicelib's editor. The server depends on spicelib directly, not on PyLTSpice, which re-exports it.
 
 The geometry, the net rules and the checks of a schematic edit are the server's own code. Each must agree with the recordings. [spicelib_bugs.md](spicelib_bugs.md) lists each spicelib bug that the server works around.
 
@@ -177,4 +177,4 @@ The geometry, the net rules and the checks of a schematic edit are the server's 
 
 ## Other documents
 
-[USAGE.md](USAGE.md) covers installation, configuration, WSL and the files that the server creates. [design/mcp_surface.md](design/mcp_surface.md) specifies the tool arguments and replies, and [design/python_api.md](design/python_api.md) specifies the Python API. [TESTING.md](TESTING.md) lists the test that holds each principle.
+[USAGE.md](USAGE.md) covers installation, configuration, WSL and the files that the server creates. [design/mcp_surface.md](design/mcp_surface.md) specifies the tool arguments and replies, and [design/python_api.md](design/python_api.md) specifies the Python API. [spice_lex.md](spice_lex.md) describes the netlist parser. [TESTING.md](TESTING.md) lists the tests of the principles.

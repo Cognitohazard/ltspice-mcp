@@ -1,12 +1,12 @@
 """``analyze_results`` replies go through the presenter.
 
-Design principle "Jobs and results are stored on disk" (``docs/DESIGN.md``):
+Design principle "Jobs and results are stored on disk and requests are repeatable" (``docs/DESIGN.md``):
 one call evaluates every recipe it is asked for, and the answer is sent whole
 when it fits its target; a longer one is stored whole and its lists cut, each
 cut named in ``cut`` with the cursor that reads the rest from the stored
 answer. A page evaluates nothing, so it is never refused or emptied because a
 source moved: it carries the snapshot of the sources its answer was computed
-from. "A check says what it did not look at": a row left out that carries a
+from. "Every check states what it did not cover": a row left out that carries a
 fact is named, with a cursor that starts at it.
 """
 

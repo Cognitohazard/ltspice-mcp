@@ -278,10 +278,8 @@ chosen folders. [SECURITY.md](../SECURITY.md) describes the threat model.
 
 ### Simulators by platform
 
-Most users run the server natively on Windows alongside LTspice. WSL2 and
-Linux are also supported. The server uses WSL interop (the `/mnt` drive
-mapping, `wslpath`, the Windows-side temp directory for `.MEAS`) only when it
-detects WSL.
+Most users run the server natively on Windows alongside LTspice. WSL is
+described in [WSL](#wsl).
 
 |simulator|platform|
 |-|-|
