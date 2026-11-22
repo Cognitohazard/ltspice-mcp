@@ -217,7 +217,7 @@
    "ops": 21,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 3351
+   "reply_bytes": 3432
   },
   "digests": [
    "eb8729a9d0120934d5b14d8f4383248fc7302cd8202119f189db780ffebac353"
@@ -248,7 +248,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 2,
+   "attribute_text_overlap": 3,
    "label_island": 3
   }
  },
@@ -665,7 +665,7 @@
    "ops": 58,
    "origins_from_pins": 14,
    "refused": 0,
-   "reply_bytes": 7331
+   "reply_bytes": 7088
   },
   "digests": [
    "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61"
@@ -696,7 +696,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 9,
+   "attribute_text_overlap": 6,
    "label_island": 2
   }
  },
@@ -707,7 +707,7 @@
    "ops": 61,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 8993
+   "reply_bytes": 8525
   },
   "digests": [
    "adcad5f63545894caf1b80b1147decf2e98040f0fb78edd2914bbaa5c8217925"
@@ -738,7 +738,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 18,
+   "attribute_text_overlap": 12,
    "label_island": 8
   }
  },
@@ -749,7 +749,7 @@
    "ops": 59,
    "origins_from_pins": 14,
    "refused": 0,
-   "reply_bytes": 10182
+   "reply_bytes": 9938
   },
   "digests": [
    "e22c2793e261e8c253226123ed05659fa2f063b107be82a262cd4caa64a448bc",
@@ -781,7 +781,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 9,
+   "attribute_text_overlap": 6,
    "label_island": 2
   }
  },
