@@ -75,10 +75,11 @@ _SPICELIB_FAMILIES = {
 def test_spicelib_run_starts_without_the_variable(wine_host, fake_simulator, tmp_path, family):
     import importlib
 
-    import ltspice_mcp.lib.simulator  # noqa: F401 - the server's own import
+    from ltspice_mcp.lib.simulator import bind_named_executable
 
     module, name = _SPICELIB_FAMILIES[family]
-    simulator = getattr(importlib.import_module(module), name).create_from(str(fake_simulator))
+    family_class = getattr(importlib.import_module(module), name)
+    simulator = bind_named_executable(family_class, f"{family}:fake", fake_simulator)
     simulator.run(_deck(tmp_path), timeout=30)
     started = _recorded(fake_simulator)
     assert VARIABLE not in started
@@ -90,11 +91,11 @@ def test_spicelib_run_starts_without_the_variable(wine_host, fake_simulator, tmp
 def test_spicelib_ltspice_netlist_export_starts_without_the_variable(
     wine_host, fake_simulator, tmp_path
 ):
-    from ltspice_mcp.lib.simulator import _get_ltspice_class
+    from ltspice_mcp.lib.simulator import _get_ltspice_class, bind_named_executable
 
     sheet = tmp_path / "rc.asc"
     sheet.write_text("Version 4\nSHEET 1 880 680\n", encoding="utf-8")
-    simulator = _get_ltspice_class().create_from(str(fake_simulator))
+    simulator = bind_named_executable(_get_ltspice_class(), "ltspice:fake", fake_simulator)
     with pytest.raises(RuntimeError, match="Failed to create netlist"):  # the fake writes none
         simulator.create_netlist(sheet)
     started = _recorded(fake_simulator)
