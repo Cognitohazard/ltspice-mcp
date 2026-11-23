@@ -418,6 +418,32 @@ class TestRemovalsInOneBatch:
             {"index": 3, "op": "remove_net_label", "already_removed_by": 0},
         ]
 
+    async def test_both_forms_of_remove_wire_name_the_op_that_took_a_wire_drawn_in_the_batch(
+        self, asc_state: SessionState
+    ):
+        sheet = _sheet(asc_state, "drawn.asc", _R1, _res("R2", 288, 244))
+        reply = await _edit(
+            asc_state,
+            sheet,
+            [
+                {
+                    "op": "wire_pins",
+                    "from_pin": "R1.1",
+                    "to_pin": "R2.1",
+                    "waypoints": [{"x": 96, "y": 100}, {"x": 288, "y": 100}],
+                },
+                {"op": "remove_component", "reference": "R1", "cleanup_wires": True},
+                {"op": "remove_wire", "x": 96, "y": 196},
+                {"op": "remove_wire", "x1": 96, "y1": 196, "x2": 96, "y2": 100},
+            ],
+        )
+        assert "failures" not in reply, reply.get("failures")
+        assert _records(sheet, "WIRE") == []
+        assert reply["results"][-2:] == [
+            {"index": 2, "op": "remove_wire", "already_removed_by": 1},
+            {"index": 3, "op": "remove_wire", "already_removed_by": 1},
+        ]
+
     async def test_a_dry_run_keeps_the_same_record(self, asc_state: SessionState):
         sheet = _sheet(asc_state, "dry.asc", _R1, "WIRE 96 196 96 100", "FLAG 96 100 a")
         before = sheet.read_bytes()

@@ -2383,6 +2383,15 @@
    "tests/test_reported_behaviours.py::test_an_edit_that_changes_model_lines_compares_equivalent_with_its_reference"
   ]
  },
+ "87b27d203b27ee80": {
+  "answer": {
+   "reply": "5d5d76452927b676",
+   "sheet": "9757ebe4480722b5"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_both_forms_of_remove_wire_name_the_op_that_took_a_wire_drawn_in_the_batch"
+  ]
+ },
  "880866ff6f0f7bba": {
   "answer": {
    "reply": "ca6b50fc6f9ad991",
@@ -2919,8 +2928,8 @@
  },
  "a4a7ebed2f439ec7": {
   "answer": {
-   "message": "TestAbortedTransaction.test_uncaught_exception_invalidates_the_cache_and_preserves_the_file.<locals>.flaky_apply() takes from 3 to 4 positional arguments but 5 were given",
-   "raised": "TypeError"
+   "message": "injected mid-batch failure",
+   "raised": "RuntimeError"
   },
   "tests": [
    "tests/test_post_op_warnings.py::TestAbortedTransaction::test_uncaught_exception_invalidates_the_cache_and_preserves_the_file"

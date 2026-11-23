@@ -2352,7 +2352,7 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert "No wire to remove: no wire has an end at (0,0) or (16,0)." == data["results"][0]["error"]
+        assert data["results"][0]["error"] == "No wire to remove: no wire has an end at (0,0) or (16,0)."
 
     async def test_remove_net_label_no_match_raises(self, asc_state: SessionState, work_dir: Path):
 
@@ -2365,7 +2365,7 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert "No net label at (999,999), and nothing else is there." == data["results"][0]["error"]
+        assert data["results"][0]["error"] == "No net label at (999,999), and nothing else is there."
 
     async def test_remove_directive_round_trip(self, asc_state: SessionState, work_dir: Path):
 

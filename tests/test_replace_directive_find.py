@@ -105,6 +105,14 @@ class TestWhichTextIsChanged:
             ".param a=4\n.param b=2",
         )
 
+    def test_a_whole_text_reply_says_the_text_as_the_sheet_holds_it(self, work_dir: Path):
+        sheet = _write(work_dir / "whole.asc", "TEXT 16 16 Left 2 !.param a=1")
+        result = _replace(sheet, instruction=".param a=1", text=".param a=2\r\n.param b=3")
+        assert result["now"] == ".param a=2\n.param b=3"
+        assert "TEXT 16 16 Left 2 !.param a=2\\n.param b=3" in sheet.read_text(
+            encoding="utf-8"
+        ).splitlines()
+
     def test_find_twice_in_one_text_is_refused_with_each_place(self, work_dir: Path):
         sheet = _write(work_dir / "twice.asc", "TEXT 16 16 Left 2 !.param a=1\\n.param b=1")
         message = _refused(sheet, find="=1", text="=2")

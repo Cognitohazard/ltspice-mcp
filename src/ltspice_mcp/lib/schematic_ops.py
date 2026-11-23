@@ -32,6 +32,7 @@ validate the extension and raise NetlistError for a non-.asc file.
 """
 
 import asyncio
+import heapq
 import importlib
 import math
 import re
@@ -1491,15 +1492,19 @@ def _refuse_unrunnable_directive(text: str) -> None:
         raise NetlistError(f"Refusing directive {text!r}: {err.message} ({err.suggestion})")
 
 
+def _listed(items: Sequence[str], sep: str = ", ", shown: int = 10) -> str:
+    """Items for a refusal; past ``shown`` it says how many more there are."""
+    more = len(items) - shown
+    return sep.join(items[:shown]) + (f"{sep}and {more} more" if more > 0 else "")
+
+
 def _listed_texts(texts: Sequence[Text], shown: int = 10) -> str:
-    """The texts, each with its anchor, for a refusal; past ``shown`` it says how
-    many more there are."""
-    listed = "; ".join(
-        f"{_shown_text(text.text)!r} at ({int(text.coord.X)}, {int(text.coord.Y)})"
-        for text in texts[:shown]
+    """The texts, each with its anchor, for a refusal."""
+    return _listed(
+        [f"{_shown_text(t.text)!r} at ({int(t.coord.X)}, {int(t.coord.Y)})" for t in texts],
+        "; ",
+        shown,
     )
-    more = len(texts) - shown
-    return f"{listed}; and {more} more" if more > 0 else listed
 
 def _text_place(text: Text) -> dict[str, Any]:
     return {"kind": _text_kind(text), "x": int(text.coord.X), "y": int(text.coord.Y)}
@@ -1606,11 +1611,10 @@ def _replace_found_words(editor: AscEditor, op: "OpReplaceDirective", find: str)
     shown = _shown_text(text.text)
     places = _occurrences(shown, find)
     if len(places) > 1:
-        at = ", ".join(_line_column(shown, place) for place in places[:10])
-        more = f" and {len(places) - 10} more" if len(places) > 10 else ""
+        at = _listed([_line_column(shown, place) for place in places])
         raise NetlistError(
             f"{find!r} occurs {len(places)} times in {shown!r} at "
-            f"({int(text.coord.X)}, {int(text.coord.Y)}), at line:column {at}{more}; "
+            f"({int(text.coord.X)}, {int(text.coord.Y)}), at line:column {at}; "
             "make find longer, taking in neighbouring words."
         )
     (at,) = places
@@ -1981,17 +1985,33 @@ def _drop_dangling_wires_at(
 
     freed = set(freed)
     kept = set(copies)
-    changed = True
-    while changed:
-        changed = False
-        for key in sorted(kept):
-            if key[0] not in freed and key[1] not in freed:
-                continue
-            if net_change(nets_of(kept), nets_of(kept - {key}), folded=False).split:
-                continue
-            kept.discard(key)
-            freed.update(end for end in key if end not in pin_points and end not in label_points)
-            changed = True
+    by_end: dict[tuple[int, int], list[tuple[tuple[int, int], tuple[int, int]]]] = defaultdict(list)
+    for key in copies:
+        for end in key:
+            by_end[end].append(key)
+    # A worklist of the wires at a freed point, smallest first, so each wire is
+    # asked once: taking wires never makes a wire that would split a net safe
+    # to take, since what it would cut off is still joined only through it.
+    queue = sorted({key for end in freed for key in by_end[end]})
+    heapq.heapify(queue)
+    asked: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    current = nets_of(kept)
+    while queue:
+        key = heapq.heappop(queue)
+        if key in asked:
+            continue
+        asked.add(key)
+        after = nets_of(kept - {key})
+        if net_change(current, after, folded=False).split:
+            continue
+        kept.discard(key)
+        current = after
+        for end in key:
+            if end not in pin_points and end not in label_points and end not in freed:
+                freed.add(end)
+                for other in by_end[end]:
+                    if other not in asked:
+                        heapq.heappush(queue, other)
     taken = sorted(set(copies) - kept)
 
     kept_wires: list[dict[str, Any]] = []
@@ -2001,7 +2021,7 @@ def _drop_dangling_wires_at(
             entry["on_pin"] = on_pin
         if key[0] in freed or key[1] in freed:
             after = nets_of(kept - {key})
-            change = net_change(nets_of(kept), after, folded=False)
+            change = net_change(current, after, folded=False)
             pieces = [piece for split in change.split for piece in split]
             here = {net for end in key if end in freed for net in after.nets_at(end)}
 
@@ -3403,21 +3423,26 @@ def apply_op_inplace(
 
     if isinstance(op, OpRemoveComponent):
         reference = part_reference(editor, op.reference)
-        own = _component_pin_coords(editor, reference)
+        own: set[tuple[int, int]] = set()
         others: dict[tuple[int, int], str] = {}
-        for entry in collect_component_geometry(editor):
-            if entry["ref"] == reference:
-                continue
-            for pin in entry["pins"]:
-                if (pin["x"], pin["y"]) in own:
-                    name = f"{entry['ref']}.{pin['name']}" if pin["name"] else entry["ref"]
-                    others[pin["x"], pin["y"]] = min(others.get((pin["x"], pin["y"]), name), name)
+        if op.cleanup_wires:
+            geometry = collect_component_geometry(editor)
+            own = {
+                (pin["x"], pin["y"])
+                for entry in geometry
+                if entry["ref"] == reference
+                for pin in entry["pins"]
+            }
+            for pin in sheet_nets(editor, without=reference, geometry=geometry).nets.pins:
+                if pin.point in own:
+                    name = pin.qualified_name
+                    others[pin.point] = min(others.get(pin.point, name), name)
         editor.remove_component(reference)
         rm_result: dict[str, object] = {"op": "remove_component", "reference": reference}
         # A wire it leaves on nothing is the finished sheet's to say
         # (dangling_wire_end), so a later op of the batch that removes or
         # reconnects it leaves nothing said.
-        if op.cleanup_wires and own:
+        if own:
             rm_result.update(_drop_dangling_wires_at(editor, own - set(others), others))
         return rm_result
 
@@ -3593,7 +3618,9 @@ def apply_op_inplace(
         new = op.text.strip()
         was = _shown_text(text.text)
         _write_replaced_text(text, new)
-        return {"op": "replace_directive", "text": {**_text_place(text), "was": was, "now": new}}
+        # As the sheet now holds it: the record keeps no carriage return.
+        now = _shown_text(text.text)
+        return {"op": "replace_directive", "text": {**_text_place(text), "was": was, "now": now}}
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
 
@@ -3612,18 +3639,12 @@ def _label_keys(editor: AscEditor) -> Counter[_LabelKey]:
 
 @dataclass
 class BatchRemovals:
-    """The wires and labels a batch held when it started, and which of its
-    removal ops took each one that has gone. Only a removal op is said to have
-    taken something: a wire an earlier op moved away was not removed."""
+    """Which removal op of a batch took each wire and label that has gone, the
+    last one when a thing was taken more than once. Only a removal op is said
+    to have taken something: a wire an earlier op moved away was not removed."""
 
-    wires: Counter[_WireKey]
-    labels: Counter[_LabelKey]
     wires_by: dict[_WireKey, int] = field(default_factory=dict)
     labels_by: dict[_LabelKey, int] = field(default_factory=dict)
-
-    @classmethod
-    def at_start(cls, editor: AscEditor) -> "BatchRemovals":
-        return cls(_wire_keys(editor), _label_keys(editor))
 
     @contextmanager
     def taken_by(self, index: int, editor: AscEditor, removal: bool) -> Iterator[None]:
@@ -3634,30 +3655,20 @@ class BatchRemovals:
         wires, labels = _wire_keys(editor), _label_keys(editor)
         yield
         for key in wires - _wire_keys(editor):
-            self.wires_by.setdefault(key, index)
+            self.wires_by[key] = index
         for key in labels - _label_keys(editor):
-            self.labels_by.setdefault(key, index)
+            self.labels_by[key] = index
 
     def wire_taken_at(self, point: tuple[int, int]) -> int | None:
-        """The last op that took the batch's wires ending at ``point``, when
-        every one of them was taken by a removal; else None."""
-        return _taken_by([self.wires_by.get(key) for key in self.wires if point in key])
+        """The last op that took a wire ending at ``point``, if any did."""
+        return max((i for key, i in self.wires_by.items() if point in key), default=None)
 
     def label_taken_at(self, point: tuple[int, int]) -> int | None:
-        """As ``wire_taken_at``, for the batch's labels on ``point``."""
-        return _taken_by([self.labels_by.get(key) for key in self.labels if key[:2] == point])
-
-
-def _taken_by(ops: Sequence[int | None]) -> int | None:
-    return max(ops) if ops and None not in ops else None  # type: ignore[type-var]
+        """As ``wire_taken_at``, for a label on ``point``."""
+        return max((i for key, i in self.labels_by.items() if key[:2] == point), default=None)
 
 
 _REMOVALS = (OpRemoveComponent, OpRemoveWire, OpRemoveNetLabel)
-
-
-def _listed(items: Sequence[str], shown: int = 10) -> str:
-    more = len(items) - shown
-    return ", ".join(items[:shown]) + (f" and {more} more" if more > 0 else "")
 
 
 def _no_wire_text(editor: AscEditor, ends: set[tuple[int, int]]) -> str:
@@ -3681,10 +3692,7 @@ def _no_label_text(editor: AscEditor, point: tuple[int, int]) -> str:
     """The refusal of a ``remove_net_label`` that finds nothing: what is at the
     point instead."""
     pins = sorted(
-        f"{entry['ref']}.{pin['name']}" if pin["name"] else entry["ref"]
-        for entry in collect_component_geometry(editor)
-        for pin in entry["pins"]
-        if (pin["x"], pin["y"]) == point
+        pin.qualified_name for pin in sheet_nets(editor).nets.pins if pin.point == point
     )
     wires = [
         segment_text((*_xy(w.V1), *_xy(w.V2)))
@@ -3715,7 +3723,7 @@ def run_op_batch(
     """
     results: list[dict[str, object]] = []
     abort_reason: str | None = None
-    removals = BatchRemovals.at_start(editor)
+    removals = BatchRemovals()
     for i, op in enumerate(ops):
         entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
         try:
