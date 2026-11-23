@@ -141,7 +141,7 @@ _DECLARED_INVERSES: dict[str, str] = {
     "add_directive": "remove_directive",
     "remove_directive": "add_directive",
     # Re-applied with its result's x and y, now as instruction and was as text,
-    # it puts the text back.
+    # it puts the text back; after a find edit, now as find and was as text.
     "replace_directive": _SELF_INVERSE,
     # Re-applied with its result's was as the symbol, it puts the symbol back;
     # the wires it drew stay, for remove_wire.

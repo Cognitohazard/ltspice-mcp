@@ -428,7 +428,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
                 "report how much they took; remove_directive names each text it "
                 "removed in removed_texts, with its kind and place, and replace_directive "
-                "gives the text it changed, with what it was and what it is now. "
+                "gives the text it changed, with what it was and what it is now; "
+                "with find, was and now hold only the lines it touched, from line. "
                 "set_component_value and "
                 "set_component_attribute report each attribute they changed, with "
                 "what it was and what it is now (no was or now where the attribute is absent). set_plot_panes "
@@ -477,6 +478,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "kind": {"type": "string", "enum": ["directive", "comment"]},
                             "x": {"type": "integer"},
                             "y": {"type": "integer"},
+                            "line": {"type": "integer"},
                             "was": {"type": "string"},
                             "now": {"type": "string"},
                         },

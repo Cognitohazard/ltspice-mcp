@@ -25,7 +25,10 @@ that one instead of all eight), and lists every attribute the symbol has
 (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes
 hold the model name and parameters that an instance is netlisted with.
 Change a directive or comment with `replace_directive`, which keeps its place
-on the sheet; a `regex:` instruction saves typing the old text.
+on the sheet; a `regex:` instruction saves typing the old text. To change one
+value, such as one `.param` in a block of several, give `find` (the words as
+the text reads them, found once) and `text` (the words that replace them);
+`instruction`, or `x` and `y`, narrow where `find` is looked for.
 
 ### Finding the sheet the user has open
 

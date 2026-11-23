@@ -2047,8 +2047,9 @@ lists the segments it found `already_present` and the `junctions` it made,
 and a removal's entry reports how much it removed; `remove_directive`'s
 entry names each text it removed, with its kind and place (`removed_texts`),
 and `replace_directive`'s gives the text it changed, with its kind and place
-and what it `was` and is `now`. A text is given as it reads, a line break as
-a line break.
+and what it `was` and is `now`. After a `find` edit, `line` is the first line
+it touched (from 1) and `was` and `now` hold only the touched lines. A text is
+given as it reads, a line break as a line break.
 Everything else an op reports is in the views. `applied` counts the ops the
 batch applied, every op of a committed batch, so an op with nothing to report
 is counted though it has no `results` entry. `results` is not a page because,
@@ -3204,7 +3205,23 @@ on one anchor cannot be told apart, so one of them is moved first. A
 directive's new text is checked as `add_directive`'s is, and a refused op
 changes nothing. Applied again with its result's `x` and `y`, `now` as
 `instruction` and `was` as `text`, it puts the text back, unless `now` begins
-with `regex:`, which names a pattern.
+with `regex:`, which names a pattern. A new text that is empty or only white
+space is refused, naming `remove_directive`.
+
+With `find`, `replace_directive` changes only those words: `text` replaces
+them and the rest of the text stays. `find` and `text` are read as the text
+reads, CR and CRLF each one line break, and matched literally and
+case-sensitive. `find` is looked for in the one text `instruction` names
+(`x` and `y` picking among several), else in the texts anchored at `x` and
+`y`, else in every directive and comment on the sheet, and must be found
+exactly once. Not found, the refusal names the text `instruction` named and,
+when `find` is in the file's spelling, gives the reading form; found in
+several texts, it lists them (ten, then a count) and asks for `instruction`,
+or `x` and `y`; found several times in one text, it gives the count and up to
+ten line:column places and asks for a longer `find`. A directive's new whole
+text is checked as above; a comment is not. `instruction` is optional with
+`find`, and a call with neither is refused. Applied again with its result's
+`x` and `y`, `now` as `find` and `was` as `text`, it puts the words back.
 
 A text is read as both LTspice builds read a TEXT record, which they draw and
 export alike (recorded as `text-backslash`): `\n` is a line break, even inside

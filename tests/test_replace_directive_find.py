@@ -193,18 +193,28 @@ class TestWhatTheBatchWrites:
         assert undone["commit_state"] == "committed", undone
         assert sheet.read_bytes() == before
 
-    async def test_a_crlf_sheet_keeps_crlf_and_only_the_record_changes(
+    async def test_a_crlf_sheet_is_written_as_a_whole_text_edit_writes_it(
         self, asc_state: SessionState, work_dir: Path
     ):
-        sheet = _write(
-            work_dir / "crlf.asc", _BLOCK, "TEXT 16 96 Left 2 ;note", newline="\r\n"
-        )
-        before = sheet.read_bytes().split(b"\r\n")
-        done = await _edit(asc_state, "crlf.asc", [_find("c=3", "c=7")])
+        # The line endings of a saved sheet are the save path's, which this op
+        # does not change: the find edit writes what the whole-text edit writes.
+        lines = (_BLOCK, "TEXT 16 96 Left 2 ;note")
+        by_find = _write(work_dir / "find.asc", *lines, newline="\r\n")
+        by_text = _write(work_dir / "text.asc", *lines, newline="\r\n")
+        before = by_find.read_bytes().decode().splitlines()
+        done = await _edit(asc_state, "find.asc", [_find("c=3", "c=7")])
         assert done["commit_state"] == "committed", done
-        after = sheet.read_bytes().split(b"\r\n")
+        whole = {
+            "op": "replace_directive",
+            "instruction": "regex:^\\.param a=1",
+            "text": ".param a=1\n.param b=2\n.param c=7",
+        }
+        done = await _edit(asc_state, "text.asc", [whole])
+        assert done["commit_state"] == "committed", done
+        assert by_find.read_bytes() == by_text.read_bytes()
+        after = by_find.read_bytes().decode().splitlines()
         changed = [(old, new) for old, new in zip(before, after, strict=True) if old != new]
-        assert changed == [(_BLOCK.encode(), _BLOCK.replace("c=3", "c=7").encode())]
+        assert changed == [(_BLOCK, _BLOCK.replace("c=3", "c=7"))]
 
     async def test_a_chained_batch_applies_in_order(self, asc_state: SessionState, work_dir: Path):
         sheet = _write(work_dir / "chain.asc", "TEXT 16 16 Left 2 !.param a=1")
