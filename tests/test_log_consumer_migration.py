@@ -22,8 +22,15 @@ from tests.conftest import (
 )
 
 
-def forbid_parent_reads(monkeypatch: pytest.MonkeyPatch, raw: Path) -> None:
-    sources = {raw, raw.with_suffix(".log"), raw.with_suffix(".exe.log")}
+def forbid_parent_reads(
+    monkeypatch: pytest.MonkeyPatch, raw: Path, *, raw_header: bool = False
+) -> None:
+    """Fail any read of ``raw``'s files in this process. ``raw_header``
+    leaves the raw itself readable, for a call that reads its first header
+    to decide whether to decode it (``raw_parser.may_hold_compressed_transient``)."""
+    sources = {raw.with_suffix(".log"), raw.with_suffix(".exe.log")}
+    if not raw_header:
+        sources.add(raw)
     original_open = Path.open
 
     def guarded_open(path: Path, *args: Any, **kwargs: Any):
@@ -62,7 +69,9 @@ async def test_resolved_analysis_relay_uses_captured_diagnostics_without_parent_
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     with raw.with_suffix(".log").open("a", encoding="utf-8") as handle:
         handle.write("\nIteration limit reached; no convergence.\n")
-    forbid_parent_reads(monkeypatch, raw)
+    # A measurements call reads an LTspice transient's raw with its log where
+    # waveform compression may have left it coarse, which its header says.
+    forbid_parent_reads(monkeypatch, raw, raw_header=True)
 
     captured = await analyze._create_result_set(
         analyze.AnalyzeResultsInput.model_validate(

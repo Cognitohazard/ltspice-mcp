@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib.log_types import LogLimits
-from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs, parser_cache_key
+from ltspice_mcp.lib.parser_capture import (
+    EXISTING_CACHE_KEYS,
+    SourceFiles,
+    capture_inputs,
+    parser_cache_key,
+)
 from ltspice_mcp.lib.raw_header import (
     RawHeader,
     RawLimits,
@@ -148,7 +153,11 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     step_rows = _positive(limits["step_rows"], "step_rows")
     metadata_bytes = _positive(limits["metadata_bytes"], "metadata_bytes")
     keys = request["existing_cache_keys"]
-    if not isinstance(keys, list) or len(keys) > 32 or any(not is_sha256(key) for key in keys):
+    if (
+        not isinstance(keys, list)
+        or len(keys) > EXISTING_CACHE_KEYS
+        or any(not is_sha256(key) for key in keys)
+    ):
         raise ValueError("Parser cache keys must be bounded content identities")
     captured = capture_inputs(
         sources,

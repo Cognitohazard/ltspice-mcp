@@ -788,7 +788,7 @@ def _meas_error(text: str, family: str | None) -> dict[str, Any] | None:
 
 
 def build_simulation_summary(
-    raw: DecodedRaw | DecodedPlot,
+    raw: DecodedRaw | DecodedPlot | None,
     logs: DecodedLog | None,
     duration: float | None = None,
     *,
@@ -803,7 +803,9 @@ def build_simulation_summary(
     """Build comprehensive, type-aware simulation summary.
 
     Args:
-        raw: The selected plot
+        raw: The selected plot, or None for a run whose results file holds no
+            point: the summary is then what its log says, and nothing of a
+            plot (no ``sim_type``, range, signals or counts).
         logs: Optional resident facts from the captured log/console decode.
         duration: Optional simulation duration in seconds
         step: Which .step iteration to summarize (axis/range/point_count).
@@ -841,79 +843,82 @@ def build_simulation_summary(
         ``measurements`` key is otherwise the same wire shape whether the deck
         had no ``.meas`` or the log could not be read at all.
     """
-    sim_type = detect_sim_type(raw)
-    trace_names = raw.get_trace_names()
-    step_count = get_step_count(raw)
-    descriptor = raw.descriptor
-
     # Collected here rather than in the log block below so a fault anywhere in
     # this function has somewhere to land; attached to the summary once, at the
     # end, so a warning raised after the attachment point is not lost.
     warnings: list[str] = []
     # The conditions the run's log names, as its producer's rules read them.
     said: list[Mapping[str, Any]] = []
+    summary: dict[str, Any] = {}
+    step_count = 0
+    trace_names: list[str] = []
+    if raw is not None:
+        sim_type = detect_sim_type(raw)
+        trace_names = raw.get_trace_names()
+        step_count = get_step_count(raw)
+        descriptor = raw.descriptor
 
-    # A plot with no sampled axis (an operating point, a table) has a point
-    # count and no range. A step the plot cannot give is a different fact
-    # from that, and is said as one.
-    axis = None
-    point_count = step_count
-    try:
-        if descriptor.axis is None:
-            if trace_names:
-                point_count = len(raw.get_wave(trace_names[0], step=step))
-        else:
-            axis = raw.get_axis(step=step)
-            point_count = len(axis)
-    except _RAW_ACCESS_ERRORS as exc:
-        warnings.append(_parse_failure("axis (range, point_count)", exc))
-    if axis is not None:
+        # A plot with no sampled axis (an operating point, a table) has a point
+        # count and no range. A step the plot cannot give is a different fact
+        # from that, and is said as one.
+        axis = None
+        point_count = step_count
         try:
-            axis = real_axis(np.asarray(axis))
-        except ResultError as exc:
-            axis = None
-            warnings.append(f"No range: {exc}")
+            if descriptor.axis is None:
+                if trace_names:
+                    point_count = len(raw.get_wave(trace_names[0], step=step))
+            else:
+                axis = raw.get_axis(step=step)
+                point_count = len(axis)
+        except _RAW_ACCESS_ERRORS as exc:
+            warnings.append(_parse_failure("axis (range, point_count)", exc))
+        if axis is not None:
+            try:
+                axis = real_axis(np.asarray(axis))
+            except ResultError as exc:
+                axis = None
+                warnings.append(f"No range: {exc}")
 
-    range_info: dict = {}
-    if axis is not None and point_count > 0:
-        if is_transient_analysis(raw):
-            range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
-        elif (
-            is_ac_analysis(raw)
-            or is_noise_analysis(raw)
-            or (
-                descriptor.axis is not None
-                and descriptor.axis.unit == "Hz"
-                and descriptor.axis.real_coordinates
-            )
-        ):
-            # AC and noise both sweep over frequency, read as real_axis reads it.
-            range_info = {"freq_start": float(axis[0]), "freq_end": float(axis[-1])}
-        elif is_dc_analysis(raw):
-            range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
-        # Operating Point has no range (single point)
+        range_info: dict = {}
+        if axis is not None and point_count > 0:
+            if is_transient_analysis(raw):
+                range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
+            elif (
+                is_ac_analysis(raw)
+                or is_noise_analysis(raw)
+                or (
+                    descriptor.axis is not None
+                    and descriptor.axis.unit == "Hz"
+                    and descriptor.axis.real_coordinates
+                )
+            ):
+                # AC and noise both sweep over frequency, read as real_axis reads it.
+                range_info = {"freq_start": float(axis[0]), "freq_end": float(axis[-1])}
+            elif is_dc_analysis(raw):
+                range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
+            # Operating Point has no range (single point)
 
-    # ``point_count`` is the per-step axis length (sweep points on .AC/.DC,
-    # samples on .tran). ``step_count`` is the number of ``.step`` iterations
-    # — 1 for unstepped runs. Together they describe the raw shape unambiguously;
-    # don't surface alias keys.
-    summary = {
-        "sim_type": sim_type,
-        "range": range_info,
-        "point_count": point_count,
-        "step_count": step_count,
-    }
-    # Cap the structured signal list: a device-heavy raw (.save all @m*[*],
-    # PDK-level node dumps) can carry hundreds-to-thousands of trace names.
-    # The results query reads every name, paged, for a job or a path alike.
-    cap_list(
-        summary,
-        "signals",
-        trace_names,
-        _SIGNALS_STRUCTURED_CAP,
-        "inspect(kind='results', view='signals') with this run's path, or its job_id "
-        "and run_index, lists every signal, paged.",
-    )
+        # ``point_count`` is the per-step axis length (sweep points on .AC/.DC,
+        # samples on .tran). ``step_count`` is the number of ``.step`` iterations
+        # — 1 for unstepped runs. Together they describe the raw shape unambiguously;
+        # don't surface alias keys.
+        summary = {
+            "sim_type": sim_type,
+            "range": range_info,
+            "point_count": point_count,
+            "step_count": step_count,
+        }
+        # Cap the structured signal list: a device-heavy raw (.save all @m*[*],
+        # PDK-level node dumps) can carry hundreds-to-thousands of trace names.
+        # The results query reads every name, paged, for a job or a path alike.
+        cap_list(
+            summary,
+            "signals",
+            trace_names,
+            _SIGNALS_STRUCTURED_CAP,
+            "inspect(kind='results', view='signals') with this run's path, or its job_id "
+            "and run_index, lists every signal, paged.",
+        )
 
     if logs is not None:
 
@@ -934,7 +939,9 @@ def build_simulation_summary(
             for name in ("temp_c", "tnom_c"):
                 if temperatures[name] is not None:
                     summary[name] = temperatures[name]
-        stepped, temperature = _step_temperature(raw, step, logs)
+        stepped, temperature = (
+            (False, None) if raw is None else _step_temperature(raw, step, logs)
+        )
         if stepped:
             # The header holds one step's temperature (parse_temperatures),
             # never the step summarised here unless by chance.
@@ -1043,6 +1050,7 @@ def build_simulation_summary(
             demoted = [e for e in errs if e in fallback]
             if (
                 demoted
+                and raw is not None
                 and step_count <= 1
                 and op_coverage_known
                 and op_solve_count <= 1
@@ -1059,7 +1067,12 @@ def build_simulation_summary(
                     for d in demoted
                 )
 
-        if op_solve_count > 1 and step_count <= 1 and is_operating_point(raw):
+        if (
+            raw is not None
+            and op_solve_count > 1
+            and step_count <= 1
+            and is_operating_point(raw)
+        ):
             if op_log_steps:
                 param_name = next(iter(op_log_steps[0].keys()), "param")
                 suggestion = (
@@ -1094,13 +1107,13 @@ def build_simulation_summary(
     # ``result_observations``). Always present, possibly empty. Value traces are
     # extracted here only when the caller signalled they're loaded.
     value_traces: dict | None = None
-    if value_scan:
+    if value_scan and raw is not None:
         # The sweep axis (time / frequency / DC source) isn't a signal worth
         # scanning. Skip it only when the plot actually HAS an axis: an
         # operating point has none, so ITS trace 0 is a real node, and skipping
         # it there hid a degenerate first-sorted value (e.g. a floating node at
         # ~1e30) — exactly the case this scan exists to catch.
-        axis_name = None if descriptor.axis is None else descriptor.axis.name
+        axis_name = None if raw.descriptor.axis is None else raw.descriptor.axis.name
         value_traces = {}
         unreadable: list[str] = []
         for name in trace_names:
@@ -1125,11 +1138,11 @@ def build_simulation_summary(
 
     summary["observations"] = surface_observations(
         summary,
-        analysis=descriptor.analysis,
+        analysis=None if raw is None else raw.descriptor.analysis,
         requested=requested,
         value_traces=value_traces,
         source_amplitudes=source_amplitudes,
-        node_voltages=None if value_traces is None else node_voltages(raw),
+        node_voltages=None if value_traces is None or raw is None else node_voltages(raw),
         measurements_unread=measurements_unread,
         said=said,
         reading=rules_for(producer or Producer(None, None, None))[0],

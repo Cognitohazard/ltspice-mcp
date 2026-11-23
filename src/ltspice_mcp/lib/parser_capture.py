@@ -22,6 +22,9 @@ _CHUNK_BYTES = 1024 * 1024
 #: one table capture and every decoder of a capture read.
 CAPTURED_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
 PARSER_REVISION = "artifacts-materialize-6"
+EXISTING_CACHE_KEYS = 32
+"""Retained content identities one parser request may name, so it can answer
+``cached`` instead of decoding again."""
 
 
 class CaptureError(ValueError):

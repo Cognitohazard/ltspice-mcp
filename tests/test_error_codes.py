@@ -610,6 +610,7 @@ FROZEN_ERROR_CODES = (
     "random_nominal_unavailable",
     "raster_unavailable",
     "rational_fit",
+    "raw_holds_no_point",
     "raw_names_disagree",
     "raw_not_produced",
     "read_error",
