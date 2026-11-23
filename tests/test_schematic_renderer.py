@@ -91,7 +91,7 @@ class TestSemanticGoldens:
         # On pin A, on box2's left edge, with no wire: the base through the
         # flag's point (100,108) and the apex to the left, out of the part, as
         # LTspice draws a ground on a bare pin (``symbol_geometry.pin_side``).
-        assert polys[0].get("points") == "100,102 100,114 90,108"
+        assert polys[0].get("points") == "100,90 100,126 82,108"
 
     def test_net_label_text(self, tmp_path: Path) -> None:
         svg = _build(tmp_path, GOLDEN_ASC)
@@ -149,10 +149,10 @@ class TestFlagRendering:
     @pytest.mark.parametrize(
         ("wire", "flag_xy", "points"),
         [
-            ("WIRE 96 32 96 96", (96, 96), "90,96 102,96 96,106"),  # from N -> apex down
-            ("WIRE 288 160 288 96", (288, 96), "282,96 294,96 288,86"),  # from S -> apex up
-            ("WIRE 416 96 480 96", (480, 96), "480,90 480,102 490,96"),  # from W -> apex right
-            ("WIRE 736 96 672 96", (672, 96), "672,90 672,102 662,96"),  # from E -> apex left
+            ("WIRE 96 32 96 96", (96, 96), "78,96 114,96 96,114"),  # from N -> apex down
+            ("WIRE 288 160 288 96", (288, 96), "270,96 306,96 288,78"),  # from S -> apex up
+            ("WIRE 416 96 480 96", (480, 96), "480,78 480,114 498,96"),  # from W -> apex right
+            ("WIRE 736 96 672 96", (672, 96), "672,78 672,114 654,96"),  # from E -> apex left
         ],
     )
     def test_ground_apex_follows_wire_travel(
@@ -222,7 +222,7 @@ class TestFlagRendering:
         assert {(m.get("x"), m.get("y")) for m in marks} == {("94", "478"), ("286", "478")}
         # The isolated ground still rests apex-down.
         poly = next(p for p in _elements(svg, "polygon") if p.get("class") == "gnd")
-        assert poly.get("points") == "90,480 102,480 96,490"
+        assert poly.get("points") == "78,480 114,480 96,498"
 
     def test_connected_flag_has_no_marker(self, tmp_path: Path) -> None:
         asc = _write(
@@ -315,15 +315,15 @@ class TestCropBounds:
         assert content is not None
         # Hand-computed, including the glyphs' estimated reach (0.76 of the
         # 23-unit em above the baseline, 0.21 below):
-        #   left  90 = ground glyph at x=100, pointing left, minus its depth 10
+        #   left  82 = ground glyph at x=100, pointing left, minus its depth 18
         #   top   88 = "X1" baseline 105 minus 17.5
         #   right 249 = "OUT" starts at its point 200 and is 49 wide
         #   bot  138 = "5" baseline 133 plus 4.8
-        assert (content.x1, content.y1, content.x2, content.y2) == (90, 88, 249, 138)
+        assert (content.x1, content.y1, content.x2, content.y2) == (82, 88, 249, 138)
         svg = render_svg(scene, margin=16)
         root = ET.fromstring(svg)
-        # margin 16 → 74 72, 191 x 82
-        assert root.get("viewBox") == "74 72 191 82"
+        # margin 16 → 66 72, 199 x 82
+        assert root.get("viewBox") == "66 72 199 82"
 
     def test_long_attribute_value_is_not_cropped(self, tmp_path: Path) -> None:
         # Field regression: a trailing value such as "100n" ran past the right
