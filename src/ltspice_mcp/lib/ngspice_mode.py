@@ -25,7 +25,6 @@ unchecked, and the run says so and why.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -37,6 +36,7 @@ from typing import Any, Literal
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
+from ltspice_mcp.lib.simulator_env import simulator_environment
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ def run_batch(
     its code models, as a run does. ``cwd`` is where it runs, the folder
     when None. Raises when ngspice cannot be started or writes no log.
     """
-    environment = dict(os.environ)
+    environment = simulator_environment()
     if clean_startup:
         environment = {
             name: value

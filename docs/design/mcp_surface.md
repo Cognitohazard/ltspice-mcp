@@ -2391,11 +2391,13 @@ the name written as `""` has no text, and LTspice draws none, not even the
 symbol's. A symbol's own text, its pin names and an attribute in any other
 window are not read, which the layout check's `observations` say, and so does
 a render's.
-`attribute_text_overlap` reports text that a wire, a line another
-part draws or a ground flag passes through, or that lies over a rectangle or
-circle another part draws or over other text, by more than the estimate's
-slack. A ground flag is taken as the triangle the render draws, turned as
-LTspice turns it; its size is the render's and is not recorded.
+`attribute_text_overlap` reports text that a wire or a line another
+part draws passes through, or that lies over a ground flag's triangle, a
+rectangle or circle another part draws or other text, by more than the
+estimate's slack. A ground flag is taken as the triangle both builds draw at
+the default text size (`draw/ground_flags`): a base 18 units either side of
+its point and an apex 18 units away, turned as LTspice turns it. The render
+draws the same triangle.
 `sheet_text_overlap` reports a comment, directive or net label drawn across
 another, by the same estimate and slack; texts at one anchor are
 `stacked_directive`'s. The layout check states in `observations` what its scan

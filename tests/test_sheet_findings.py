@@ -823,6 +823,14 @@ class TestHowTheSheetReads:
             {"text": "10k", "across": "ground"},
         )
 
+    def test_attribute_text_wholly_inside_a_ground(self) -> None:
+        """A short text that lies inside the ground's triangle, crossing none
+        of its sides, is as hidden as one a side crosses."""
+        value = Part("R1", text_extents=((92, 2, "1", BBox(92, 2, 108, 10), "Value"),))
+        inside = (100, 0, ((82, 0), (118, 0), (100, 18)))
+        (found,) = only(SheetView(parts=(value,), grounds=(inside,)), "attribute_text_overlap")
+        assert found.facts == {"text": "1", "across": "ground"}
+
     def test_sheet_texts_drawn_across_each_other(self) -> None:
         """Comments, directives and net labels drawn over one another. Text
         at one anchor is stacked_directive's, and is not said twice."""

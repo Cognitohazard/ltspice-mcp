@@ -210,6 +210,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rc_lowpass_labelled]"
   ]
  },
+ "0e53ca84db0fdce8": {
+  "answer": {
+   "reply": "6d205231c6893336",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_both_tools_find_text_under_the_ground_triangle_ltspice_draws[182-across2]"
+  ]
+ },
  "0edb38b595e04a7d": {
   "answer": {
    "reply": "5812dfc792a90332",
@@ -418,6 +427,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_name_labels]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_name_labels]"
+  ]
+ },
+ "18b23b518df9c53d": {
+  "answer": {
+   "reply": "94376787beaf3c20",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_both_tools_find_text_under_the_ground_triangle_ltspice_draws[175-across0]"
   ]
  },
  "1918524347fe7c25": {
@@ -3599,6 +3617,15 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[plot/math.plt]"
+  ]
+ },
+ "ca293dd3ca824b89": {
+  "answer": {
+   "reply": "4802474997a03b97",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_both_tools_find_text_under_the_ground_triangle_ltspice_draws[180-across1]"
   ]
  },
  "cbc512758f826aca": {

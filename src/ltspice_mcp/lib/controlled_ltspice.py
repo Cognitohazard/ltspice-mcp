@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
-import os
 import re
 import subprocess
 import sys
@@ -34,6 +33,7 @@ from ltspice_mcp.lib.ltspice_windows import run_on_desktop
 from ltspice_mcp.lib.pdk_native import ArtifactDigest
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
 from ltspice_mcp.lib.redirect import redirect_below
+from ltspice_mcp.lib.simulator_env import simulator_environment
 from ltspice_mcp.lib.store import is_store_name
 
 STARTUP_VERSION = "ltspice-established-ini-v1"
@@ -287,7 +287,7 @@ def controlled_ltspice(
             deck = Path(netlist_file)
             # Keep -ini and its operand distinct, bypassing spicelib's typo.
             argv = [*command, "-Run", "-b", str(deck), "-ini", str(ini_path)]
-            env = dict(os.environ)
+            env = simulator_environment()
             env["APPDATA"] = str(ini_path.parent)
             # Keep the measured startup without stream redirection. Ignore
             # exe_log: LTspice's .log and .raw carry results.

@@ -1019,6 +1019,18 @@ def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
     )
 
 
+def _over_triangle(corners: tuple[Point, ...], box: BBox) -> bool:
+    """True if ``box`` lies over the triangle ``corners``: a side passes
+    through it, or it lies wholly inside, as a short text within a ground
+    flag's triangle does."""
+    edges = list(itertools.pairwise((*corners, corners[0])))
+    if any(_through(a, b, box) for a, b in edges):
+        return True
+    centre = ((box.x1 + box.x2) // 2, (box.y1 + box.y2) // 2)
+    sides = {_side(a, b, centre) for a, b in edges}
+    return len(sides) == 1 and 0 not in sides
+
+
 def _core(extent: BBox) -> BBox:
     """What a text's glyphs surely cover: its extent, which is estimated from
     its font's metrics rather than its own glyphs, less a quarter of its
@@ -1067,7 +1079,7 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
         across += [
             (f"the ground at {_at((x, y))}", (), ((x, y),), {"across": "ground"}, ("ground", x, y))
             for x, y, corners in ix.view.grounds
-            if any(_through(a, b, core) for a, b in itertools.pairwise((*corners, corners[0])))
+            if _over_triangle(corners, core)
         ]
         across += [
             (
@@ -1252,12 +1264,12 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       them that an ordinary wire to a nearer pin crosses.
     - ``attribute_text_overlap``: a part's attribute text, laid out as
       LTspice lays it out with its extent estimated from LTspice's font,
-      that a wire, a line another part draws or a side of a ground flag's
-      triangle passes through, or that shares an area with a rectangle or
+      that a wire or a line another part draws passes through, that lies over
+      a ground flag's triangle, or that shares an area with a rectangle or
       circle another part draws or with other text, by more than the
-      estimate's slack (:func:`_core`). The ground's triangle is the one the
-      render draws (``schematic_scene.ground_polygon``), turned as LTspice
-      turns it; its size is the render's, not measured off LTspice.
+      estimate's slack (:func:`_core`). The ground's triangle is
+      ``schematic_scene.ground_polygon``: the one both builds draw at the
+      default text size, turned as LTspice turns it.
     - ``label_over_component``: a label strictly inside a part's box and on no
       pin. A label on a pin, any part's, is the ordinary flag.
     - ``text_in_symbol_body``: text anchored inside what another part draws:

@@ -30,6 +30,7 @@ from typing import Any
 from spicelib.simulators.ltspice_simulator import LTspice as _SpicelibLTspice
 
 from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib.simulator_env import simulator_environment
 from ltspice_mcp.lib.windows_job import detached_creation_flags
 
 _SEE_THE_BOX = (
@@ -91,6 +92,7 @@ def start_in_view(executable: Path, *, spawn: Any = subprocess.Popen) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=simulator_environment(),
     )
     # Not this process's to wait for: without this, dropping the handle of a
     # program still running is reported as a leak.
@@ -145,6 +147,7 @@ class LTspice(_SpicelibLTspice):
                 command,
                 timeout=timeout,
                 cwd=cwd,
+                env=simulator_environment(),
                 stdout=console,
                 stderr=subprocess.STDOUT,
             )
