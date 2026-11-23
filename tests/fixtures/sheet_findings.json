@@ -6262,6 +6262,26 @@
      "y": 232
     },
     {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS_MOD' at (696,232) is drawn across the text 'out' at (800,208)",
+     "other_text": "out",
+     "points": [
+      {
+       "x": 696,
+       "y": 232
+      },
+      {
+       "x": 800,
+       "y": 208
+      }
+     ],
+     "ref": "M2",
+     "text": "NMOS_MOD",
+     "x": 696,
+     "y": 232
+    },
+    {
      "kind": "label_island",
      "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
      "net": "out",
@@ -6383,6 +6403,33 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "nmos_mirror_labelled.asc",
+     "x": 696,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       696,
+       232
+      ],
+      [
+       800,
+       208
+      ]
+     ],
+     "detail": "M2's text 'NMOS_MOD' at (696,232) is drawn across the text 'out' at (800,208)",
+     "refs": [
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2"
    },
    {
     "at": {
@@ -11563,26 +11610,6 @@
   "edit": {
    "warnings": [
     {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 312,
-       "y": 120
-      },
-      {
-       "x": 320,
-       "y": 144
-      }
-     ],
-     "ref": "M3",
-     "text": "PMOS_MOD",
-     "x": 312,
-     "y": 120
-    },
-    {
      "across": "wire",
      "kind": "attribute_text_overlap",
      "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across wire (528,240)->(528,112)",
@@ -11603,46 +11630,6 @@
      "ref": "M4",
      "text": "PMOS_MOD",
      "x": 456,
-     "y": 120
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 456,
-       "y": 120
-      },
-      {
-       "x": 448,
-       "y": 144
-      }
-     ],
-     "ref": "M4",
-     "text": "PMOS_MOD",
-     "x": 456,
-     "y": 120
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 648,
-       "y": 120
-      },
-      {
-       "x": 640,
-       "y": 144
-      }
-     ],
-     "ref": "M7",
-     "text": "PMOS_MOD",
-     "x": 648,
      "y": 120
     },
     {
@@ -11778,33 +11765,6 @@
    {
     "at": {
      "file": "two_stage_opamp_drawn.asc",
-     "x": 312,
-     "y": 120
-    },
-    "evidence": {
-     "coords": [
-      [
-       312,
-       120
-      ],
-      [
-       320,
-       144
-      ]
-     ],
-     "detail": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
-     "refs": [
-      "M3"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M3"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_drawn.asc",
      "x": 456,
      "y": 120
     },
@@ -11832,60 +11792,6 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M4"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_drawn.asc",
-     "x": 456,
-     "y": 120
-    },
-    "evidence": {
-     "coords": [
-      [
-       456,
-       120
-      ],
-      [
-       448,
-       144
-      ]
-     ],
-     "detail": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
-     "refs": [
-      "M4"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M4"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_drawn.asc",
-     "x": 648,
-     "y": 120
-    },
-    "evidence": {
-     "coords": [
-      [
-       648,
-       120
-      ],
-      [
-       640,
-       144
-      ]
-     ],
-     "detail": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
-     "refs": [
-      "M7"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M7"
    },
    {
     "at": {
@@ -12173,26 +12079,6 @@
      "y": 232
     },
     {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M3's text 'M3' at (216,432) is drawn across the text 'vdd' at (208,448)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 216,
-       "y": 432
-      },
-      {
-       "x": 208,
-       "y": 448
-      }
-     ],
-     "ref": "M3",
-     "text": "M3",
-     "x": 216,
-     "y": 432
-    },
-    {
      "across": "body",
      "kind": "attribute_text_overlap",
      "message": "M3's text 'PMOS_MOD' at (216,472) is drawn across M4's body",
@@ -12201,26 +12087,6 @@
       "M3",
       "M4"
      ],
-     "text": "PMOS_MOD",
-     "x": 216,
-     "y": 472
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M3's text 'PMOS_MOD' at (216,472) is drawn across the text 'vdd' at (208,496)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 216,
-       "y": 472
-      },
-      {
-       "x": 208,
-       "y": 496
-      }
-     ],
-     "ref": "M3",
      "text": "PMOS_MOD",
      "x": 216,
      "y": 472
@@ -12246,26 +12112,6 @@
      "y": 472
     },
     {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M4's text 'M4' at (376,432) is drawn across the text 'vdd' at (368,448)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 376,
-       "y": 432
-      },
-      {
-       "x": 368,
-       "y": 448
-      }
-     ],
-     "ref": "M4",
-     "text": "M4",
-     "x": 376,
-     "y": 432
-    },
-    {
      "across": "body",
      "kind": "attribute_text_overlap",
      "message": "M4's text 'PMOS_MOD' at (376,472) is drawn across M7's body",
@@ -12274,26 +12120,6 @@
       "M4",
       "M7"
      ],
-     "text": "PMOS_MOD",
-     "x": 376,
-     "y": 472
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M4's text 'PMOS_MOD' at (376,472) is drawn across the text 'vdd' at (368,496)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 376,
-       "y": 472
-      },
-      {
-       "x": 368,
-       "y": 496
-      }
-     ],
-     "ref": "M4",
      "text": "PMOS_MOD",
      "x": 376,
      "y": 472
@@ -12319,26 +12145,6 @@
      "y": 472
     },
     {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M7's text 'M7' at (536,432) is drawn across the text 'vdd' at (528,448)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 536,
-       "y": 432
-      },
-      {
-       "x": 528,
-       "y": 448
-      }
-     ],
-     "ref": "M7",
-     "text": "M7",
-     "x": 536,
-     "y": 432
-    },
-    {
      "across": "body",
      "kind": "attribute_text_overlap",
      "message": "M7's text 'PMOS_MOD' at (536,472) is drawn across M8's body",
@@ -12347,26 +12153,6 @@
       "M7",
       "M8"
      ],
-     "text": "PMOS_MOD",
-     "x": 536,
-     "y": 472
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M7's text 'PMOS_MOD' at (536,472) is drawn across the text 'vdd' at (528,496)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 536,
-       "y": 472
-      },
-      {
-       "x": 528,
-       "y": 496
-      }
-     ],
-     "ref": "M7",
      "text": "PMOS_MOD",
      "x": 536,
      "y": 472
@@ -12757,33 +12543,6 @@
     "at": {
      "file": "two_stage_opamp_labelled.asc",
      "x": 216,
-     "y": 432
-    },
-    "evidence": {
-     "coords": [
-      [
-       216,
-       432
-      ],
-      [
-       208,
-       448
-      ]
-     ],
-     "detail": "M3's text 'M3' at (216,432) is drawn across the text 'vdd' at (208,448)",
-     "refs": [
-      "M3"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M3"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_labelled.asc",
-     "x": 216,
      "y": 472
     },
     "evidence": {
@@ -12817,33 +12576,6 @@
        472
       ],
       [
-       208,
-       496
-      ]
-     ],
-     "detail": "M3's text 'PMOS_MOD' at (216,472) is drawn across the text 'vdd' at (208,496)",
-     "refs": [
-      "M3"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M3"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_labelled.asc",
-     "x": 216,
-     "y": 472
-    },
-    "evidence": {
-     "coords": [
-      [
-       216,
-       472
-      ],
-      [
        320,
        480
       ]
@@ -12857,33 +12589,6 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M3"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_labelled.asc",
-     "x": 376,
-     "y": 432
-    },
-    "evidence": {
-     "coords": [
-      [
-       376,
-       432
-      ],
-      [
-       368,
-       448
-      ]
-     ],
-     "detail": "M4's text 'M4' at (376,432) is drawn across the text 'vdd' at (368,448)",
-     "refs": [
-      "M4"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M4"
    },
    {
     "at": {
@@ -12922,33 +12627,6 @@
        472
       ],
       [
-       368,
-       496
-      ]
-     ],
-     "detail": "M4's text 'PMOS_MOD' at (376,472) is drawn across the text 'vdd' at (368,496)",
-     "refs": [
-      "M4"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M4"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_labelled.asc",
-     "x": 376,
-     "y": 472
-    },
-    "evidence": {
-     "coords": [
-      [
-       376,
-       472
-      ],
-      [
        480,
        480
       ]
@@ -12962,33 +12640,6 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M4"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_labelled.asc",
-     "x": 536,
-     "y": 432
-    },
-    "evidence": {
-     "coords": [
-      [
-       536,
-       432
-      ],
-      [
-       528,
-       448
-      ]
-     ],
-     "detail": "M7's text 'M7' at (536,432) is drawn across the text 'vdd' at (528,448)",
-     "refs": [
-      "M7"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M7"
    },
    {
     "at": {
@@ -13013,33 +12664,6 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M7 & M8"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_labelled.asc",
-     "x": 536,
-     "y": 472
-    },
-    "evidence": {
-     "coords": [
-      [
-       536,
-       472
-      ],
-      [
-       528,
-       496
-      ]
-     ],
-     "detail": "M7's text 'PMOS_MOD' at (536,472) is drawn across the text 'vdd' at (528,496)",
-     "refs": [
-      "M7"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M7"
    },
    {
     "at": {
@@ -13347,26 +12971,6 @@
   "edit": {
    "warnings": [
     {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 312,
-       "y": 120
-      },
-      {
-       "x": 320,
-       "y": 144
-      }
-     ],
-     "ref": "M3",
-     "text": "PMOS_MOD",
-     "x": 312,
-     "y": 120
-    },
-    {
      "across": "wire",
      "kind": "attribute_text_overlap",
      "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across wire (528,240)->(528,112)",
@@ -13387,46 +12991,6 @@
      "ref": "M4",
      "text": "PMOS_MOD",
      "x": 456,
-     "y": 120
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 456,
-       "y": 120
-      },
-      {
-       "x": 448,
-       "y": 144
-      }
-     ],
-     "ref": "M4",
-     "text": "PMOS_MOD",
-     "x": 456,
-     "y": 120
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
-     "other_text": "vdd",
-     "points": [
-      {
-       "x": 648,
-       "y": 120
-      },
-      {
-       "x": 640,
-       "y": 144
-      }
-     ],
-     "ref": "M7",
-     "text": "PMOS_MOD",
-     "x": 648,
      "y": 120
     },
     {
@@ -13562,33 +13126,6 @@
    {
     "at": {
      "file": "two_stage_opamp_moved.asc",
-     "x": 312,
-     "y": 120
-    },
-    "evidence": {
-     "coords": [
-      [
-       312,
-       120
-      ],
-      [
-       320,
-       144
-      ]
-     ],
-     "detail": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
-     "refs": [
-      "M3"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M3"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_moved.asc",
      "x": 456,
      "y": 120
     },
@@ -13616,60 +13153,6 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M4"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_moved.asc",
-     "x": 456,
-     "y": 120
-    },
-    "evidence": {
-     "coords": [
-      [
-       456,
-       120
-      ],
-      [
-       448,
-       144
-      ]
-     ],
-     "detail": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
-     "refs": [
-      "M4"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M4"
-   },
-   {
-    "at": {
-     "file": "two_stage_opamp_moved.asc",
-     "x": 648,
-     "y": 120
-    },
-    "evidence": {
-     "coords": [
-      [
-       648,
-       120
-      ],
-      [
-       640,
-       144
-      ]
-     ],
-     "detail": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
-     "refs": [
-      "M7"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "M7"
    },
    {
     "at": {
@@ -52511,26 +51994,6 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "MR0's text 'MR0' at (376,352) is drawn across the text 'x368y368' at (368,368)",
-     "other_text": "x368y368",
-     "points": [
-      {
-       "x": 376,
-       "y": 352
-      },
-      {
-       "x": 368,
-       "y": 368
-      }
-     ],
-     "ref": "MR0",
-     "text": "MR0",
-     "x": 376,
-     "y": 352
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
      "message": "MR90's text 'MR90' at (688,376) is drawn across the text 'x720y400' at (720,400)",
      "other_text": "x720y400",
      "points": [
@@ -52571,22 +52034,42 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1520y272' at (1520,272)",
-     "other_text": "x1520y272",
+     "message": "MR90's text 'NMOS' at (648,376) is drawn across the text 'x672y416' at (672,416)",
+     "other_text": "x672y416",
      "points": [
       {
-       "x": 1552,
-       "y": 264
+       "x": 648,
+       "y": 376
       },
       {
-       "x": 1520,
+       "x": 672,
+       "y": 416
+      }
+     ],
+     "ref": "MR90",
+     "text": "NMOS",
+     "x": 648,
+     "y": 376
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR180's text 'NMOS' at (1064,248) is drawn across the text 'x1024y272' at (1024,272)",
+     "other_text": "x1024y272",
+     "points": [
+      {
+       "x": 1064,
+       "y": 248
+      },
+      {
+       "x": 1024,
        "y": 272
       }
      ],
-     "ref": "MR270",
-     "text": "MR270",
-     "x": 1552,
-     "y": 264
+     "ref": "MR180",
+     "text": "NMOS",
+     "x": 1064,
+     "y": 248
     },
     {
      "across": "text",
@@ -52631,41 +52114,21 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1616y272' at (1616,272)",
-     "other_text": "x1616y272",
+     "message": "MR270's text 'NMOS' at (1592,264) is drawn across the text 'x1568y224' at (1568,224)",
+     "other_text": "x1568y224",
      "points": [
       {
-       "x": 1552,
-       "y": 264
-      },
-      {
-       "x": 1616,
-       "y": 272
-      }
-     ],
-     "ref": "MR270",
-     "text": "MR270",
-     "x": 1552,
-     "y": 264
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1568y272' at (1568,272)",
-     "other_text": "x1568y272",
-     "points": [
-      {
-       "x": 1552,
+       "x": 1592,
        "y": 264
       },
       {
        "x": 1568,
-       "y": 272
+       "y": 224
       }
      ],
      "ref": "MR270",
-     "text": "MR270",
-     "x": 1552,
+     "text": "NMOS",
+     "x": 1592,
      "y": 264
     },
     {
@@ -52680,26 +52143,6 @@
       },
       {
        "x": 224,
-       "y": 768
-      }
-     ],
-     "ref": "MM0",
-     "text": "MM0",
-     "x": 264,
-     "y": 752
-    },
-    {
-     "across": "text",
-     "kind": "attribute_text_overlap",
-     "message": "MM0's text 'MM0' at (264,752) is drawn across the text 'x272y768' at (272,768)",
-     "other_text": "x272y768",
-     "points": [
-      {
-       "x": 264,
-       "y": 752
-      },
-      {
-       "x": 272,
        "y": 768
       }
      ],
@@ -52751,22 +52194,42 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1520y672' at (1520,672)",
-     "other_text": "x1520y672",
+     "message": "MM90's text 'NMOS' at (792,776) is drawn across the text 'x768y816' at (768,816)",
+     "other_text": "x768y816",
      "points": [
       {
-       "x": 1488,
-       "y": 664
+       "x": 792,
+       "y": 776
       },
       {
-       "x": 1520,
+       "x": 768,
+       "y": 816
+      }
+     ],
+     "ref": "MM90",
+     "text": "NMOS",
+     "x": 792,
+     "y": 776
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM180's text 'NMOS' at (1176,648) is drawn across the text 'x1216y672' at (1216,672)",
+     "other_text": "x1216y672",
+     "points": [
+      {
+       "x": 1176,
+       "y": 648
+      },
+      {
+       "x": 1216,
        "y": 672
       }
      ],
-     "ref": "MM270",
-     "text": "MM270",
-     "x": 1488,
-     "y": 664
+     "ref": "MM180",
+     "text": "NMOS",
+     "x": 1176,
+     "y": 648
     },
     {
      "across": "text",
@@ -52811,40 +52274,22 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1472y672' at (1472,672)",
-     "other_text": "x1472y672",
+     "message": "MM270's text 'NMOS' at (1448,664) is drawn across the text 'x1472y624' at (1472,624)",
+     "other_text": "x1472y624",
      "points": [
       {
-       "x": 1488,
+       "x": 1448,
        "y": 664
       },
       {
        "x": 1472,
-       "y": 672
+       "y": 624
       }
      ],
      "ref": "MM270",
-     "text": "MM270",
-     "x": 1488,
+     "text": "NMOS",
+     "x": 1448,
      "y": 664
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x272y320' at (272,320) is drawn across the text 'x368y320' at (368,320)",
-     "other_text": "x368y320",
-     "points": [
-      {
-       "x": 272,
-       "y": 320
-      },
-      {
-       "x": 368,
-       "y": 320
-      }
-     ],
-     "text": "x272y320",
-     "x": 272,
-     "y": 320
     },
     {
      "kind": "sheet_text_overlap",
@@ -52863,6 +52308,24 @@
      "text": "x272y320",
      "x": 272,
      "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x320y272' at (320,272) is drawn across the text 'x368y320' at (368,320)",
+     "other_text": "x368y320",
+     "points": [
+      {
+       "x": 320,
+       "y": 272
+      },
+      {
+       "x": 368,
+       "y": 320
+      }
+     ],
+     "text": "x320y272",
+     "x": 320,
+     "y": 272
     },
     {
      "kind": "sheet_text_overlap",
@@ -52992,21 +52455,21 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x320y368' at (320,368) is drawn across the text 'x368y368' at (368,368)",
-     "other_text": "x368y368",
+     "message": "The text 'x368y320' at (368,320) is drawn across the text 'x320y240' at (320,240)",
+     "other_text": "x320y240",
      "points": [
       {
-       "x": 320,
-       "y": 368
+       "x": 368,
+       "y": 320
       },
       {
-       "x": 368,
-       "y": 368
+       "x": 320,
+       "y": 240
       }
      ],
-     "text": "x320y368",
-     "x": 320,
-     "y": 368
+     "text": "x368y320",
+     "x": 368,
+     "y": 320
     },
     {
      "kind": "sheet_text_overlap",
@@ -53025,6 +52488,78 @@
      "text": "x368y320",
      "x": 368,
      "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x368y320' at (368,320) is drawn across the text 'x368y224' at (368,224)",
+     "other_text": "x368y224",
+     "points": [
+      {
+       "x": 368,
+       "y": 320
+      },
+      {
+       "x": 368,
+       "y": 224
+      }
+     ],
+     "text": "x368y320",
+     "x": 368,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x368y320' at (368,320) is drawn across the text 'x416y272' at (416,272)",
+     "other_text": "x416y272",
+     "points": [
+      {
+       "x": 368,
+       "y": 320
+      },
+      {
+       "x": 416,
+       "y": 272
+      }
+     ],
+     "text": "x368y320",
+     "x": 368,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x368y320' at (368,320) is drawn across the text 'x368y272' at (368,272)",
+     "other_text": "x368y272",
+     "points": [
+      {
+       "x": 368,
+       "y": 320
+      },
+      {
+       "x": 368,
+       "y": 272
+      }
+     ],
+     "text": "x368y320",
+     "x": 368,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x320y400' at (320,400) is drawn across the text 'x272y416' at (272,416)",
+     "other_text": "x272y416",
+     "points": [
+      {
+       "x": 320,
+       "y": 400
+      },
+      {
+       "x": 272,
+       "y": 416
+      }
+     ],
+     "text": "x320y400",
+     "x": 320,
+     "y": 400
     },
     {
      "kind": "sheet_text_overlap",
@@ -53082,24 +52617,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x272y416' at (272,416) is drawn across the text 'x368y416' at (368,416)",
-     "other_text": "x368y416",
-     "points": [
-      {
-       "x": 272,
-       "y": 416
-      },
-      {
-       "x": 368,
-       "y": 416
-      }
-     ],
-     "text": "x272y416",
-     "x": 272,
-     "y": 416
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x416y272' at (416,272) is drawn across the text 'x368y272' at (368,272)",
      "other_text": "x368y272",
      "points": [
@@ -53118,24 +52635,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x416y368' at (416,368) is drawn across the text 'x368y368' at (368,368)",
-     "other_text": "x368y368",
-     "points": [
-      {
-       "x": 416,
-       "y": 368
-      },
-      {
-       "x": 368,
-       "y": 368
-      }
-     ],
-     "text": "x416y368",
-     "x": 416,
-     "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x272y272' at (272,272) is drawn across the text 'x368y272' at (368,272)",
      "other_text": "x368y272",
      "points": [
@@ -53151,24 +52650,6 @@
      "text": "x272y272",
      "x": 272,
      "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x272y368' at (272,368) is drawn across the text 'x368y368' at (368,368)",
-     "other_text": "x368y368",
-     "points": [
-      {
-       "x": 272,
-       "y": 368
-      },
-      {
-       "x": 368,
-       "y": 368
-      }
-     ],
-     "text": "x272y368",
-     "x": 272,
-     "y": 368
     },
     {
      "kind": "sheet_text_overlap",
@@ -53280,78 +52761,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x720y368' at (720,368) is drawn across the text 'x624y368' at (624,368)",
-     "other_text": "x624y368",
-     "points": [
-      {
-       "x": 720,
-       "y": 368
-      },
-      {
-       "x": 624,
-       "y": 368
-      }
-     ],
-     "text": "x720y368",
-     "x": 720,
-     "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y368' at (720,368) is drawn across the text 'x816y368' at (816,368)",
-     "other_text": "x816y368",
-     "points": [
-      {
-       "x": 720,
-       "y": 368
-      },
-      {
-       "x": 816,
-       "y": 368
-      }
-     ],
-     "text": "x720y368",
-     "x": 720,
-     "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y368' at (720,368) is drawn across the text 'x672y368' at (672,368)",
-     "other_text": "x672y368",
-     "points": [
-      {
-       "x": 720,
-       "y": 368
-      },
-      {
-       "x": 672,
-       "y": 368
-      }
-     ],
-     "text": "x720y368",
-     "x": 720,
-     "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y368' at (720,368) is drawn across the text 'x768y368' at (768,368)",
-     "other_text": "x768y368",
-     "points": [
-      {
-       "x": 720,
-       "y": 368
-      },
-      {
-       "x": 768,
-       "y": 368
-      }
-     ],
-     "text": "x720y368",
-     "x": 720,
-     "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x768y320' at (768,320) is drawn across the text 'x800y320' at (800,320)",
      "other_text": "x800y320",
      "points": [
@@ -53370,6 +52779,78 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x640y320' at (640,320) is drawn across the text 'x624y272' at (624,272)",
+     "other_text": "x624y272",
+     "points": [
+      {
+       "x": 640,
+       "y": 320
+      },
+      {
+       "x": 624,
+       "y": 272
+      }
+     ],
+     "text": "x640y320",
+     "x": 640,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x640y320' at (640,320) is drawn across the text 'x672y224' at (672,224)",
+     "other_text": "x672y224",
+     "points": [
+      {
+       "x": 640,
+       "y": 320
+      },
+      {
+       "x": 672,
+       "y": 224
+      }
+     ],
+     "text": "x640y320",
+     "x": 640,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x640y320' at (640,320) is drawn across the text 'x672y272' at (672,272)",
+     "other_text": "x672y272",
+     "points": [
+      {
+       "x": 640,
+       "y": 320
+      },
+      {
+       "x": 672,
+       "y": 272
+      }
+     ],
+     "text": "x640y320",
+     "x": 640,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x720y400' at (720,400) is drawn across the text 'x672y368' at (672,368)",
+     "other_text": "x672y368",
+     "points": [
+      {
+       "x": 720,
+       "y": 400
+      },
+      {
+       "x": 672,
+       "y": 368
+      }
+     ],
+     "text": "x720y400",
+     "x": 720,
+     "y": 400
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x624y272' at (624,272) is drawn across the text 'x672y272' at (672,272)",
      "other_text": "x672y272",
      "points": [
@@ -53385,24 +52866,6 @@
      "text": "x624y272",
      "x": 624,
      "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x624y368' at (624,368) is drawn across the text 'x672y368' at (672,368)",
-     "other_text": "x672y368",
-     "points": [
-      {
-       "x": 624,
-       "y": 368
-      },
-      {
-       "x": 672,
-       "y": 368
-      }
-     ],
-     "text": "x624y368",
-     "x": 624,
-     "y": 368
     },
     {
      "kind": "sheet_text_overlap",
@@ -53434,6 +52897,24 @@
       {
        "x": 768,
        "y": 416
+      }
+     ],
+     "text": "x672y416",
+     "x": 672,
+     "y": 416
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x672y416' at (672,416) is drawn across the text 'x672y368' at (672,368)",
+     "other_text": "x672y368",
+     "points": [
+      {
+       "x": 672,
+       "y": 416
+      },
+      {
+       "x": 672,
+       "y": 368
       }
      ],
      "text": "x672y416",
@@ -53496,34 +52977,16 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x672y368' at (672,368) is drawn across the text 'x768y368' at (768,368)",
-     "other_text": "x768y368",
-     "points": [
-      {
-       "x": 672,
-       "y": 368
-      },
-      {
-       "x": 768,
-       "y": 368
-      }
-     ],
-     "text": "x672y368",
-     "x": 672,
-     "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1168y320' at (1168,320)",
-     "other_text": "x1168y320",
+     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1120y368' at (1120,368)",
+     "other_text": "x1120y368",
      "points": [
       {
        "x": 1072,
        "y": 320
       },
       {
-       "x": 1168,
-       "y": 320
+       "x": 1120,
+       "y": 368
       }
      ],
      "text": "x1072y320",
@@ -53532,16 +52995,70 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1040y320' at (1040,320)",
-     "other_text": "x1040y320",
+     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1120y400' at (1120,400)",
+     "other_text": "x1120y400",
      "points": [
       {
        "x": 1072,
        "y": 320
       },
       {
-       "x": 1040,
+       "x": 1120,
+       "y": 400
+      }
+     ],
+     "text": "x1072y320",
+     "x": 1072,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1024y368' at (1024,368)",
+     "other_text": "x1024y368",
+     "points": [
+      {
+       "x": 1072,
        "y": 320
+      },
+      {
+       "x": 1024,
+       "y": 368
+      }
+     ],
+     "text": "x1072y320",
+     "x": 1072,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1072y416' at (1072,416)",
+     "other_text": "x1072y416",
+     "points": [
+      {
+       "x": 1072,
+       "y": 320
+      },
+      {
+       "x": 1072,
+       "y": 416
+      }
+     ],
+     "text": "x1072y320",
+     "x": 1072,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1072y368' at (1072,368)",
+     "other_text": "x1072y368",
+     "points": [
+      {
+       "x": 1072,
+       "y": 320
+      },
+      {
+       "x": 1072,
+       "y": 368
       }
      ],
      "text": "x1072y320",
@@ -53577,24 +53094,6 @@
       },
       {
        "x": 1216,
-       "y": 272
-      }
-     ],
-     "text": "x1120y272",
-     "x": 1120,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1120y272' at (1120,272) is drawn across the text 'x1072y272' at (1072,272)",
-     "other_text": "x1072y272",
-     "points": [
-      {
-       "x": 1120,
-       "y": 272
-      },
-      {
-       "x": 1072,
        "y": 272
       }
      ],
@@ -53712,24 +53211,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1024y272' at (1024,272) is drawn across the text 'x1072y272' at (1072,272)",
-     "other_text": "x1072y272",
-     "points": [
-      {
-       "x": 1024,
-       "y": 272
-      },
-      {
-       "x": 1072,
-       "y": 272
-      }
-     ],
-     "text": "x1024y272",
-     "x": 1024,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1024y368' at (1024,368) is drawn across the text 'x1072y368' at (1072,368)",
      "other_text": "x1072y368",
      "points": [
@@ -53745,24 +53226,6 @@
      "text": "x1024y368",
      "x": 1024,
      "y": 368
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y224' at (1072,224) is drawn across the text 'x1168y224' at (1168,224)",
-     "other_text": "x1168y224",
-     "points": [
-      {
-       "x": 1072,
-       "y": 224
-      },
-      {
-       "x": 1168,
-       "y": 224
-      }
-     ],
-     "text": "x1072y224",
-     "x": 1072,
-     "y": 224
     },
     {
      "kind": "sheet_text_overlap",
@@ -53820,24 +53283,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y272' at (1072,272) is drawn across the text 'x1168y272' at (1168,272)",
-     "other_text": "x1168y272",
-     "points": [
-      {
-       "x": 1072,
-       "y": 272
-      },
-      {
-       "x": 1168,
-       "y": 272
-      }
-     ],
-     "text": "x1072y272",
-     "x": 1072,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1072y368' at (1072,368) is drawn across the text 'x1168y368' at (1168,368)",
      "other_text": "x1168y368",
      "points": [
@@ -53889,78 +53334,6 @@
      "text": "x1472y320",
      "x": 1472,
      "y": 320
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1424y272' at (1424,272)",
-     "other_text": "x1424y272",
-     "points": [
-      {
-       "x": 1520,
-       "y": 272
-      },
-      {
-       "x": 1424,
-       "y": 272
-      }
-     ],
-     "text": "x1520y272",
-     "x": 1520,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1616y272' at (1616,272)",
-     "other_text": "x1616y272",
-     "points": [
-      {
-       "x": 1520,
-       "y": 272
-      },
-      {
-       "x": 1616,
-       "y": 272
-      }
-     ],
-     "text": "x1520y272",
-     "x": 1520,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1472y272' at (1472,272)",
-     "other_text": "x1472y272",
-     "points": [
-      {
-       "x": 1520,
-       "y": 272
-      },
-      {
-       "x": 1472,
-       "y": 272
-      }
-     ],
-     "text": "x1520y272",
-     "x": 1520,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1568y272' at (1568,272)",
-     "other_text": "x1568y272",
-     "points": [
-      {
-       "x": 1520,
-       "y": 272
-      },
-      {
-       "x": 1568,
-       "y": 272
-      }
-     ],
-     "text": "x1520y272",
-     "x": 1520,
-     "y": 272
     },
     {
      "kind": "sheet_text_overlap",
@@ -54036,20 +53409,74 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1568y320' at (1568,320) is drawn across the text 'x1600y320' at (1600,320)",
-     "other_text": "x1600y320",
+     "message": "The text 'x1520y240' at (1520,240) is drawn across the text 'x1568y272' at (1568,272)",
+     "other_text": "x1568y272",
      "points": [
       {
-       "x": 1568,
-       "y": 320
+       "x": 1520,
+       "y": 240
       },
+      {
+       "x": 1568,
+       "y": 272
+      }
+     ],
+     "text": "x1520y240",
+     "x": 1520,
+     "y": 240
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1600y320' at (1600,320) is drawn across the text 'x1568y416' at (1568,416)",
+     "other_text": "x1568y416",
+     "points": [
       {
        "x": 1600,
        "y": 320
+      },
+      {
+       "x": 1568,
+       "y": 416
       }
      ],
-     "text": "x1568y320",
-     "x": 1568,
+     "text": "x1600y320",
+     "x": 1600,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1600y320' at (1600,320) is drawn across the text 'x1616y368' at (1616,368)",
+     "other_text": "x1616y368",
+     "points": [
+      {
+       "x": 1600,
+       "y": 320
+      },
+      {
+       "x": 1616,
+       "y": 368
+      }
+     ],
+     "text": "x1600y320",
+     "x": 1600,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1600y320' at (1600,320) is drawn across the text 'x1568y368' at (1568,368)",
+     "other_text": "x1568y368",
+     "points": [
+      {
+       "x": 1600,
+       "y": 320
+      },
+      {
+       "x": 1568,
+       "y": 368
+      }
+     ],
+     "text": "x1600y320",
+     "x": 1600,
      "y": 320
     },
     {
@@ -54126,21 +53553,21 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1616y272' at (1616,272) is drawn across the text 'x1568y272' at (1568,272)",
+     "message": "The text 'x1568y224' at (1568,224) is drawn across the text 'x1568y272' at (1568,272)",
      "other_text": "x1568y272",
      "points": [
       {
-       "x": 1616,
-       "y": 272
+       "x": 1568,
+       "y": 224
       },
       {
        "x": 1568,
        "y": 272
       }
      ],
-     "text": "x1616y272",
-     "x": 1616,
-     "y": 272
+     "text": "x1568y224",
+     "x": 1568,
+     "y": 224
     },
     {
      "kind": "sheet_text_overlap",
@@ -54162,24 +53589,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1472y272' at (1472,272) is drawn across the text 'x1568y272' at (1568,272)",
-     "other_text": "x1568y272",
-     "points": [
-      {
-       "x": 1472,
-       "y": 272
-      },
-      {
-       "x": 1568,
-       "y": 272
-      }
-     ],
-     "text": "x1472y272",
-     "x": 1472,
-     "y": 272
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1472y368' at (1472,368) is drawn across the text 'x1568y368' at (1568,368)",
      "other_text": "x1568y368",
      "points": [
@@ -54198,16 +53607,16 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x272y720' at (272,720) is drawn across the text 'x368y720' at (368,720)",
-     "other_text": "x368y720",
+     "message": "The text 'x272y720' at (272,720) is drawn across the text 'x320y672' at (320,672)",
+     "other_text": "x320y672",
      "points": [
       {
        "x": 272,
        "y": 720
       },
       {
-       "x": 368,
-       "y": 720
+       "x": 320,
+       "y": 672
       }
      ],
      "text": "x272y720",
@@ -54226,6 +53635,78 @@
       {
        "x": 240,
        "y": 720
+      }
+     ],
+     "text": "x272y720",
+     "x": 272,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x272y720' at (272,720) is drawn across the text 'x320y640' at (320,640)",
+     "other_text": "x320y640",
+     "points": [
+      {
+       "x": 272,
+       "y": 720
+      },
+      {
+       "x": 320,
+       "y": 640
+      }
+     ],
+     "text": "x272y720",
+     "x": 272,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x272y720' at (272,720) is drawn across the text 'x224y672' at (224,672)",
+     "other_text": "x224y672",
+     "points": [
+      {
+       "x": 272,
+       "y": 720
+      },
+      {
+       "x": 224,
+       "y": 672
+      }
+     ],
+     "text": "x272y720",
+     "x": 272,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x272y720' at (272,720) is drawn across the text 'x272y624' at (272,624)",
+     "other_text": "x272y624",
+     "points": [
+      {
+       "x": 272,
+       "y": 720
+      },
+      {
+       "x": 272,
+       "y": 624
+      }
+     ],
+     "text": "x272y720",
+     "x": 272,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x272y720' at (272,720) is drawn across the text 'x272y672' at (272,672)",
+     "other_text": "x272y672",
+     "points": [
+      {
+       "x": 272,
+       "y": 720
+      },
+      {
+       "x": 272,
+       "y": 672
       }
      ],
      "text": "x272y720",
@@ -54342,24 +53823,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x320y768' at (320,768) is drawn across the text 'x272y768' at (272,768)",
-     "other_text": "x272y768",
-     "points": [
-      {
-       "x": 320,
-       "y": 768
-      },
-      {
-       "x": 272,
-       "y": 768
-      }
-     ],
-     "text": "x320y768",
-     "x": 320,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x320y768' at (320,768) is drawn across the text 'x368y768' at (368,768)",
      "other_text": "x368y768",
      "points": [
@@ -54396,6 +53859,24 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x320y800' at (320,800) is drawn across the text 'x368y816' at (368,816)",
+     "other_text": "x368y816",
+     "points": [
+      {
+       "x": 320,
+       "y": 800
+      },
+      {
+       "x": 368,
+       "y": 816
+      }
+     ],
+     "text": "x320y800",
+     "x": 320,
+     "y": 800
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x224y672' at (224,672) is drawn across the text 'x272y672' at (272,672)",
      "other_text": "x272y672",
      "points": [
@@ -54414,24 +53895,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x224y768' at (224,768) is drawn across the text 'x272y768' at (272,768)",
-     "other_text": "x272y768",
-     "points": [
-      {
-       "x": 224,
-       "y": 768
-      },
-      {
-       "x": 272,
-       "y": 768
-      }
-     ],
-     "text": "x224y768",
-     "x": 224,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x272y624' at (272,624) is drawn across the text 'x368y624' at (368,624)",
      "other_text": "x368y624",
      "points": [
@@ -54447,24 +53910,6 @@
      "text": "x272y624",
      "x": 272,
      "y": 624
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x272y816' at (272,816) is drawn across the text 'x368y816' at (368,816)",
-     "other_text": "x368y816",
-     "points": [
-      {
-       "x": 272,
-       "y": 816
-      },
-      {
-       "x": 368,
-       "y": 816
-      }
-     ],
-     "text": "x272y816",
-     "x": 272,
-     "y": 816
     },
     {
      "kind": "sheet_text_overlap",
@@ -54519,24 +53964,6 @@
      "text": "x272y672",
      "x": 272,
      "y": 672
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x272y768' at (272,768) is drawn across the text 'x368y768' at (368,768)",
-     "other_text": "x368y768",
-     "points": [
-      {
-       "x": 272,
-       "y": 768
-      },
-      {
-       "x": 368,
-       "y": 768
-      }
-     ],
-     "text": "x272y768",
-     "x": 272,
-     "y": 768
     },
     {
      "kind": "sheet_text_overlap",
@@ -54648,78 +54075,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x720y768' at (720,768) is drawn across the text 'x624y768' at (624,768)",
-     "other_text": "x624y768",
-     "points": [
-      {
-       "x": 720,
-       "y": 768
-      },
-      {
-       "x": 624,
-       "y": 768
-      }
-     ],
-     "text": "x720y768",
-     "x": 720,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y768' at (720,768) is drawn across the text 'x816y768' at (816,768)",
-     "other_text": "x816y768",
-     "points": [
-      {
-       "x": 720,
-       "y": 768
-      },
-      {
-       "x": 816,
-       "y": 768
-      }
-     ],
-     "text": "x720y768",
-     "x": 720,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y768' at (720,768) is drawn across the text 'x672y768' at (672,768)",
-     "other_text": "x672y768",
-     "points": [
-      {
-       "x": 720,
-       "y": 768
-      },
-      {
-       "x": 672,
-       "y": 768
-      }
-     ],
-     "text": "x720y768",
-     "x": 720,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y768' at (720,768) is drawn across the text 'x768y768' at (768,768)",
-     "other_text": "x768y768",
-     "points": [
-      {
-       "x": 720,
-       "y": 768
-      },
-      {
-       "x": 768,
-       "y": 768
-      }
-     ],
-     "text": "x720y768",
-     "x": 720,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x768y720' at (768,720) is drawn across the text 'x800y720' at (800,720)",
      "other_text": "x800y720",
      "points": [
@@ -54734,6 +54089,78 @@
      ],
      "text": "x768y720",
      "x": 768,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x720y800' at (720,800) is drawn across the text 'x768y768' at (768,768)",
+     "other_text": "x768y768",
+     "points": [
+      {
+       "x": 720,
+       "y": 800
+      },
+      {
+       "x": 768,
+       "y": 768
+      }
+     ],
+     "text": "x720y800",
+     "x": 720,
+     "y": 800
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x800y720' at (800,720) is drawn across the text 'x768y624' at (768,624)",
+     "other_text": "x768y624",
+     "points": [
+      {
+       "x": 800,
+       "y": 720
+      },
+      {
+       "x": 768,
+       "y": 624
+      }
+     ],
+     "text": "x800y720",
+     "x": 800,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x800y720' at (800,720) is drawn across the text 'x816y672' at (816,672)",
+     "other_text": "x816y672",
+     "points": [
+      {
+       "x": 800,
+       "y": 720
+      },
+      {
+       "x": 816,
+       "y": 672
+      }
+     ],
+     "text": "x800y720",
+     "x": 800,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x800y720' at (800,720) is drawn across the text 'x768y672' at (768,672)",
+     "other_text": "x768y672",
+     "points": [
+      {
+       "x": 800,
+       "y": 720
+      },
+      {
+       "x": 768,
+       "y": 672
+      }
+     ],
+     "text": "x800y720",
+     "x": 800,
      "y": 720
     },
     {
@@ -54810,6 +54237,24 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x768y816' at (768,816) is drawn across the text 'x768y768' at (768,768)",
+     "other_text": "x768y768",
+     "points": [
+      {
+       "x": 768,
+       "y": 816
+      },
+      {
+       "x": 768,
+       "y": 768
+      }
+     ],
+     "text": "x768y816",
+     "x": 768,
+     "y": 816
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x816y672' at (816,672) is drawn across the text 'x768y672' at (768,672)",
      "other_text": "x768y672",
      "points": [
@@ -54828,24 +54273,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x816y768' at (816,768) is drawn across the text 'x768y768' at (768,768)",
-     "other_text": "x768y768",
-     "points": [
-      {
-       "x": 816,
-       "y": 768
-      },
-      {
-       "x": 768,
-       "y": 768
-      }
-     ],
-     "text": "x816y768",
-     "x": 816,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x672y672' at (672,672) is drawn across the text 'x768y672' at (768,672)",
      "other_text": "x768y672",
      "points": [
@@ -54861,42 +54288,6 @@
      "text": "x672y672",
      "x": 672,
      "y": 672
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x672y768' at (672,768) is drawn across the text 'x768y768' at (768,768)",
-     "other_text": "x768y768",
-     "points": [
-      {
-       "x": 672,
-       "y": 768
-      },
-      {
-       "x": 768,
-       "y": 768
-      }
-     ],
-     "text": "x672y768",
-     "x": 672,
-     "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y720' at (1072,720) is drawn across the text 'x1168y720' at (1168,720)",
-     "other_text": "x1168y720",
-     "points": [
-      {
-       "x": 1072,
-       "y": 720
-      },
-      {
-       "x": 1168,
-       "y": 720
-      }
-     ],
-     "text": "x1072y720",
-     "x": 1072,
-     "y": 720
     },
     {
      "kind": "sheet_text_overlap",
@@ -54972,21 +54363,21 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1120y672' at (1120,672) is drawn across the text 'x1168y672' at (1168,672)",
-     "other_text": "x1168y672",
+     "message": "The text 'x1120y768' at (1120,768) is drawn across the text 'x1168y720' at (1168,720)",
+     "other_text": "x1168y720",
      "points": [
       {
        "x": 1120,
-       "y": 672
+       "y": 768
       },
       {
        "x": 1168,
-       "y": 672
+       "y": 720
       }
      ],
-     "text": "x1120y672",
+     "text": "x1120y768",
      "x": 1120,
-     "y": 672
+     "y": 768
     },
     {
      "kind": "sheet_text_overlap",
@@ -55062,16 +54453,70 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1200y720' at (1200,720)",
-     "other_text": "x1200y720",
+     "message": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1120y800' at (1120,800)",
+     "other_text": "x1120y800",
      "points": [
       {
        "x": 1168,
        "y": 720
       },
       {
-       "x": 1200,
+       "x": 1120,
+       "y": 800
+      }
+     ],
+     "text": "x1168y720",
+     "x": 1168,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1168y816' at (1168,816)",
+     "other_text": "x1168y816",
+     "points": [
+      {
+       "x": 1168,
        "y": 720
+      },
+      {
+       "x": 1168,
+       "y": 816
+      }
+     ],
+     "text": "x1168y720",
+     "x": 1168,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1216y768' at (1216,768)",
+     "other_text": "x1216y768",
+     "points": [
+      {
+       "x": 1168,
+       "y": 720
+      },
+      {
+       "x": 1216,
+       "y": 768
+      }
+     ],
+     "text": "x1168y720",
+     "x": 1168,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1168y768' at (1168,768)",
+     "other_text": "x1168y768",
+     "points": [
+      {
+       "x": 1168,
+       "y": 720
+      },
+      {
+       "x": 1168,
+       "y": 768
       }
      ],
      "text": "x1168y720",
@@ -55116,24 +54561,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y624' at (1072,624) is drawn across the text 'x1168y624' at (1168,624)",
-     "other_text": "x1168y624",
-     "points": [
-      {
-       "x": 1072,
-       "y": 624
-      },
-      {
-       "x": 1168,
-       "y": 624
-      }
-     ],
-     "text": "x1072y624",
-     "x": 1072,
-     "y": 624
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1072y816' at (1072,816) is drawn across the text 'x1168y816' at (1168,816)",
      "other_text": "x1168y816",
      "points": [
@@ -55152,24 +54579,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1216y672' at (1216,672) is drawn across the text 'x1168y672' at (1168,672)",
-     "other_text": "x1168y672",
-     "points": [
-      {
-       "x": 1216,
-       "y": 672
-      },
-      {
-       "x": 1168,
-       "y": 672
-      }
-     ],
-     "text": "x1216y672",
-     "x": 1216,
-     "y": 672
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1216y768' at (1216,768) is drawn across the text 'x1168y768' at (1168,768)",
      "other_text": "x1168y768",
      "points": [
@@ -55185,24 +54594,6 @@
      "text": "x1216y768",
      "x": 1216,
      "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1072y672' at (1072,672) is drawn across the text 'x1168y672' at (1168,672)",
-     "other_text": "x1168y672",
-     "points": [
-      {
-       "x": 1072,
-       "y": 672
-      },
-      {
-       "x": 1168,
-       "y": 672
-      }
-     ],
-     "text": "x1072y672",
-     "x": 1072,
-     "y": 672
     },
     {
      "kind": "sheet_text_overlap",
@@ -55239,96 +54630,6 @@
      "text": "x1472y720",
      "x": 1472,
      "y": 720
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1440y720' at (1440,720)",
-     "other_text": "x1440y720",
-     "points": [
-      {
-       "x": 1472,
-       "y": 720
-      },
-      {
-       "x": 1440,
-       "y": 720
-      }
-     ],
-     "text": "x1472y720",
-     "x": 1472,
-     "y": 720
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1424y672' at (1424,672)",
-     "other_text": "x1424y672",
-     "points": [
-      {
-       "x": 1520,
-       "y": 672
-      },
-      {
-       "x": 1424,
-       "y": 672
-      }
-     ],
-     "text": "x1520y672",
-     "x": 1520,
-     "y": 672
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1616y672' at (1616,672)",
-     "other_text": "x1616y672",
-     "points": [
-      {
-       "x": 1520,
-       "y": 672
-      },
-      {
-       "x": 1616,
-       "y": 672
-      }
-     ],
-     "text": "x1520y672",
-     "x": 1520,
-     "y": 672
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1472y672' at (1472,672)",
-     "other_text": "x1472y672",
-     "points": [
-      {
-       "x": 1520,
-       "y": 672
-      },
-      {
-       "x": 1472,
-       "y": 672
-      }
-     ],
-     "text": "x1520y672",
-     "x": 1520,
-     "y": 672
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1568y672' at (1568,672)",
-     "other_text": "x1568y672",
-     "points": [
-      {
-       "x": 1520,
-       "y": 672
-      },
-      {
-       "x": 1568,
-       "y": 672
-      }
-     ],
-     "text": "x1520y672",
-     "x": 1520,
-     "y": 672
     },
     {
      "kind": "sheet_text_overlap",
@@ -55422,21 +54723,75 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1424y672' at (1424,672) is drawn across the text 'x1472y672' at (1472,672)",
+     "message": "The text 'x1440y720' at (1440,720) is drawn across the text 'x1424y768' at (1424,768)",
+     "other_text": "x1424y768",
+     "points": [
+      {
+       "x": 1440,
+       "y": 720
+      },
+      {
+       "x": 1424,
+       "y": 768
+      }
+     ],
+     "text": "x1440y720",
+     "x": 1440,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1440y720' at (1440,720) is drawn across the text 'x1472y816' at (1472,816)",
+     "other_text": "x1472y816",
+     "points": [
+      {
+       "x": 1440,
+       "y": 720
+      },
+      {
+       "x": 1472,
+       "y": 816
+      }
+     ],
+     "text": "x1440y720",
+     "x": 1440,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1440y720' at (1440,720) is drawn across the text 'x1472y768' at (1472,768)",
+     "other_text": "x1472y768",
+     "points": [
+      {
+       "x": 1440,
+       "y": 720
+      },
+      {
+       "x": 1472,
+       "y": 768
+      }
+     ],
+     "text": "x1440y720",
+     "x": 1440,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1520y640' at (1520,640) is drawn across the text 'x1472y672' at (1472,672)",
      "other_text": "x1472y672",
      "points": [
       {
-       "x": 1424,
-       "y": 672
+       "x": 1520,
+       "y": 640
       },
       {
        "x": 1472,
        "y": 672
       }
      ],
-     "text": "x1424y672",
-     "x": 1424,
-     "y": 672
+     "text": "x1520y640",
+     "x": 1520,
+     "y": 640
     },
     {
      "kind": "sheet_text_overlap",
@@ -55468,6 +54823,24 @@
       {
        "x": 1568,
        "y": 624
+      }
+     ],
+     "text": "x1472y624",
+     "x": 1472,
+     "y": 624
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1472y624' at (1472,624) is drawn across the text 'x1472y672' at (1472,672)",
+     "other_text": "x1472y672",
+     "points": [
+      {
+       "x": 1472,
+       "y": 624
+      },
+      {
+       "x": 1472,
+       "y": 672
       }
      ],
      "text": "x1472y624",
@@ -55527,24 +54900,6 @@
      "text": "x1616y768",
      "x": 1616,
      "y": 768
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1472y672' at (1472,672) is drawn across the text 'x1568y672' at (1568,672)",
-     "other_text": "x1568y672",
-     "points": [
-      {
-       "x": 1472,
-       "y": 672
-      },
-      {
-       "x": 1568,
-       "y": 672
-      }
-     ],
-     "text": "x1472y672",
-     "x": 1472,
-     "y": 672
     },
     {
      "kind": "sheet_text_overlap",
@@ -58291,33 +57646,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 376,
-     "y": 352
-    },
-    "evidence": {
-     "coords": [
-      [
-       376,
-       352
-      ],
-      [
-       368,
-       368
-      ]
-     ],
-     "detail": "MR0's text 'MR0' at (376,352) is drawn across the text 'x368y368' at (368,368)",
-     "refs": [
-      "MR0"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "MR0"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 688,
      "y": 376
     },
@@ -58372,29 +57700,56 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1552,
-     "y": 264
+     "x": 648,
+     "y": 376
     },
     "evidence": {
      "coords": [
       [
-       1552,
-       264
+       648,
+       376
       ],
       [
-       1520,
-       272
+       672,
+       416
       ]
      ],
-     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1520y272' at (1520,272)",
+     "detail": "MR90's text 'NMOS' at (648,376) is drawn across the text 'x672y416' at (672,416)",
      "refs": [
-      "MR270"
+      "MR90"
      ]
     },
     "ok": false,
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
-    "subject": "MR270"
+    "subject": "MR90"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1064,
+     "y": 248
+    },
+    "evidence": {
+     "coords": [
+      [
+       1064,
+       248
+      ],
+      [
+       1024,
+       272
+      ]
+     ],
+     "detail": "MR180's text 'NMOS' at (1064,248) is drawn across the text 'x1024y272' at (1024,272)",
+     "refs": [
+      "MR180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR180"
    },
    {
     "at": {
@@ -58453,48 +57808,21 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1552,
+     "x": 1592,
      "y": 264
     },
     "evidence": {
      "coords": [
       [
-       1552,
-       264
-      ],
-      [
-       1616,
-       272
-      ]
-     ],
-     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1616y272' at (1616,272)",
-     "refs": [
-      "MR270"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "MR270"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1552,
-     "y": 264
-    },
-    "evidence": {
-     "coords": [
-      [
-       1552,
+       1592,
        264
       ],
       [
        1568,
-       272
+       224
       ]
      ],
-     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1568y272' at (1568,272)",
+     "detail": "MR270's text 'NMOS' at (1592,264) is drawn across the text 'x1568y224' at (1568,224)",
      "refs": [
       "MR270"
      ]
@@ -58522,33 +57850,6 @@
       ]
      ],
      "detail": "MM0's text 'MM0' at (264,752) is drawn across the text 'x224y768' at (224,768)",
-     "refs": [
-      "MM0"
-     ]
-    },
-    "ok": false,
-    "rule_id": "attribute_text_overlap",
-    "severity": "observation",
-    "subject": "MM0"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 264,
-     "y": 752
-    },
-    "evidence": {
-     "coords": [
-      [
-       264,
-       752
-      ],
-      [
-       272,
-       768
-      ]
-     ],
-     "detail": "MM0's text 'MM0' at (264,752) is drawn across the text 'x272y768' at (272,768)",
      "refs": [
       "MM0"
      ]
@@ -58615,29 +57916,56 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1488,
-     "y": 664
+     "x": 792,
+     "y": 776
     },
     "evidence": {
      "coords": [
       [
-       1488,
-       664
+       792,
+       776
       ],
       [
-       1520,
-       672
+       768,
+       816
       ]
      ],
-     "detail": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "detail": "MM90's text 'NMOS' at (792,776) is drawn across the text 'x768y816' at (768,816)",
      "refs": [
-      "MM270"
+      "MM90"
      ]
     },
     "ok": false,
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
-    "subject": "MM270"
+    "subject": "MM90"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1176,
+     "y": 648
+    },
+    "evidence": {
+     "coords": [
+      [
+       1176,
+       648
+      ],
+      [
+       1216,
+       672
+      ]
+     ],
+     "detail": "MM180's text 'NMOS' at (1176,648) is drawn across the text 'x1216y672' at (1216,672)",
+     "refs": [
+      "MM180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM180"
    },
    {
     "at": {
@@ -58696,21 +58024,21 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1488,
+     "x": 1448,
      "y": 664
     },
     "evidence": {
      "coords": [
       [
-       1488,
+       1448,
        664
       ],
       [
        1472,
-       672
+       624
       ]
      ],
-     "detail": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1472y672' at (1472,672)",
+     "detail": "MM270's text 'NMOS' at (1448,664) is drawn across the text 'x1472y624' at (1472,624)",
      "refs": [
       "MM270"
      ]
@@ -58719,31 +58047,6 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "MM270"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 272,
-     "y": 320
-    },
-    "evidence": {
-     "coords": [
-      [
-       272,
-       320
-      ],
-      [
-       368,
-       320
-      ]
-     ],
-     "detail": "The text 'x272y320' at (272,320) is drawn across the text 'x368y320' at (368,320)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(272,320)"
    },
    {
     "at": {
@@ -58769,6 +58072,31 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(272,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 320,
+     "y": 272
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       272
+      ],
+      [
+       368,
+       320
+      ]
+     ],
+     "detail": "The text 'x320y272' at (320,272) is drawn across the text 'x368y320' at (368,320)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,272)"
    },
    {
     "at": {
@@ -58948,27 +58276,27 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 320,
-     "y": 368
+     "x": 368,
+     "y": 320
     },
     "evidence": {
      "coords": [
       [
-       320,
-       368
+       368,
+       320
       ],
       [
-       368,
-       368
+       320,
+       240
       ]
      ],
-     "detail": "The text 'x320y368' at (320,368) is drawn across the text 'x368y368' at (368,368)",
+     "detail": "The text 'x368y320' at (368,320) is drawn across the text 'x320y240' at (320,240)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(320,368)"
+    "subject": "(368,320)"
    },
    {
     "at": {
@@ -58994,6 +58322,106 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(368,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 368,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       368,
+       320
+      ],
+      [
+       368,
+       224
+      ]
+     ],
+     "detail": "The text 'x368y320' at (368,320) is drawn across the text 'x368y224' at (368,224)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(368,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 368,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       368,
+       320
+      ],
+      [
+       416,
+       272
+      ]
+     ],
+     "detail": "The text 'x368y320' at (368,320) is drawn across the text 'x416y272' at (416,272)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(368,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 368,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       368,
+       320
+      ],
+      [
+       368,
+       272
+      ]
+     ],
+     "detail": "The text 'x368y320' at (368,320) is drawn across the text 'x368y272' at (368,272)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(368,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 320,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       400
+      ],
+      [
+       272,
+       416
+      ]
+     ],
+     "detail": "The text 'x320y400' at (320,400) is drawn across the text 'x272y416' at (272,416)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,400)"
    },
    {
     "at": {
@@ -59073,31 +58501,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 272,
-     "y": 416
-    },
-    "evidence": {
-     "coords": [
-      [
-       272,
-       416
-      ],
-      [
-       368,
-       416
-      ]
-     ],
-     "detail": "The text 'x272y416' at (272,416) is drawn across the text 'x368y416' at (368,416)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(272,416)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 416,
      "y": 272
     },
@@ -59123,31 +58526,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 416,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       416,
-       368
-      ],
-      [
-       368,
-       368
-      ]
-     ],
-     "detail": "The text 'x416y368' at (416,368) is drawn across the text 'x368y368' at (368,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(416,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 272,
      "y": 272
     },
@@ -59169,31 +58547,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(272,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 272,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       272,
-       368
-      ],
-      [
-       368,
-       368
-      ]
-     ],
-     "detail": "The text 'x272y368' at (272,368) is drawn across the text 'x368y368' at (368,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(272,368)"
    },
    {
     "at": {
@@ -59348,106 +58701,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       368
-      ],
-      [
-       624,
-       368
-      ]
-     ],
-     "detail": "The text 'x720y368' at (720,368) is drawn across the text 'x624y368' at (624,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       368
-      ],
-      [
-       816,
-       368
-      ]
-     ],
-     "detail": "The text 'x720y368' at (720,368) is drawn across the text 'x816y368' at (816,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       368
-      ],
-      [
-       672,
-       368
-      ]
-     ],
-     "detail": "The text 'x720y368' at (720,368) is drawn across the text 'x672y368' at (672,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       368
-      ],
-      [
-       768,
-       368
-      ]
-     ],
-     "detail": "The text 'x720y368' at (720,368) is drawn across the text 'x768y368' at (768,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 768,
      "y": 320
     },
@@ -59473,6 +58726,106 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
+     "x": 640,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       320
+      ],
+      [
+       624,
+       272
+      ]
+     ],
+     "detail": "The text 'x640y320' at (640,320) is drawn across the text 'x624y272' at (624,272)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(640,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 640,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       320
+      ],
+      [
+       672,
+       224
+      ]
+     ],
+     "detail": "The text 'x640y320' at (640,320) is drawn across the text 'x672y224' at (672,224)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(640,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 640,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       320
+      ],
+      [
+       672,
+       272
+      ]
+     ],
+     "detail": "The text 'x640y320' at (640,320) is drawn across the text 'x672y272' at (672,272)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(640,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 720,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       720,
+       400
+      ],
+      [
+       672,
+       368
+      ]
+     ],
+     "detail": "The text 'x720y400' at (720,400) is drawn across the text 'x672y368' at (672,368)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(720,400)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
      "x": 624,
      "y": 272
     },
@@ -59494,31 +58847,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(624,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 624,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       624,
-       368
-      ],
-      [
-       672,
-       368
-      ]
-     ],
-     "detail": "The text 'x624y368' at (624,368) is drawn across the text 'x672y368' at (672,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(624,368)"
    },
    {
     "at": {
@@ -59563,6 +58891,31 @@
       ]
      ],
      "detail": "The text 'x672y416' at (672,416) is drawn across the text 'x768y416' at (768,416)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(672,416)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 672,
+     "y": 416
+    },
+    "evidence": {
+     "coords": [
+      [
+       672,
+       416
+      ],
+      [
+       672,
+       368
+      ]
+     ],
+     "detail": "The text 'x672y416' at (672,416) is drawn across the text 'x672y368' at (672,368)",
      "refs": []
     },
     "ok": false,
@@ -59648,31 +59001,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 672,
-     "y": 368
-    },
-    "evidence": {
-     "coords": [
-      [
-       672,
-       368
-      ],
-      [
-       768,
-       368
-      ]
-     ],
-     "detail": "The text 'x672y368' at (672,368) is drawn across the text 'x768y368' at (768,368)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(672,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 1072,
      "y": 320
     },
@@ -59683,11 +59011,11 @@
        320
       ],
       [
-       1168,
-       320
+       1120,
+       368
       ]
      ],
-     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1168y320' at (1168,320)",
+     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1120y368' at (1120,368)",
      "refs": []
     },
     "ok": false,
@@ -59708,11 +59036,86 @@
        320
       ],
       [
-       1040,
-       320
+       1120,
+       400
       ]
      ],
-     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1040y320' at (1040,320)",
+     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1120y400' at (1120,400)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1072,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1072,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1072,
+       320
+      ],
+      [
+       1024,
+       368
+      ]
+     ],
+     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1024y368' at (1024,368)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1072,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1072,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1072,
+       320
+      ],
+      [
+       1072,
+       416
+      ]
+     ],
+     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1072y416' at (1072,416)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1072,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1072,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1072,
+       320
+      ],
+      [
+       1072,
+       368
+      ]
+     ],
+     "detail": "The text 'x1072y320' at (1072,320) is drawn across the text 'x1072y368' at (1072,368)",
      "refs": []
     },
     "ok": false,
@@ -59763,31 +59166,6 @@
       ]
      ],
      "detail": "The text 'x1120y272' at (1120,272) is drawn across the text 'x1216y272' at (1216,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1120,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1120,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1120,
-       272
-      ],
-      [
-       1072,
-       272
-      ]
-     ],
-     "detail": "The text 'x1120y272' at (1120,272) is drawn across the text 'x1072y272' at (1072,272)",
      "refs": []
     },
     "ok": false,
@@ -59949,31 +59327,6 @@
     "at": {
      "file": "orientation_nmos4.asc",
      "x": 1024,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1024,
-       272
-      ],
-      [
-       1072,
-       272
-      ]
-     ],
-     "detail": "The text 'x1024y272' at (1024,272) is drawn across the text 'x1072y272' at (1072,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1024,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1024,
      "y": 368
     },
     "evidence": {
@@ -59994,31 +59347,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(1024,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1072,
-     "y": 224
-    },
-    "evidence": {
-     "coords": [
-      [
-       1072,
-       224
-      ],
-      [
-       1168,
-       224
-      ]
-     ],
-     "detail": "The text 'x1072y224' at (1072,224) is drawn across the text 'x1168y224' at (1168,224)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1072,224)"
    },
    {
     "at": {
@@ -60099,31 +59427,6 @@
     "at": {
      "file": "orientation_nmos4.asc",
      "x": 1072,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1072,
-       272
-      ],
-      [
-       1168,
-       272
-      ]
-     ],
-     "detail": "The text 'x1072y272' at (1072,272) is drawn across the text 'x1168y272' at (1168,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1072,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1072,
      "y": 368
     },
     "evidence": {
@@ -60194,106 +59497,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(1472,320)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       272
-      ],
-      [
-       1424,
-       272
-      ]
-     ],
-     "detail": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1424y272' at (1424,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       272
-      ],
-      [
-       1616,
-       272
-      ]
-     ],
-     "detail": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1616y272' at (1616,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       272
-      ],
-      [
-       1472,
-       272
-      ]
-     ],
-     "detail": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1472y272' at (1472,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,272)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       272
-      ],
-      [
-       1568,
-       272
-      ]
-     ],
-     "detail": "The text 'x1520y272' at (1520,272) is drawn across the text 'x1568y272' at (1568,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,272)"
    },
    {
     "at": {
@@ -60398,27 +59601,102 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1568,
-     "y": 320
+     "x": 1520,
+     "y": 240
     },
     "evidence": {
      "coords": [
       [
-       1568,
-       320
+       1520,
+       240
       ],
       [
-       1600,
-       320
+       1568,
+       272
       ]
      ],
-     "detail": "The text 'x1568y320' at (1568,320) is drawn across the text 'x1600y320' at (1600,320)",
+     "detail": "The text 'x1520y240' at (1520,240) is drawn across the text 'x1568y272' at (1568,272)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1568,320)"
+    "subject": "(1520,240)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1600,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1600,
+       320
+      ],
+      [
+       1568,
+       416
+      ]
+     ],
+     "detail": "The text 'x1600y320' at (1600,320) is drawn across the text 'x1568y416' at (1568,416)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1600,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1600,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1600,
+       320
+      ],
+      [
+       1616,
+       368
+      ]
+     ],
+     "detail": "The text 'x1600y320' at (1600,320) is drawn across the text 'x1616y368' at (1616,368)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1600,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1600,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1600,
+       320
+      ],
+      [
+       1568,
+       368
+      ]
+     ],
+     "detail": "The text 'x1600y320' at (1600,320) is drawn across the text 'x1568y368' at (1568,368)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1600,320)"
    },
    {
     "at": {
@@ -60523,27 +59801,27 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1616,
-     "y": 272
+     "x": 1568,
+     "y": 224
     },
     "evidence": {
      "coords": [
       [
-       1616,
-       272
+       1568,
+       224
       ],
       [
        1568,
        272
       ]
      ],
-     "detail": "The text 'x1616y272' at (1616,272) is drawn across the text 'x1568y272' at (1568,272)",
+     "detail": "The text 'x1568y224' at (1568,224) is drawn across the text 'x1568y272' at (1568,272)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1616,272)"
+    "subject": "(1568,224)"
    },
    {
     "at": {
@@ -60569,31 +59847,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(1616,368)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1472,
-     "y": 272
-    },
-    "evidence": {
-     "coords": [
-      [
-       1472,
-       272
-      ],
-      [
-       1568,
-       272
-      ]
-     ],
-     "detail": "The text 'x1472y272' at (1472,272) is drawn across the text 'x1568y272' at (1568,272)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1472,272)"
    },
    {
     "at": {
@@ -60633,11 +59886,11 @@
        720
       ],
       [
-       368,
-       720
+       320,
+       672
       ]
      ],
-     "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x368y720' at (368,720)",
+     "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x320y672' at (320,672)",
      "refs": []
     },
     "ok": false,
@@ -60663,6 +59916,106 @@
       ]
      ],
      "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x240y720' at (240,720)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(272,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 272,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       272,
+       720
+      ],
+      [
+       320,
+       640
+      ]
+     ],
+     "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x320y640' at (320,640)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(272,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 272,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       272,
+       720
+      ],
+      [
+       224,
+       672
+      ]
+     ],
+     "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x224y672' at (224,672)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(272,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 272,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       272,
+       720
+      ],
+      [
+       272,
+       624
+      ]
+     ],
+     "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x272y624' at (272,624)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(272,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 272,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       272,
+       720
+      ],
+      [
+       272,
+       672
+      ]
+     ],
+     "detail": "The text 'x272y720' at (272,720) is drawn across the text 'x272y672' at (272,672)",
      "refs": []
     },
     "ok": false,
@@ -60833,31 +60186,6 @@
        768
       ],
       [
-       272,
-       768
-      ]
-     ],
-     "detail": "The text 'x320y768' at (320,768) is drawn across the text 'x272y768' at (272,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(320,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 320,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       320,
-       768
-      ],
-      [
        368,
        768
       ]
@@ -60898,6 +60226,31 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
+     "x": 320,
+     "y": 800
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       800
+      ],
+      [
+       368,
+       816
+      ]
+     ],
+     "detail": "The text 'x320y800' at (320,800) is drawn across the text 'x368y816' at (368,816)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,800)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
      "x": 224,
      "y": 672
     },
@@ -60923,31 +60276,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 224,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       224,
-       768
-      ],
-      [
-       272,
-       768
-      ]
-     ],
-     "detail": "The text 'x224y768' at (224,768) is drawn across the text 'x272y768' at (272,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(224,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 272,
      "y": 624
     },
@@ -60969,31 +60297,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(272,624)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 272,
-     "y": 816
-    },
-    "evidence": {
-     "coords": [
-      [
-       272,
-       816
-      ],
-      [
-       368,
-       816
-      ]
-     ],
-     "detail": "The text 'x272y816' at (272,816) is drawn across the text 'x368y816' at (368,816)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(272,816)"
    },
    {
     "at": {
@@ -61069,31 +60372,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(272,672)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 272,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       272,
-       768
-      ],
-      [
-       368,
-       768
-      ]
-     ],
-     "detail": "The text 'x272y768' at (272,768) is drawn across the text 'x368y768' at (368,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(272,768)"
    },
    {
     "at": {
@@ -61248,106 +60526,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       768
-      ],
-      [
-       624,
-       768
-      ]
-     ],
-     "detail": "The text 'x720y768' at (720,768) is drawn across the text 'x624y768' at (624,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       768
-      ],
-      [
-       816,
-       768
-      ]
-     ],
-     "detail": "The text 'x720y768' at (720,768) is drawn across the text 'x816y768' at (816,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       768
-      ],
-      [
-       672,
-       768
-      ]
-     ],
-     "detail": "The text 'x720y768' at (720,768) is drawn across the text 'x672y768' at (672,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 720,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       768
-      ],
-      [
-       768,
-       768
-      ]
-     ],
-     "detail": "The text 'x720y768' at (720,768) is drawn across the text 'x768y768' at (768,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 768,
      "y": 720
     },
@@ -61369,6 +60547,106 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(768,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 720,
+     "y": 800
+    },
+    "evidence": {
+     "coords": [
+      [
+       720,
+       800
+      ],
+      [
+       768,
+       768
+      ]
+     ],
+     "detail": "The text 'x720y800' at (720,800) is drawn across the text 'x768y768' at (768,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(720,800)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 800,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       720
+      ],
+      [
+       768,
+       624
+      ]
+     ],
+     "detail": "The text 'x800y720' at (800,720) is drawn across the text 'x768y624' at (768,624)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(800,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 800,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       720
+      ],
+      [
+       816,
+       672
+      ]
+     ],
+     "detail": "The text 'x800y720' at (800,720) is drawn across the text 'x816y672' at (816,672)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(800,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 800,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       720
+      ],
+      [
+       768,
+       672
+      ]
+     ],
+     "detail": "The text 'x800y720' at (800,720) is drawn across the text 'x768y672' at (768,672)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(800,720)"
    },
    {
     "at": {
@@ -61473,6 +60751,31 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
+     "x": 768,
+     "y": 816
+    },
+    "evidence": {
+     "coords": [
+      [
+       768,
+       816
+      ],
+      [
+       768,
+       768
+      ]
+     ],
+     "detail": "The text 'x768y816' at (768,816) is drawn across the text 'x768y768' at (768,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(768,816)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
      "x": 816,
      "y": 672
     },
@@ -61498,31 +60801,6 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 816,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       816,
-       768
-      ],
-      [
-       768,
-       768
-      ]
-     ],
-     "detail": "The text 'x816y768' at (816,768) is drawn across the text 'x768y768' at (768,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(816,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
      "x": 672,
      "y": 672
     },
@@ -61544,56 +60822,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(672,672)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 672,
-     "y": 768
-    },
-    "evidence": {
-     "coords": [
-      [
-       672,
-       768
-      ],
-      [
-       768,
-       768
-      ]
-     ],
-     "detail": "The text 'x672y768' at (672,768) is drawn across the text 'x768y768' at (768,768)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(672,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1072,
-     "y": 720
-    },
-    "evidence": {
-     "coords": [
-      [
-       1072,
-       720
-      ],
-      [
-       1168,
-       720
-      ]
-     ],
-     "detail": "The text 'x1072y720' at (1072,720) is drawn across the text 'x1168y720' at (1168,720)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1072,720)"
    },
    {
     "at": {
@@ -61699,26 +60927,26 @@
     "at": {
      "file": "orientation_nmos4.asc",
      "x": 1120,
-     "y": 672
+     "y": 768
     },
     "evidence": {
      "coords": [
       [
        1120,
-       672
+       768
       ],
       [
        1168,
-       672
+       720
       ]
      ],
-     "detail": "The text 'x1120y672' at (1120,672) is drawn across the text 'x1168y672' at (1168,672)",
+     "detail": "The text 'x1120y768' at (1120,768) is drawn across the text 'x1168y720' at (1168,720)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1120,672)"
+    "subject": "(1120,768)"
    },
    {
     "at": {
@@ -61833,11 +61061,86 @@
        720
       ],
       [
-       1200,
-       720
+       1120,
+       800
       ]
      ],
-     "detail": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1200y720' at (1200,720)",
+     "detail": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1120y800' at (1120,800)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1168,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1168,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1168,
+       720
+      ],
+      [
+       1168,
+       816
+      ]
+     ],
+     "detail": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1168y816' at (1168,816)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1168,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1168,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1168,
+       720
+      ],
+      [
+       1216,
+       768
+      ]
+     ],
+     "detail": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1216y768' at (1216,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1168,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1168,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1168,
+       720
+      ],
+      [
+       1168,
+       768
+      ]
+     ],
+     "detail": "The text 'x1168y720' at (1168,720) is drawn across the text 'x1168y768' at (1168,768)",
      "refs": []
     },
     "ok": false,
@@ -61899,31 +61202,6 @@
     "at": {
      "file": "orientation_nmos4.asc",
      "x": 1072,
-     "y": 624
-    },
-    "evidence": {
-     "coords": [
-      [
-       1072,
-       624
-      ],
-      [
-       1168,
-       624
-      ]
-     ],
-     "detail": "The text 'x1072y624' at (1072,624) is drawn across the text 'x1168y624' at (1168,624)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1072,624)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1072,
      "y": 816
     },
     "evidence": {
@@ -61949,31 +61227,6 @@
     "at": {
      "file": "orientation_nmos4.asc",
      "x": 1216,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1216,
-       672
-      ],
-      [
-       1168,
-       672
-      ]
-     ],
-     "detail": "The text 'x1216y672' at (1216,672) is drawn across the text 'x1168y672' at (1168,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1216,672)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1216,
      "y": 768
     },
     "evidence": {
@@ -61994,31 +61247,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(1216,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1072,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1072,
-       672
-      ],
-      [
-       1168,
-       672
-      ]
-     ],
-     "detail": "The text 'x1072y672' at (1072,672) is drawn across the text 'x1168y672' at (1168,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1072,672)"
    },
    {
     "at": {
@@ -62069,131 +61297,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(1472,720)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1472,
-     "y": 720
-    },
-    "evidence": {
-     "coords": [
-      [
-       1472,
-       720
-      ],
-      [
-       1440,
-       720
-      ]
-     ],
-     "detail": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1440y720' at (1440,720)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1472,720)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       672
-      ],
-      [
-       1424,
-       672
-      ]
-     ],
-     "detail": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1424y672' at (1424,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,672)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       672
-      ],
-      [
-       1616,
-       672
-      ]
-     ],
-     "detail": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1616y672' at (1616,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,672)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       672
-      ],
-      [
-       1472,
-       672
-      ]
-     ],
-     "detail": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1472y672' at (1472,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,672)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1520,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       672
-      ],
-      [
-       1568,
-       672
-      ]
-     ],
-     "detail": "The text 'x1520y672' at (1520,672) is drawn across the text 'x1568y672' at (1568,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,672)"
    },
    {
     "at": {
@@ -62323,27 +61426,102 @@
    {
     "at": {
      "file": "orientation_nmos4.asc",
-     "x": 1424,
-     "y": 672
+     "x": 1440,
+     "y": 720
     },
     "evidence": {
      "coords": [
       [
+       1440,
+       720
+      ],
+      [
        1424,
-       672
+       768
+      ]
+     ],
+     "detail": "The text 'x1440y720' at (1440,720) is drawn across the text 'x1424y768' at (1424,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1440,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1440,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1440,
+       720
+      ],
+      [
+       1472,
+       816
+      ]
+     ],
+     "detail": "The text 'x1440y720' at (1440,720) is drawn across the text 'x1472y816' at (1472,816)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1440,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1440,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1440,
+       720
+      ],
+      [
+       1472,
+       768
+      ]
+     ],
+     "detail": "The text 'x1440y720' at (1440,720) is drawn across the text 'x1472y768' at (1472,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1440,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1520,
+     "y": 640
+    },
+    "evidence": {
+     "coords": [
+      [
+       1520,
+       640
       ],
       [
        1472,
        672
       ]
      ],
-     "detail": "The text 'x1424y672' at (1424,672) is drawn across the text 'x1472y672' at (1472,672)",
+     "detail": "The text 'x1520y640' at (1520,640) is drawn across the text 'x1472y672' at (1472,672)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1424,672)"
+    "subject": "(1520,640)"
    },
    {
     "at": {
@@ -62388,6 +61566,31 @@
       ]
      ],
      "detail": "The text 'x1472y624' at (1472,624) is drawn across the text 'x1568y624' at (1568,624)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1472,624)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1472,
+     "y": 624
+    },
+    "evidence": {
+     "coords": [
+      [
+       1472,
+       624
+      ],
+      [
+       1472,
+       672
+      ]
+     ],
+     "detail": "The text 'x1472y624' at (1472,624) is drawn across the text 'x1472y672' at (1472,672)",
      "refs": []
     },
     "ok": false,
@@ -62469,31 +61672,6 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(1616,768)"
-   },
-   {
-    "at": {
-     "file": "orientation_nmos4.asc",
-     "x": 1472,
-     "y": 672
-    },
-    "evidence": {
-     "coords": [
-      [
-       1472,
-       672
-      ],
-      [
-       1568,
-       672
-      ]
-     ],
-     "detail": "The text 'x1472y672' at (1472,672) is drawn across the text 'x1568y672' at (1568,672)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1472,672)"
    },
    {
     "at": {
@@ -63277,22 +62455,42 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1520y256' at (1520,256)",
-     "other_text": "x1520y256",
+     "message": "QR90's text 'NPN' at (652,376) is drawn across the text 'x656y416' at (656,416)",
+     "other_text": "x656y416",
      "points": [
       {
-       "x": 1552,
-       "y": 264
+       "x": 652,
+       "y": 376
       },
       {
-       "x": 1520,
+       "x": 656,
+       "y": 416
+      }
+     ],
+     "ref": "QR90",
+     "text": "NPN",
+     "x": 652,
+     "y": 376
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QR180's text 'NPN' at (1064,252) is drawn across the text 'x1024y256' at (1024,256)",
+     "other_text": "x1024y256",
+     "points": [
+      {
+       "x": 1064,
+       "y": 252
+      },
+      {
+       "x": 1024,
        "y": 256
       }
      ],
-     "ref": "QR270",
-     "text": "QR270",
-     "x": 1552,
-     "y": 264
+     "ref": "QR180",
+     "text": "NPN",
+     "x": 1064,
+     "y": 252
     },
     {
      "across": "text",
@@ -63337,21 +62535,21 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1616y256' at (1616,256)",
-     "other_text": "x1616y256",
+     "message": "QR270's text 'NPN' at (1588,264) is drawn across the text 'x1584y224' at (1584,224)",
+     "other_text": "x1584y224",
      "points": [
       {
-       "x": 1552,
+       "x": 1588,
        "y": 264
       },
       {
-       "x": 1616,
-       "y": 256
+       "x": 1584,
+       "y": 224
       }
      ],
      "ref": "QR270",
-     "text": "QR270",
-     "x": 1552,
+     "text": "NPN",
+     "x": 1588,
      "y": 264
     },
     {
@@ -63377,22 +62575,42 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
-     "message": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1520y656' at (1520,656)",
-     "other_text": "x1520y656",
+     "message": "QM90's text 'NPN' at (788,776) is drawn across the text 'x784y816' at (784,816)",
+     "other_text": "x784y816",
      "points": [
       {
-       "x": 1488,
-       "y": 664
+       "x": 788,
+       "y": 776
       },
       {
-       "x": 1520,
+       "x": 784,
+       "y": 816
+      }
+     ],
+     "ref": "QM90",
+     "text": "NPN",
+     "x": 788,
+     "y": 776
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM180's text 'NPN' at (1176,652) is drawn across the text 'x1216y656' at (1216,656)",
+     "other_text": "x1216y656",
+     "points": [
+      {
+       "x": 1176,
+       "y": 652
+      },
+      {
+       "x": 1216,
        "y": 656
       }
      ],
-     "ref": "QM270",
-     "text": "QM270",
-     "x": 1488,
-     "y": 664
+     "ref": "QM180",
+     "text": "NPN",
+     "x": 1176,
+     "y": 652
     },
     {
      "across": "text",
@@ -63432,6 +62650,46 @@
      "ref": "QM270",
      "text": "QM270",
      "x": 1488,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM270's text 'NPN' at (1452,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "other_text": "x1520y672",
+     "points": [
+      {
+       "x": 1452,
+       "y": 664
+      },
+      {
+       "x": 1520,
+       "y": 672
+      }
+     ],
+     "ref": "QM270",
+     "text": "NPN",
+     "x": 1452,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM270's text 'NPN' at (1452,664) is drawn across the text 'x1456y624' at (1456,624)",
+     "other_text": "x1456y624",
+     "points": [
+      {
+       "x": 1452,
+       "y": 664
+      },
+      {
+       "x": 1456,
+       "y": 624
+      }
+     ],
+     "ref": "QM270",
+     "text": "NPN",
+     "x": 1452,
      "y": 664
     },
     {
@@ -63490,6 +62748,24 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x320y384' at (320,384) is drawn across the text 'x320y368' at (320,368)",
+     "other_text": "x320y368",
+     "points": [
+      {
+       "x": 320,
+       "y": 384
+      },
+      {
+       "x": 320,
+       "y": 368
+      }
+     ],
+     "text": "x320y384",
+     "x": 320,
+     "y": 384
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x320y384' at (320,384) is drawn across the text 'x224y384' at (224,384)",
      "other_text": "x224y384",
      "points": [
@@ -63544,6 +62820,42 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x384y320' at (384,320) is drawn across the text 'x384y224' at (384,224)",
+     "other_text": "x384y224",
+     "points": [
+      {
+       "x": 384,
+       "y": 320
+      },
+      {
+       "x": 384,
+       "y": 224
+      }
+     ],
+     "text": "x384y320",
+     "x": 384,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x384y320' at (384,320) is drawn across the text 'x416y256' at (416,256)",
+     "other_text": "x416y256",
+     "points": [
+      {
+       "x": 384,
+       "y": 320
+      },
+      {
+       "x": 416,
+       "y": 256
+      }
+     ],
+     "text": "x384y320",
+     "x": 384,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x272y320' at (272,320) is drawn across the text 'x368y320' at (368,320)",
      "other_text": "x368y320",
      "points": [
@@ -63562,6 +62874,24 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x320y368' at (320,368) is drawn across the text 'x224y384' at (224,384)",
+     "other_text": "x224y384",
+     "points": [
+      {
+       "x": 320,
+       "y": 368
+      },
+      {
+       "x": 224,
+       "y": 384
+      }
+     ],
+     "text": "x320y368",
+     "x": 320,
+     "y": 368
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x656y320' at (656,320) is drawn across the text 'x672y320' at (672,320)",
      "other_text": "x672y320",
      "points": [
@@ -63577,6 +62907,24 @@
      "text": "x656y320",
      "x": 656,
      "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x720y256' at (720,256) is drawn across the text 'x672y320' at (672,320)",
+     "other_text": "x672y320",
+     "points": [
+      {
+       "x": 720,
+       "y": 256
+      },
+      {
+       "x": 672,
+       "y": 320
+      }
+     ],
+     "text": "x720y256",
+     "x": 720,
+     "y": 256
     },
     {
      "kind": "sheet_text_overlap",
@@ -63616,42 +62964,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x720y384' at (720,384) is drawn across the text 'x624y384' at (624,384)",
-     "other_text": "x624y384",
-     "points": [
-      {
-       "x": 720,
-       "y": 384
-      },
-      {
-       "x": 624,
-       "y": 384
-      }
-     ],
-     "text": "x720y384",
-     "x": 720,
-     "y": 384
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y384' at (720,384) is drawn across the text 'x816y384' at (816,384)",
-     "other_text": "x816y384",
-     "points": [
-      {
-       "x": 720,
-       "y": 384
-      },
-      {
-       "x": 816,
-       "y": 384
-      }
-     ],
-     "text": "x720y384",
-     "x": 720,
-     "y": 384
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x784y320' at (784,320) is drawn across the text 'x768y320' at (768,320)",
      "other_text": "x768y320",
      "points": [
@@ -63670,16 +62982,16 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x672y320' at (672,320) is drawn across the text 'x768y320' at (768,320)",
-     "other_text": "x768y320",
+     "message": "The text 'x672y320' at (672,320) is drawn across the text 'x720y272' at (720,272)",
+     "other_text": "x720y272",
      "points": [
       {
        "x": 672,
        "y": 320
       },
       {
-       "x": 768,
-       "y": 320
+       "x": 720,
+       "y": 272
       }
      ],
      "text": "x672y320",
@@ -63688,16 +63000,52 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1072y320' at (1072,320)",
-     "other_text": "x1072y320",
+     "message": "The text 'x672y320' at (672,320) is drawn across the text 'x624y256' at (624,256)",
+     "other_text": "x624y256",
+     "points": [
+      {
+       "x": 672,
+       "y": 320
+      },
+      {
+       "x": 624,
+       "y": 256
+      }
+     ],
+     "text": "x672y320",
+     "x": 672,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x672y320' at (672,320) is drawn across the text 'x656y224' at (656,224)",
+     "other_text": "x656y224",
+     "points": [
+      {
+       "x": 672,
+       "y": 320
+      },
+      {
+       "x": 656,
+       "y": 224
+      }
+     ],
+     "text": "x672y320",
+     "x": 672,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1120y384' at (1120,384)",
+     "other_text": "x1120y384",
      "points": [
       {
        "x": 1056,
        "y": 320
       },
       {
-       "x": 1072,
-       "y": 320
+       "x": 1120,
+       "y": 384
       }
      ],
      "text": "x1056y320",
@@ -63706,16 +63054,52 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1168y320' at (1168,320)",
-     "other_text": "x1168y320",
+     "message": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1120y368' at (1120,368)",
+     "other_text": "x1120y368",
      "points": [
       {
        "x": 1056,
        "y": 320
       },
       {
-       "x": 1168,
+       "x": 1120,
+       "y": 368
+      }
+     ],
+     "text": "x1056y320",
+     "x": 1056,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1024y384' at (1024,384)",
+     "other_text": "x1024y384",
+     "points": [
+      {
+       "x": 1056,
        "y": 320
+      },
+      {
+       "x": 1024,
+       "y": 384
+      }
+     ],
+     "text": "x1056y320",
+     "x": 1056,
+     "y": 320
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1056y416' at (1056,416)",
+     "other_text": "x1056y416",
+     "points": [
+      {
+       "x": 1056,
+       "y": 320
+      },
+      {
+       "x": 1056,
+       "y": 416
       }
      ],
      "text": "x1056y320",
@@ -63868,57 +63252,39 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1456y320' at (1456,320) is drawn across the text 'x1568y320' at (1568,320)",
+     "message": "The text 'x1520y256' at (1520,256) is drawn across the text 'x1520y272' at (1520,272)",
+     "other_text": "x1520y272",
+     "points": [
+      {
+       "x": 1520,
+       "y": 256
+      },
+      {
+       "x": 1520,
+       "y": 272
+      }
+     ],
+     "text": "x1520y256",
+     "x": 1520,
+     "y": 256
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1520y384' at (1520,384) is drawn across the text 'x1568y320' at (1568,320)",
      "other_text": "x1568y320",
      "points": [
       {
-       "x": 1456,
-       "y": 320
+       "x": 1520,
+       "y": 384
       },
       {
        "x": 1568,
        "y": 320
       }
      ],
-     "text": "x1456y320",
-     "x": 1456,
-     "y": 320
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y256' at (1520,256) is drawn across the text 'x1424y256' at (1424,256)",
-     "other_text": "x1424y256",
-     "points": [
-      {
-       "x": 1520,
-       "y": 256
-      },
-      {
-       "x": 1424,
-       "y": 256
-      }
-     ],
-     "text": "x1520y256",
+     "text": "x1520y384",
      "x": 1520,
-     "y": 256
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y256' at (1520,256) is drawn across the text 'x1616y256' at (1616,256)",
-     "other_text": "x1616y256",
-     "points": [
-      {
-       "x": 1520,
-       "y": 256
-      },
-      {
-       "x": 1616,
-       "y": 256
-      }
-     ],
-     "text": "x1520y256",
-     "x": 1520,
-     "y": 256
+     "y": 384
     },
     {
      "kind": "sheet_text_overlap",
@@ -63976,38 +63342,56 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1584y320' at (1584,320) is drawn across the text 'x1568y320' at (1568,320)",
+     "message": "The text 'x1520y368' at (1520,368) is drawn across the text 'x1568y320' at (1568,320)",
      "other_text": "x1568y320",
      "points": [
       {
-       "x": 1584,
-       "y": 320
+       "x": 1520,
+       "y": 368
       },
       {
        "x": 1568,
        "y": 320
       }
      ],
-     "text": "x1584y320",
-     "x": 1584,
+     "text": "x1520y368",
+     "x": 1520,
+     "y": 368
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1568y320' at (1568,320) is drawn across the text 'x1584y416' at (1584,416)",
+     "other_text": "x1584y416",
+     "points": [
+      {
+       "x": 1568,
+       "y": 320
+      },
+      {
+       "x": 1584,
+       "y": 416
+      }
+     ],
+     "text": "x1568y320",
+     "x": 1568,
      "y": 320
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1472y320' at (1472,320) is drawn across the text 'x1568y320' at (1568,320)",
-     "other_text": "x1568y320",
+     "message": "The text 'x1568y320' at (1568,320) is drawn across the text 'x1616y384' at (1616,384)",
+     "other_text": "x1616y384",
      "points": [
-      {
-       "x": 1472,
-       "y": 320
-      },
       {
        "x": 1568,
        "y": 320
+      },
+      {
+       "x": 1616,
+       "y": 384
       }
      ],
-     "text": "x1472y320",
-     "x": 1472,
+     "text": "x1568y320",
+     "x": 1568,
      "y": 320
     },
     {
@@ -64022,6 +63406,42 @@
       {
        "x": 272,
        "y": 720
+      }
+     ],
+     "text": "x256y720",
+     "x": 256,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x256y720' at (256,720) is drawn across the text 'x224y656' at (224,656)",
+     "other_text": "x224y656",
+     "points": [
+      {
+       "x": 256,
+       "y": 720
+      },
+      {
+       "x": 224,
+       "y": 656
+      }
+     ],
+     "text": "x256y720",
+     "x": 256,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x256y720' at (256,720) is drawn across the text 'x256y624' at (256,624)",
+     "other_text": "x256y624",
+     "points": [
+      {
+       "x": 256,
+       "y": 720
+      },
+      {
+       "x": 256,
+       "y": 624
       }
      ],
      "text": "x256y720",
@@ -64063,6 +63483,24 @@
      "text": "x320y656",
      "x": 320,
      "y": 656
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x320y784' at (320,784) is drawn across the text 'x320y768' at (320,768)",
+     "other_text": "x320y768",
+     "points": [
+      {
+       "x": 320,
+       "y": 784
+      },
+      {
+       "x": 320,
+       "y": 768
+      }
+     ],
+     "text": "x320y784",
+     "x": 320,
+     "y": 784
     },
     {
      "kind": "sheet_text_overlap",
@@ -64138,6 +63576,24 @@
     },
     {
      "kind": "sheet_text_overlap",
+     "message": "The text 'x320y768' at (320,768) is drawn across the text 'x416y784' at (416,784)",
+     "other_text": "x416y784",
+     "points": [
+      {
+       "x": 320,
+       "y": 768
+      },
+      {
+       "x": 416,
+       "y": 784
+      }
+     ],
+     "text": "x320y768",
+     "x": 320,
+     "y": 768
+    },
+    {
+     "kind": "sheet_text_overlap",
      "message": "The text 'x656y720' at (656,720) is drawn across the text 'x672y720' at (672,720)",
      "other_text": "x672y720",
      "points": [
@@ -64153,6 +63609,24 @@
      "text": "x656y720",
      "x": 656,
      "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x720y656' at (720,656) is drawn across the text 'x768y720' at (768,720)",
+     "other_text": "x768y720",
+     "points": [
+      {
+       "x": 720,
+       "y": 656
+      },
+      {
+       "x": 768,
+       "y": 720
+      }
+     ],
+     "text": "x720y656",
+     "x": 720,
+     "y": 656
     },
     {
      "kind": "sheet_text_overlap",
@@ -64192,42 +63666,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x720y784' at (720,784) is drawn across the text 'x624y784' at (624,784)",
-     "other_text": "x624y784",
-     "points": [
-      {
-       "x": 720,
-       "y": 784
-      },
-      {
-       "x": 624,
-       "y": 784
-      }
-     ],
-     "text": "x720y784",
-     "x": 720,
-     "y": 784
-    },
-    {
-     "kind": "sheet_text_overlap",
-     "message": "The text 'x720y784' at (720,784) is drawn across the text 'x816y784' at (816,784)",
-     "other_text": "x816y784",
-     "points": [
-      {
-       "x": 720,
-       "y": 784
-      },
-      {
-       "x": 816,
-       "y": 784
-      }
-     ],
-     "text": "x720y784",
-     "x": 720,
-     "y": 784
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x784y720' at (784,720) is drawn across the text 'x768y720' at (768,720)",
      "other_text": "x768y720",
      "points": [
@@ -64246,20 +63684,56 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x672y720' at (672,720) is drawn across the text 'x768y720' at (768,720)",
+     "message": "The text 'x720y672' at (720,672) is drawn across the text 'x768y720' at (768,720)",
      "other_text": "x768y720",
      "points": [
       {
-       "x": 672,
-       "y": 720
+       "x": 720,
+       "y": 672
       },
       {
        "x": 768,
        "y": 720
       }
      ],
-     "text": "x672y720",
-     "x": 672,
+     "text": "x720y672",
+     "x": 720,
+     "y": 672
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x768y720' at (768,720) is drawn across the text 'x784y624' at (784,624)",
+     "other_text": "x784y624",
+     "points": [
+      {
+       "x": 768,
+       "y": 720
+      },
+      {
+       "x": 784,
+       "y": 624
+      }
+     ],
+     "text": "x768y720",
+     "x": 768,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x768y720' at (768,720) is drawn across the text 'x816y656' at (816,656)",
+     "other_text": "x816y656",
+     "points": [
+      {
+       "x": 768,
+       "y": 720
+      },
+      {
+       "x": 816,
+       "y": 656
+      }
+     ],
+     "text": "x768y720",
+     "x": 768,
      "y": 720
     },
     {
@@ -64372,16 +63846,16 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1072y720' at (1072,720)",
-     "other_text": "x1072y720",
+     "message": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1184y816' at (1184,816)",
+     "other_text": "x1184y816",
      "points": [
       {
        "x": 1184,
        "y": 720
       },
       {
-       "x": 1072,
-       "y": 720
+       "x": 1184,
+       "y": 816
       }
      ],
      "text": "x1184y720",
@@ -64390,16 +63864,16 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1168y720' at (1168,720)",
-     "other_text": "x1168y720",
+     "message": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1216y784' at (1216,784)",
+     "other_text": "x1216y784",
      "points": [
       {
        "x": 1184,
        "y": 720
       },
       {
-       "x": 1168,
-       "y": 720
+       "x": 1216,
+       "y": 784
       }
      ],
      "text": "x1184y720",
@@ -64426,24 +63900,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1456y720' at (1456,720) is drawn across the text 'x1472y720' at (1472,720)",
-     "other_text": "x1472y720",
-     "points": [
-      {
-       "x": 1456,
-       "y": 720
-      },
-      {
-       "x": 1472,
-       "y": 720
-      }
-     ],
-     "text": "x1456y720",
-     "x": 1456,
-     "y": 720
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1456y720' at (1456,720) is drawn across the text 'x1568y720' at (1568,720)",
      "other_text": "x1568y720",
      "points": [
@@ -64462,16 +63918,16 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y656' at (1520,656) is drawn across the text 'x1424y656' at (1424,656)",
-     "other_text": "x1424y656",
+     "message": "The text 'x1520y656' at (1520,656) is drawn across the text 'x1520y672' at (1520,672)",
+     "other_text": "x1520y672",
      "points": [
       {
        "x": 1520,
        "y": 656
       },
       {
-       "x": 1424,
-       "y": 656
+       "x": 1520,
+       "y": 672
       }
      ],
      "text": "x1520y656",
@@ -64480,21 +63936,21 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1520y656' at (1520,656) is drawn across the text 'x1616y656' at (1616,656)",
-     "other_text": "x1616y656",
+     "message": "The text 'x1520y784' at (1520,784) is drawn across the text 'x1472y720' at (1472,720)",
+     "other_text": "x1472y720",
      "points": [
       {
        "x": 1520,
-       "y": 656
+       "y": 784
       },
       {
-       "x": 1616,
-       "y": 656
+       "x": 1472,
+       "y": 720
       }
      ],
-     "text": "x1520y656",
+     "text": "x1520y784",
      "x": 1520,
-     "y": 656
+     "y": 784
     },
     {
      "kind": "sheet_text_overlap",
@@ -64534,24 +63990,6 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1584y720' at (1584,720) is drawn across the text 'x1472y720' at (1472,720)",
-     "other_text": "x1472y720",
-     "points": [
-      {
-       "x": 1584,
-       "y": 720
-      },
-      {
-       "x": 1472,
-       "y": 720
-      }
-     ],
-     "text": "x1584y720",
-     "x": 1584,
-     "y": 720
-    },
-    {
-     "kind": "sheet_text_overlap",
      "message": "The text 'x1584y720' at (1584,720) is drawn across the text 'x1568y720' at (1568,720)",
      "other_text": "x1568y720",
      "points": [
@@ -64570,16 +64008,52 @@
     },
     {
      "kind": "sheet_text_overlap",
-     "message": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1568y720' at (1568,720)",
-     "other_text": "x1568y720",
+     "message": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1520y768' at (1520,768)",
+     "other_text": "x1520y768",
      "points": [
       {
        "x": 1472,
        "y": 720
       },
       {
-       "x": 1568,
+       "x": 1520,
+       "y": 768
+      }
+     ],
+     "text": "x1472y720",
+     "x": 1472,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1424y784' at (1424,784)",
+     "other_text": "x1424y784",
+     "points": [
+      {
+       "x": 1472,
        "y": 720
+      },
+      {
+       "x": 1424,
+       "y": 784
+      }
+     ],
+     "text": "x1472y720",
+     "x": 1472,
+     "y": 720
+    },
+    {
+     "kind": "sheet_text_overlap",
+     "message": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1456y816' at (1456,816)",
+     "other_text": "x1456y816",
+     "points": [
+      {
+       "x": 1472,
+       "y": 720
+      },
+      {
+       "x": 1456,
+       "y": 816
       }
      ],
      "text": "x1472y720",
@@ -66809,29 +66283,56 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 1552,
-     "y": 264
+     "x": 652,
+     "y": 376
     },
     "evidence": {
      "coords": [
       [
-       1552,
-       264
+       652,
+       376
       ],
       [
-       1520,
-       256
+       656,
+       416
       ]
      ],
-     "detail": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1520y256' at (1520,256)",
+     "detail": "QR90's text 'NPN' at (652,376) is drawn across the text 'x656y416' at (656,416)",
      "refs": [
-      "QR270"
+      "QR90"
      ]
     },
     "ok": false,
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
-    "subject": "QR270"
+    "subject": "QR90"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1064,
+     "y": 252
+    },
+    "evidence": {
+     "coords": [
+      [
+       1064,
+       252
+      ],
+      [
+       1024,
+       256
+      ]
+     ],
+     "detail": "QR180's text 'NPN' at (1064,252) is drawn across the text 'x1024y256' at (1024,256)",
+     "refs": [
+      "QR180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QR180"
    },
    {
     "at": {
@@ -66890,21 +66391,21 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 1552,
+     "x": 1588,
      "y": 264
     },
     "evidence": {
      "coords": [
       [
-       1552,
+       1588,
        264
       ],
       [
-       1616,
-       256
+       1584,
+       224
       ]
      ],
-     "detail": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1616y256' at (1616,256)",
+     "detail": "QR270's text 'NPN' at (1588,264) is drawn across the text 'x1584y224' at (1584,224)",
      "refs": [
       "QR270"
      ]
@@ -66944,29 +66445,56 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 1488,
-     "y": 664
+     "x": 788,
+     "y": 776
     },
     "evidence": {
      "coords": [
       [
-       1488,
-       664
+       788,
+       776
       ],
       [
-       1520,
-       656
+       784,
+       816
       ]
      ],
-     "detail": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1520y656' at (1520,656)",
+     "detail": "QM90's text 'NPN' at (788,776) is drawn across the text 'x784y816' at (784,816)",
      "refs": [
-      "QM270"
+      "QM90"
      ]
     },
     "ok": false,
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
-    "subject": "QM270"
+    "subject": "QM90"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1176,
+     "y": 652
+    },
+    "evidence": {
+     "coords": [
+      [
+       1176,
+       652
+      ],
+      [
+       1216,
+       656
+      ]
+     ],
+     "detail": "QM180's text 'NPN' at (1176,652) is drawn across the text 'x1216y656' at (1216,656)",
+     "refs": [
+      "QM180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM180"
    },
    {
     "at": {
@@ -67013,6 +66541,60 @@
       ]
      ],
      "detail": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1456y624' at (1456,624)",
+     "refs": [
+      "QM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1452,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1452,
+       664
+      ],
+      [
+       1520,
+       672
+      ]
+     ],
+     "detail": "QM270's text 'NPN' at (1452,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "refs": [
+      "QM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1452,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1452,
+       664
+      ],
+      [
+       1456,
+       624
+      ]
+     ],
+     "detail": "QM270's text 'NPN' at (1452,664) is drawn across the text 'x1456y624' at (1456,624)",
      "refs": [
       "QM270"
      ]
@@ -67110,6 +66692,31 @@
        384
       ],
       [
+       320,
+       368
+      ]
+     ],
+     "detail": "The text 'x320y384' at (320,384) is drawn across the text 'x320y368' at (320,368)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,384)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 320,
+     "y": 384
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       384
+      ],
+      [
        224,
        384
       ]
@@ -67175,6 +66782,56 @@
    {
     "at": {
      "file": "orientation_npn.asc",
+     "x": 384,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       384,
+       320
+      ],
+      [
+       384,
+       224
+      ]
+     ],
+     "detail": "The text 'x384y320' at (384,320) is drawn across the text 'x384y224' at (384,224)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(384,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 384,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       384,
+       320
+      ],
+      [
+       416,
+       256
+      ]
+     ],
+     "detail": "The text 'x384y320' at (384,320) is drawn across the text 'x416y256' at (416,256)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(384,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
      "x": 272,
      "y": 320
     },
@@ -67200,6 +66857,31 @@
    {
     "at": {
      "file": "orientation_npn.asc",
+     "x": 320,
+     "y": 368
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       368
+      ],
+      [
+       224,
+       384
+      ]
+     ],
+     "detail": "The text 'x320y368' at (320,368) is drawn across the text 'x224y384' at (224,384)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,368)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
      "x": 656,
      "y": 320
     },
@@ -67221,6 +66903,31 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(656,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 720,
+     "y": 256
+    },
+    "evidence": {
+     "coords": [
+      [
+       720,
+       256
+      ],
+      [
+       672,
+       320
+      ]
+     ],
+     "detail": "The text 'x720y256' at (720,256) is drawn across the text 'x672y320' at (672,320)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(720,256)"
    },
    {
     "at": {
@@ -67275,56 +66982,6 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 720,
-     "y": 384
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       384
-      ],
-      [
-       624,
-       384
-      ]
-     ],
-     "detail": "The text 'x720y384' at (720,384) is drawn across the text 'x624y384' at (624,384)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,384)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
-     "x": 720,
-     "y": 384
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       384
-      ],
-      [
-       816,
-       384
-      ]
-     ],
-     "detail": "The text 'x720y384' at (720,384) is drawn across the text 'x816y384' at (816,384)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,384)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
      "x": 784,
      "y": 320
     },
@@ -67360,11 +67017,61 @@
        320
       ],
       [
-       768,
-       320
+       720,
+       272
       ]
      ],
-     "detail": "The text 'x672y320' at (672,320) is drawn across the text 'x768y320' at (768,320)",
+     "detail": "The text 'x672y320' at (672,320) is drawn across the text 'x720y272' at (720,272)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(672,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 672,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       672,
+       320
+      ],
+      [
+       624,
+       256
+      ]
+     ],
+     "detail": "The text 'x672y320' at (672,320) is drawn across the text 'x624y256' at (624,256)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(672,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 672,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       672,
+       320
+      ],
+      [
+       656,
+       224
+      ]
+     ],
+     "detail": "The text 'x672y320' at (672,320) is drawn across the text 'x656y224' at (656,224)",
      "refs": []
     },
     "ok": false,
@@ -67385,11 +67092,11 @@
        320
       ],
       [
-       1072,
-       320
+       1120,
+       384
       ]
      ],
-     "detail": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1072y320' at (1072,320)",
+     "detail": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1120y384' at (1120,384)",
      "refs": []
     },
     "ok": false,
@@ -67410,11 +67117,61 @@
        320
       ],
       [
-       1168,
-       320
+       1120,
+       368
       ]
      ],
-     "detail": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1168y320' at (1168,320)",
+     "detail": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1120y368' at (1120,368)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1056,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1056,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1056,
+       320
+      ],
+      [
+       1024,
+       384
+      ]
+     ],
+     "detail": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1024y384' at (1024,384)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1056,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1056,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1056,
+       320
+      ],
+      [
+       1056,
+       416
+      ]
+     ],
+     "detail": "The text 'x1056y320' at (1056,320) is drawn across the text 'x1056y416' at (1056,416)",
      "refs": []
     },
     "ok": false,
@@ -67625,77 +67382,52 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 1456,
-     "y": 320
+     "x": 1520,
+     "y": 256
     },
     "evidence": {
      "coords": [
       [
-       1456,
-       320
+       1520,
+       256
+      ],
+      [
+       1520,
+       272
+      ]
+     ],
+     "detail": "The text 'x1520y256' at (1520,256) is drawn across the text 'x1520y272' at (1520,272)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1520,256)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1520,
+     "y": 384
+    },
+    "evidence": {
+     "coords": [
+      [
+       1520,
+       384
       ],
       [
        1568,
        320
       ]
      ],
-     "detail": "The text 'x1456y320' at (1456,320) is drawn across the text 'x1568y320' at (1568,320)",
+     "detail": "The text 'x1520y384' at (1520,384) is drawn across the text 'x1568y320' at (1568,320)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1456,320)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
-     "x": 1520,
-     "y": 256
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       256
-      ],
-      [
-       1424,
-       256
-      ]
-     ],
-     "detail": "The text 'x1520y256' at (1520,256) is drawn across the text 'x1424y256' at (1424,256)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,256)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
-     "x": 1520,
-     "y": 256
-    },
-    "evidence": {
-     "coords": [
-      [
-       1520,
-       256
-      ],
-      [
-       1616,
-       256
-      ]
-     ],
-     "detail": "The text 'x1520y256' at (1520,256) is drawn across the text 'x1616y256' at (1616,256)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1520,256)"
+    "subject": "(1520,384)"
    },
    {
     "at": {
@@ -67775,52 +67507,77 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 1584,
-     "y": 320
+     "x": 1520,
+     "y": 368
     },
     "evidence": {
      "coords": [
       [
-       1584,
-       320
+       1520,
+       368
       ],
       [
        1568,
        320
       ]
      ],
-     "detail": "The text 'x1584y320' at (1584,320) is drawn across the text 'x1568y320' at (1568,320)",
+     "detail": "The text 'x1520y368' at (1520,368) is drawn across the text 'x1568y320' at (1568,320)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1584,320)"
+    "subject": "(1520,368)"
    },
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 1472,
+     "x": 1568,
      "y": 320
     },
     "evidence": {
      "coords": [
       [
-       1472,
+       1568,
        320
       ],
       [
-       1568,
-       320
+       1584,
+       416
       ]
      ],
-     "detail": "The text 'x1472y320' at (1472,320) is drawn across the text 'x1568y320' at (1568,320)",
+     "detail": "The text 'x1568y320' at (1568,320) is drawn across the text 'x1584y416' at (1584,416)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1472,320)"
+    "subject": "(1568,320)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1568,
+     "y": 320
+    },
+    "evidence": {
+     "coords": [
+      [
+       1568,
+       320
+      ],
+      [
+       1616,
+       384
+      ]
+     ],
+     "detail": "The text 'x1568y320' at (1568,320) is drawn across the text 'x1616y384' at (1616,384)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1568,320)"
    },
    {
     "at": {
@@ -67840,6 +67597,56 @@
       ]
      ],
      "detail": "The text 'x256y720' at (256,720) is drawn across the text 'x272y720' at (272,720)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(256,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 256,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       720
+      ],
+      [
+       224,
+       656
+      ]
+     ],
+     "detail": "The text 'x256y720' at (256,720) is drawn across the text 'x224y656' at (224,656)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(256,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 256,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       720
+      ],
+      [
+       256,
+       624
+      ]
+     ],
+     "detail": "The text 'x256y720' at (256,720) is drawn across the text 'x256y624' at (256,624)",
      "refs": []
     },
     "ok": false,
@@ -67896,6 +67703,31 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(320,656)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 320,
+     "y": 784
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       784
+      ],
+      [
+       320,
+       768
+      ]
+     ],
+     "detail": "The text 'x320y784' at (320,784) is drawn across the text 'x320y768' at (320,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,784)"
    },
    {
     "at": {
@@ -68000,6 +67832,31 @@
    {
     "at": {
      "file": "orientation_npn.asc",
+     "x": 320,
+     "y": 768
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       768
+      ],
+      [
+       416,
+       784
+      ]
+     ],
+     "detail": "The text 'x320y768' at (320,768) is drawn across the text 'x416y784' at (416,784)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(320,768)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
      "x": 656,
      "y": 720
     },
@@ -68021,6 +67878,31 @@
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
     "subject": "(656,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 720,
+     "y": 656
+    },
+    "evidence": {
+     "coords": [
+      [
+       720,
+       656
+      ],
+      [
+       768,
+       720
+      ]
+     ],
+     "detail": "The text 'x720y656' at (720,656) is drawn across the text 'x768y720' at (768,720)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(720,656)"
    },
    {
     "at": {
@@ -68075,56 +67957,6 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 720,
-     "y": 784
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       784
-      ],
-      [
-       624,
-       784
-      ]
-     ],
-     "detail": "The text 'x720y784' at (720,784) is drawn across the text 'x624y784' at (624,784)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,784)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
-     "x": 720,
-     "y": 784
-    },
-    "evidence": {
-     "coords": [
-      [
-       720,
-       784
-      ],
-      [
-       816,
-       784
-      ]
-     ],
-     "detail": "The text 'x720y784' at (720,784) is drawn across the text 'x816y784' at (816,784)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(720,784)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
      "x": 784,
      "y": 720
     },
@@ -68150,27 +67982,77 @@
    {
     "at": {
      "file": "orientation_npn.asc",
-     "x": 672,
-     "y": 720
+     "x": 720,
+     "y": 672
     },
     "evidence": {
      "coords": [
       [
-       672,
-       720
+       720,
+       672
       ],
       [
        768,
        720
       ]
      ],
-     "detail": "The text 'x672y720' at (672,720) is drawn across the text 'x768y720' at (768,720)",
+     "detail": "The text 'x720y672' at (720,672) is drawn across the text 'x768y720' at (768,720)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(672,720)"
+    "subject": "(720,672)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 768,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       768,
+       720
+      ],
+      [
+       784,
+       624
+      ]
+     ],
+     "detail": "The text 'x768y720' at (768,720) is drawn across the text 'x784y624' at (784,624)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(768,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 768,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       768,
+       720
+      ],
+      [
+       816,
+       656
+      ]
+     ],
+     "detail": "The text 'x768y720' at (768,720) is drawn across the text 'x816y656' at (816,656)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(768,720)"
    },
    {
     "at": {
@@ -68335,11 +68217,11 @@
        720
       ],
       [
-       1072,
-       720
+       1184,
+       816
       ]
      ],
-     "detail": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1072y720' at (1072,720)",
+     "detail": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1184y816' at (1184,816)",
      "refs": []
     },
     "ok": false,
@@ -68360,11 +68242,11 @@
        720
       ],
       [
-       1168,
-       720
+       1216,
+       784
       ]
      ],
-     "detail": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1168y720' at (1168,720)",
+     "detail": "The text 'x1184y720' at (1184,720) is drawn across the text 'x1216y784' at (1216,784)",
      "refs": []
     },
     "ok": false,
@@ -68410,31 +68292,6 @@
        720
       ],
       [
-       1472,
-       720
-      ]
-     ],
-     "detail": "The text 'x1456y720' at (1456,720) is drawn across the text 'x1472y720' at (1472,720)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1456,720)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
-     "x": 1456,
-     "y": 720
-    },
-    "evidence": {
-     "coords": [
-      [
-       1456,
-       720
-      ],
-      [
        1568,
        720
       ]
@@ -68460,11 +68317,11 @@
        656
       ],
       [
-       1424,
-       656
+       1520,
+       672
       ]
      ],
-     "detail": "The text 'x1520y656' at (1520,656) is drawn across the text 'x1424y656' at (1424,656)",
+     "detail": "The text 'x1520y656' at (1520,656) is drawn across the text 'x1520y672' at (1520,672)",
      "refs": []
     },
     "ok": false,
@@ -68476,26 +68333,26 @@
     "at": {
      "file": "orientation_npn.asc",
      "x": 1520,
-     "y": 656
+     "y": 784
     },
     "evidence": {
      "coords": [
       [
        1520,
-       656
+       784
       ],
       [
-       1616,
-       656
+       1472,
+       720
       ]
      ],
-     "detail": "The text 'x1520y656' at (1520,656) is drawn across the text 'x1616y656' at (1616,656)",
+     "detail": "The text 'x1520y784' at (1520,784) is drawn across the text 'x1472y720' at (1472,720)",
      "refs": []
     },
     "ok": false,
     "rule_id": "sheet_text_overlap",
     "severity": "observation",
-    "subject": "(1520,656)"
+    "subject": "(1520,784)"
    },
    {
     "at": {
@@ -68560,31 +68417,6 @@
        720
       ],
       [
-       1472,
-       720
-      ]
-     ],
-     "detail": "The text 'x1584y720' at (1584,720) is drawn across the text 'x1472y720' at (1472,720)",
-     "refs": []
-    },
-    "ok": false,
-    "rule_id": "sheet_text_overlap",
-    "severity": "observation",
-    "subject": "(1584,720)"
-   },
-   {
-    "at": {
-     "file": "orientation_npn.asc",
-     "x": 1584,
-     "y": 720
-    },
-    "evidence": {
-     "coords": [
-      [
-       1584,
-       720
-      ],
-      [
        1568,
        720
       ]
@@ -68610,11 +68442,61 @@
        720
       ],
       [
-       1568,
-       720
+       1520,
+       768
       ]
      ],
-     "detail": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1568y720' at (1568,720)",
+     "detail": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1520y768' at (1520,768)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1472,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1472,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1472,
+       720
+      ],
+      [
+       1424,
+       784
+      ]
+     ],
+     "detail": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1424y784' at (1424,784)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "sheet_text_overlap",
+    "severity": "observation",
+    "subject": "(1472,720)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1472,
+     "y": 720
+    },
+    "evidence": {
+     "coords": [
+      [
+       1472,
+       720
+      ],
+      [
+       1456,
+       816
+      ]
+     ],
+     "detail": "The text 'x1472y720' at (1472,720) is drawn across the text 'x1456y816' at (1456,816)",
      "refs": []
     },
     "ok": false,
@@ -69511,6 +69393,66 @@
     {
      "across": "text",
      "kind": "attribute_text_overlap",
+     "message": "RR180's text 'res' at (1088,288) is drawn across the text 'x1104y304' at (1104,304)",
+     "other_text": "x1104y304",
+     "points": [
+      {
+       "x": 1088,
+       "y": 288
+      },
+      {
+       "x": 1104,
+       "y": 304
+      }
+     ],
+     "ref": "RR180",
+     "text": "res",
+     "x": 1088,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR180's text 'res' at (1088,288) is drawn across the text 'x1136y304' at (1136,304)",
+     "other_text": "x1136y304",
+     "points": [
+      {
+       "x": 1088,
+       "y": 288
+      },
+      {
+       "x": 1136,
+       "y": 304
+      }
+     ],
+     "ref": "RR180",
+     "text": "res",
+     "x": 1088,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR180's text 'res' at (1088,288) is drawn across the text 'x1024y304' at (1024,304)",
+     "other_text": "x1024y304",
+     "points": [
+      {
+       "x": 1088,
+       "y": 288
+      },
+      {
+       "x": 1024,
+       "y": 304
+      }
+     ],
+     "ref": "RR180",
+     "text": "res",
+     "x": 1088,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
      "message": "RR270's text 'RR270' at (1488,288) is drawn across the text 'x1504y224' at (1504,224)",
      "other_text": "x1504y224",
      "points": [
@@ -69627,6 +69569,66 @@
      "text": "RM90",
      "x": 688,
      "y": 752
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM180's text 'res' at (1152,688) is drawn across the text 'x1104y704' at (1104,704)",
+     "other_text": "x1104y704",
+     "points": [
+      {
+       "x": 1152,
+       "y": 688
+      },
+      {
+       "x": 1104,
+       "y": 704
+      }
+     ],
+     "ref": "RM180",
+     "text": "res",
+     "x": 1152,
+     "y": 688
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM180's text 'res' at (1152,688) is drawn across the text 'x1136y704' at (1136,704)",
+     "other_text": "x1136y704",
+     "points": [
+      {
+       "x": 1152,
+       "y": 688
+      },
+      {
+       "x": 1136,
+       "y": 704
+      }
+     ],
+     "ref": "RM180",
+     "text": "res",
+     "x": 1152,
+     "y": 688
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM180's text 'res' at (1152,688) is drawn across the text 'x1216y704' at (1216,704)",
+     "other_text": "x1216y704",
+     "points": [
+      {
+       "x": 1152,
+       "y": 688
+      },
+      {
+       "x": 1216,
+       "y": 704
+      }
+     ],
+     "ref": "RM180",
+     "text": "res",
+     "x": 1152,
+     "y": 688
     },
     {
      "across": "text",
@@ -73612,6 +73614,87 @@
    {
     "at": {
      "file": "orientation_res.asc",
+     "x": 1088,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       1088,
+       288
+      ],
+      [
+       1104,
+       304
+      ]
+     ],
+     "detail": "RR180's text 'res' at (1088,288) is drawn across the text 'x1104y304' at (1104,304)",
+     "refs": [
+      "RR180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR180"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1088,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       1088,
+       288
+      ],
+      [
+       1136,
+       304
+      ]
+     ],
+     "detail": "RR180's text 'res' at (1088,288) is drawn across the text 'x1136y304' at (1136,304)",
+     "refs": [
+      "RR180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR180"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1088,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       1088,
+       288
+      ],
+      [
+       1024,
+       304
+      ]
+     ],
+     "detail": "RR180's text 'res' at (1088,288) is drawn across the text 'x1024y304' at (1024,304)",
+     "refs": [
+      "RR180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR180"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
      "x": 1488,
      "y": 288
     },
@@ -73770,6 +73853,87 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "RM90"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1152,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       1152,
+       688
+      ],
+      [
+       1104,
+       704
+      ]
+     ],
+     "detail": "RM180's text 'res' at (1152,688) is drawn across the text 'x1104y704' at (1104,704)",
+     "refs": [
+      "RM180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM180"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1152,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       1152,
+       688
+      ],
+      [
+       1136,
+       704
+      ]
+     ],
+     "detail": "RM180's text 'res' at (1152,688) is drawn across the text 'x1136y704' at (1136,704)",
+     "refs": [
+      "RM180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM180"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1152,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       1152,
+       688
+      ],
+      [
+       1216,
+       704
+      ]
+     ],
+     "detail": "RM180's text 'res' at (1152,688) is drawn across the text 'x1216y704' at (1216,704)",
+     "refs": [
+      "RM180"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM180"
    },
    {
     "at": {
@@ -79930,7 +80094,54 @@
  "fixtures/nmos4_mirrored_quarter_turns.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "across": "wire",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS' at (216,120) is drawn across wire (240,144)->(192,144)",
+     "points": [
+      {
+       "x": 216,
+       "y": 120
+      },
+      {
+       "x": 240,
+       "y": 144
+      },
+      {
+       "x": 192,
+       "y": 144
+      }
+     ],
+     "ref": "M1",
+     "text": "NMOS",
+     "x": 216,
+     "y": 120
+    },
+    {
+     "across": "wire",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS' at (456,56) is drawn across wire (480,32)->(432,32)",
+     "points": [
+      {
+       "x": 456,
+       "y": 56
+      },
+      {
+       "x": 480,
+       "y": 32
+      },
+      {
+       "x": 432,
+       "y": 32
+      }
+     ],
+     "ref": "M2",
+     "text": "NMOS",
+     "x": 456,
+     "y": 56
+    }
+   ],
    "wiring": {
     "pins_label_only": 0,
     "pins_total": 8,
@@ -79938,7 +80149,70 @@
     "wire_segments": 10
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "nmos4_mirrored_quarter_turns.asc",
+     "x": 216,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       216,
+       120
+      ],
+      [
+       240,
+       144
+      ],
+      [
+       192,
+       144
+      ]
+     ],
+     "detail": "M1's text 'NMOS' at (216,120) is drawn across wire (240,144)->(192,144)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "nmos4_mirrored_quarter_turns.asc",
+     "x": 456,
+     "y": 56
+    },
+    "evidence": {
+     "coords": [
+      [
+       456,
+       56
+      ],
+      [
+       480,
+       32
+      ],
+      [
+       432,
+       32
+      ]
+     ],
+     "detail": "M2's text 'NMOS' at (456,56) is drawn across wire (480,32)->(432,32)",
+     "refs": [
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2"
+   }
+  ]
  },
  "fixtures/t_junctions/crossing_wires.asc": {
   "dropped_wire": [],

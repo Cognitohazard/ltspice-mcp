@@ -4606,7 +4606,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 304,
@@ -4620,7 +4620,7 @@
        "y": 400
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 304,
@@ -4652,7 +4652,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 400,
@@ -4666,7 +4666,7 @@
        "y": 400
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 400,
@@ -6048,7 +6048,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 1008,
@@ -6062,7 +6062,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 1008,
@@ -6094,7 +6094,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 1168,
@@ -6108,7 +6108,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 1168,
@@ -7178,7 +7178,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 208,
@@ -7192,7 +7192,7 @@
        "y": 400
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 208,
@@ -7224,7 +7224,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 400,
@@ -7238,7 +7238,7 @@
        "y": 400
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 400,
@@ -8199,7 +8199,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 528,
@@ -8213,7 +8213,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 528,
@@ -8245,7 +8245,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 688,
@@ -8259,7 +8259,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 688,
@@ -63802,7 +63802,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 320,
@@ -63816,7 +63816,7 @@
        "y": 368
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 320,
@@ -63848,7 +63848,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 448,
@@ -63862,7 +63862,7 @@
        "y": 368
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 448,
@@ -63894,7 +63894,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 320,
@@ -63908,7 +63908,7 @@
        "y": 112
       },
       {
-       "dir": "left",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 320,
@@ -63940,7 +63940,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 448,
@@ -63954,7 +63954,7 @@
        "y": 112
       },
       {
-       "dir": "right",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 448,
@@ -63986,7 +63986,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 176,
@@ -64000,7 +64000,7 @@
        "y": 528
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 176,
@@ -64032,7 +64032,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 384,
@@ -64046,7 +64046,7 @@
        "y": 528
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 384,
@@ -64078,7 +64078,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 640,
@@ -64092,7 +64092,7 @@
        "y": 112
       },
       {
-       "dir": "right",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 640,
@@ -64124,7 +64124,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 640,
@@ -64138,7 +64138,7 @@
        "y": 528
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 640,
@@ -68208,7 +68208,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 1168,
@@ -68222,7 +68222,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 1168,
@@ -68254,7 +68254,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 1328,
@@ -68268,7 +68268,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 1328,
@@ -68300,7 +68300,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 208,
@@ -68314,7 +68314,7 @@
        "y": 480
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 208,
@@ -68346,7 +68346,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 368,
@@ -68360,7 +68360,7 @@
        "y": 480
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 368,
@@ -68392,7 +68392,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 848,
@@ -68406,7 +68406,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 848,
@@ -68438,7 +68438,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 1008,
@@ -68452,7 +68452,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 1008,
@@ -68484,7 +68484,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 528,
@@ -68498,7 +68498,7 @@
        "y": 480
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 528,
@@ -68530,7 +68530,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 688,
@@ -68544,7 +68544,7 @@
        "y": 480
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 688,
@@ -71412,7 +71412,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 320,
@@ -71426,7 +71426,7 @@
        "y": 368
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 320,
@@ -71458,7 +71458,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 448,
@@ -71472,7 +71472,7 @@
        "y": 368
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 448,
@@ -71504,7 +71504,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 320,
@@ -71518,7 +71518,7 @@
        "y": 112
       },
       {
-       "dir": "left",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 320,
@@ -71550,7 +71550,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 448,
@@ -71564,7 +71564,7 @@
        "y": 112
       },
       {
-       "dir": "right",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 448,
@@ -71596,7 +71596,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 176,
@@ -71610,7 +71610,7 @@
        "y": 528
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 176,
@@ -71642,7 +71642,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 384,
@@ -71656,7 +71656,7 @@
        "y": 528
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 384,
@@ -71688,7 +71688,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 640,
@@ -71702,7 +71702,7 @@
        "y": 112
       },
       {
-       "dir": "right",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 640,
@@ -71734,7 +71734,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 640,
@@ -71748,7 +71748,7 @@
        "y": 528
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 640,
@@ -91252,7 +91252,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 144,
@@ -91266,7 +91266,7 @@
        "y": 840
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 144,
@@ -91301,7 +91301,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "C",
        "order": 1,
        "x": 464,
@@ -91315,7 +91315,7 @@
        "y": 528
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "E",
        "order": 3,
        "x": 464,
@@ -91343,7 +91343,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "C",
        "order": 1,
        "x": 624,
@@ -91357,7 +91357,7 @@
        "y": 528
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "E",
        "order": 3,
        "x": 624,
@@ -92665,7 +92665,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "C",
        "order": 1,
        "x": 384,
@@ -92679,7 +92679,7 @@
        "y": 144
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "E",
        "order": 3,
        "x": 384,
@@ -96775,7 +96775,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 144,
@@ -96789,7 +96789,7 @@
        "y": 608
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 144,
@@ -100603,7 +100603,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 272,
@@ -100617,7 +100617,7 @@
        "y": 800
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 272,
@@ -100649,7 +100649,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 1168,
@@ -100663,7 +100663,7 @@
        "y": 640
       },
       {
-       "dir": "right",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 1168,
@@ -100695,7 +100695,7 @@
      },
      "pins": [
       {
-       "dir": "up",
+       "dir": "right",
        "name": "D",
        "order": 1,
        "x": 1520,
@@ -100709,7 +100709,7 @@
        "y": 720
       },
       {
-       "dir": "up",
+       "dir": "left",
        "name": "S",
        "order": 3,
        "x": 1424,
@@ -100741,7 +100741,7 @@
      },
      "pins": [
       {
-       "dir": "down",
+       "dir": "left",
        "name": "D",
        "order": 1,
        "x": 720,
@@ -100755,7 +100755,7 @@
        "y": 720
       },
       {
-       "dir": "down",
+       "dir": "right",
        "name": "S",
        "order": 3,
        "x": 816,
@@ -100787,7 +100787,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 368,
@@ -100801,7 +100801,7 @@
        "y": 400
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 368,
@@ -100833,7 +100833,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "down",
        "name": "D",
        "order": 1,
        "x": 1072,
@@ -100847,7 +100847,7 @@
        "y": 240
       },
       {
-       "dir": "left",
+       "dir": "up",
        "name": "S",
        "order": 3,
        "x": 1072,
@@ -100879,7 +100879,7 @@
      },
      "pins": [
       {
-       "dir": "up",
+       "dir": "left",
        "name": "D",
        "order": 1,
        "x": 1520,
@@ -100893,7 +100893,7 @@
        "y": 320
       },
       {
-       "dir": "up",
+       "dir": "right",
        "name": "S",
        "order": 3,
        "x": 1616,
@@ -100925,7 +100925,7 @@
      },
      "pins": [
       {
-       "dir": "down",
+       "dir": "right",
        "name": "D",
        "order": 1,
        "x": 720,
@@ -100939,7 +100939,7 @@
        "y": 320
       },
       {
-       "dir": "down",
+       "dir": "left",
        "name": "S",
        "order": 3,
        "x": 624,
@@ -102100,7 +102100,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "up",
        "name": "C",
        "order": 1,
        "x": 256,
@@ -102114,7 +102114,7 @@
        "y": 768
       },
       {
-       "dir": "left",
+       "dir": "down",
        "name": "E",
        "order": 3,
        "x": 256,
@@ -102139,7 +102139,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "down",
        "name": "C",
        "order": 1,
        "x": 1184,
@@ -102153,7 +102153,7 @@
        "y": 672
       },
       {
-       "dir": "right",
+       "dir": "up",
        "name": "E",
        "order": 3,
        "x": 1184,
@@ -102178,7 +102178,7 @@
      },
      "pins": [
       {
-       "dir": "up",
+       "dir": "right",
        "name": "C",
        "order": 1,
        "x": 1520,
@@ -102192,7 +102192,7 @@
        "y": 720
       },
       {
-       "dir": "up",
+       "dir": "left",
        "name": "E",
        "order": 3,
        "x": 1424,
@@ -102217,7 +102217,7 @@
      },
      "pins": [
       {
-       "dir": "down",
+       "dir": "left",
        "name": "C",
        "order": 1,
        "x": 720,
@@ -102231,7 +102231,7 @@
        "y": 720
       },
       {
-       "dir": "down",
+       "dir": "right",
        "name": "E",
        "order": 3,
        "x": 816,
@@ -102256,7 +102256,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "C",
        "order": 1,
        "x": 384,
@@ -102270,7 +102270,7 @@
        "y": 368
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "E",
        "order": 3,
        "x": 384,
@@ -102295,7 +102295,7 @@
      },
      "pins": [
       {
-       "dir": "left",
+       "dir": "down",
        "name": "C",
        "order": 1,
        "x": 1056,
@@ -102309,7 +102309,7 @@
        "y": 272
       },
       {
-       "dir": "left",
+       "dir": "up",
        "name": "E",
        "order": 3,
        "x": 1056,
@@ -102334,7 +102334,7 @@
      },
      "pins": [
       {
-       "dir": "up",
+       "dir": "left",
        "name": "C",
        "order": 1,
        "x": 1520,
@@ -102348,7 +102348,7 @@
        "y": 320
       },
       {
-       "dir": "up",
+       "dir": "right",
        "name": "E",
        "order": 3,
        "x": 1616,
@@ -102373,7 +102373,7 @@
      },
      "pins": [
       {
-       "dir": "down",
+       "dir": "right",
        "name": "C",
        "order": 1,
        "x": 720,
@@ -102387,7 +102387,7 @@
        "y": 320
       },
       {
-       "dir": "down",
+       "dir": "left",
        "name": "E",
        "order": 3,
        "x": 624,
@@ -104653,7 +104653,7 @@
      },
      "pins": [
       {
-       "dir": "right",
+       "dir": "up",
        "name": "D",
        "order": 1,
        "x": 112,
@@ -104667,7 +104667,7 @@
        "y": 240
       },
       {
-       "dir": "right",
+       "dir": "down",
        "name": "S",
        "order": 3,
        "x": 112,
@@ -110356,7 +110356,7 @@
      },
      "pins": [
       {
-       "dir": "down",
+       "dir": "left",
        "name": "D",
        "order": 1,
        "x": 144,
@@ -110370,7 +110370,7 @@
        "y": 64
       },
       {
-       "dir": "down",
+       "dir": "right",
        "name": "S",
        "order": 3,
        "x": 240,
@@ -110402,7 +110402,7 @@
      },
      "pins": [
       {
-       "dir": "up",
+       "dir": "right",
        "name": "D",
        "order": 1,
        "x": 528,
@@ -110416,7 +110416,7 @@
        "y": 112
       },
       {
-       "dir": "up",
+       "dir": "left",
        "name": "S",
        "order": 3,
        "x": 432,

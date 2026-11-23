@@ -94,28 +94,55 @@ def place_box(box: BBox, origin_x: int, origin_y: int, rotation: str) -> BBox:
 _DIRECTION_NAMES = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
 
 
-def _pin_direction(
-    px: int, py: int, bbox_x: int, bbox_y: int, bbox_w: int, bbox_h: int, rotation: str
-) -> str:
-    """Determine which direction a pin's lead extends for external wiring.
+def pin_side(box: BBox, x: int, y: int, rotation: str = "R0") -> str | None:
+    """The side a part faces out on at its symbol-local pin ``(x, y)``, turned
+    by ``rotation``: the edge of the symbol's box ``box`` the pin lies on, the
+    top or bottom at a corner; ``None`` for a pin inside the box.
 
-    Computed from the pin's position relative to the bounding box center,
-    then transformed by the rotation.
+    Both builds draw a net label or a ground on a part's pin with no wire out
+    of the part on this side: labels on every placement of three symbols
+    (``draw/suite_nmos4_orientations``, ``draw/suite_npn_orientations``,
+    ``draw/suite_res_orientations``), grounds on the transistors' pins of
+    ``draw/suite_two_stage_opamp_drawn`` and ``draw/suite_nmos_mirror_labelled``.
+    So a wire to the pin should leave on it too.
+
+    A box with no height has no top or bottom, and one with no width no sides,
+    so a symbol drawn as one level line faces left and right at its ends. No
+    recording shows such a symbol.
     """
-    cx = bbox_x + bbox_w / 2
-    cy = bbox_y + bbox_h / 2
-    dx = px - cx
-    dy = py - cy
+    if box.height and y == box.y1:
+        facing = (0, -1)
+    elif box.height and y == box.y2:
+        facing = (0, 1)
+    elif box.width and x == box.x1:
+        facing = (-1, 0)
+    elif box.width and x == box.x2:
+        facing = (1, 0)
+    else:
+        return None
+    return _DIRECTION_NAMES[_apply_rotation(*facing, rotation)]
 
-    # Determine primary axis (which edge the pin is closest to)
-    if abs(dx) / max(bbox_w, 1) >= abs(dy) / max(bbox_h, 1):
+
+def _pin_direction(px: int, py: int, box: BBox, rotation: str) -> str:
+    """Which way a wire to the pin at ``(px, py)`` leaves the part: the side
+    the part faces out on there (``pin_side``), else, for a pin inside the
+    box, the edge it lies nearest, relative to the box's size.
+
+    A pin inside the box still gets a direction, because a caller wiring it
+    needs one. No recording shows how LTspice draws a label on such a pin, so
+    the scene keeps a label's resting side there instead
+    (``test_a_pin_inside_its_symbols_box_has_a_wiring_direction_and_no_label_side``).
+    """
+    side = pin_side(box, px, py, rotation)
+    if side is not None:
+        return side
+    dx = px - (box.x1 + box.width / 2)
+    dy = py - (box.y1 + box.height / 2)
+    if abs(dx) / max(box.width, 1) >= abs(dy) / max(box.height, 1):
         raw = (1 if dx > 0 else -1, 0)
     else:
         raw = (0, 1 if dy > 0 else -1)
-
-    # Apply rotation to direction vector
-    rx, ry = _apply_rotation(raw[0], raw[1], rotation)
-    return _DIRECTION_NAMES.get((rx, ry), "unknown")
+    return _DIRECTION_NAMES[_apply_rotation(*raw, rotation)]
 
 
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
@@ -179,7 +206,7 @@ def compute_placed_geometry(
                 "order": pin.order,
                 "x": origin_x + rx,
                 "y": origin_y + ry,
-                "dir": _pin_direction(pin.x, pin.y, bb.x1, bb.y1, bb.width, bb.height, rotation),
+                "dir": _pin_direction(pin.x, pin.y, bb, rotation),
             }
         )
 

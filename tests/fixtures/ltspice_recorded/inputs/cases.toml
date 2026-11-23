@@ -352,8 +352,8 @@ model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_rende
 # wires it holds, which give the scale from the image's units to sheet units.
 
 [behaviour.sheet-drawing-other-text]
-summary = "What else a build draws on a part: SpiceLine, SpiceLine2 and SpiceModel text through visible WINDOW 39, 40 and 38 lines, a window at the symbol's origin and one at size 0, two attributes at one point drawn over each other, a symbol's own value when the part gives none, nothing for a value written as \"\", and a symbol's own TEXT line and its pin names."
-model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/sheet_findings.py", "lib/schematic_renderer.py", "tools/verify.py"]
+summary = "What else a build draws on a part: SpiceLine, SpiceLine2 and SpiceModel text through visible WINDOW 39, 40 and 38 lines, a window at the symbol's origin and one at size 0, two attributes at one point drawn over each other, a symbol's own value when the part gives none, nothing for a value written as \"\", and a symbol's own TEXT line and its pin names. And the suite's own sheets drawn with its stand-in symbols, every text and ground on them: a net label or a ground on a part's pin with no wire is drawn out of the part, on the side of the symbol's box the pin lies on, the top or bottom at a corner."
+model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/sheet_findings.py", "lib/schematic_renderer.py", "lib/symbol_geometry.py", "tools/verify.py"]
 
 # ---------------------------------------------------------------- decks
 
@@ -2237,6 +2237,67 @@ behaviour = "sheet-drawing-other-text"
 kind = "draw"
 source = "draw/attribute_defaults.asc"
 extra = ["draw/defaulted.asy", "export/res.asy"]
+
+# Four of the suite's own sheets as its findings snapshot reads them, with the
+# suite's stand-in symbols beside them: the eight placements of nmos4, npn and
+# res with a label on every pin, and two nmos4 mirrored and turned between
+# wires. Each gains two long wires far from everything, for the scale.
+[[case]]
+id = "draw/suite_nmos4_orientations"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_nmos4_orientations.asc"
+extra = ["benchmark/nmos4.asy"]
+
+[[case]]
+id = "draw/suite_npn_orientations"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_npn_orientations.asc"
+extra = ["draw/npn.asy"]
+
+[[case]]
+id = "draw/suite_res_orientations"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_res_orientations.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "draw/suite_nmos4_mirrored"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_nmos4_mirrored.asc"
+extra = ["benchmark/nmos4.asy"]
+
+# Four of the build benchmark's sheets, labelled and wired, read the same way.
+[[case]]
+id = "draw/suite_nmos_mirror_labelled"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_nmos_mirror_labelled.asc"
+extra = ["benchmark/current.asy", "benchmark/nmos4.asy", "benchmark/res.asy", "benchmark/voltage.asy"]
+
+[[case]]
+id = "draw/suite_two_stage_opamp_drawn"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_two_stage_opamp_drawn.asc"
+extra = ["benchmark/cap.asy", "benchmark/current.asy", "benchmark/nmos4.asy", "benchmark/pmos4.asy", "benchmark/voltage.asy"]
+
+[[case]]
+id = "draw/suite_two_stage_opamp_labelled"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_two_stage_opamp_labelled.asc"
+extra = ["benchmark/cap.asy", "benchmark/current.asy", "benchmark/nmos4.asy", "benchmark/pmos4.asy", "benchmark/voltage.asy"]
+
+[[case]]
+id = "draw/suite_two_stage_opamp_moved"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/suite_two_stage_opamp_moved.asc"
+extra = ["benchmark/cap.asy", "benchmark/current.asy", "benchmark/nmos4.asy", "benchmark/pmos4.asy", "benchmark/voltage.asy"]
 
 # A cell whose symbol draws a TEXT line, CELL, and names its two pins.
 [[case]]

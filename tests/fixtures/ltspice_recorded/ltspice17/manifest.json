@@ -6850,6 +6850,237 @@
         ".emf"
       ]
     },
+    "draw/suite_nmos4_mirrored": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_nmos4_mirrored.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "draw/suite_nmos4_mirrored.asc": "3769f1e718d1b3ef331d042ad31fb20c18c0924501bdb628be053663c6621d2b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_nmos4_mirrored.drawn": {
+          "bytes": 2290,
+          "sha256": "a15f7ff01eb8ad80b29ef87e84d3c857a42e6a36396e0bfd6cf9a6363c2bd85f"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_nmos4_orientations": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_nmos4_orientations.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "draw/suite_nmos4_orientations.asc": "a2f8a3648e1d25458abdd71c295b252e604dba1726fe6550e4bc520b9f53f6ff"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_nmos4_orientations.drawn": {
+          "bytes": 46939,
+          "sha256": "af4e01d0b439b251396c89012b2092a7d3e794dd2a7757fe7533ae1a2920afbc"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_nmos_mirror_labelled": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_nmos_mirror_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_nmos_mirror_labelled.asc": "bbb86b989fd7bf93d4ca9a431a8e94fd4c5e056cdb2986edb514e2f75cffdea5"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_nmos_mirror_labelled.drawn": {
+          "bytes": 4965,
+          "sha256": "896d9a0888b2fee4914d1e61501896139f66fdd69d2c838be5634419906e8c45"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_npn_orientations": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_npn_orientations.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/npn.asy": "9379afabb39ad3c874ab2f616d6865c08a62828c41cc68fd624e491a29f9a934",
+        "draw/suite_npn_orientations.asc": "d57a7aa15b5d8edb6cf6cb8c0da6d57d3fe6901d902c305bf42aecad2e97f1c8"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_npn_orientations.drawn": {
+          "bytes": 37505,
+          "sha256": "48c3dd8aa1066c6ad8650cef0baf1ab717bec9fa4913ebeaa2132f85f6c13df1"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_res_orientations": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_res_orientations.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/suite_res_orientations.asc": "d3c9260eff0932f54359847b470ceb0f5b6d7ce5be89ca41500bab32854a5ec4",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_res_orientations.drawn": {
+          "bytes": 32501,
+          "sha256": "e4c26a97dc1257eee348cc11bef19ff395122c6a6023193f21a36644d2a3699e"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_two_stage_opamp_drawn": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_two_stage_opamp_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_two_stage_opamp_drawn.asc": "b3229c736d89298e87dfdb9e9f5826cf65e8ce53a0c7c03e42f0bfc57fb36716"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_two_stage_opamp_drawn.drawn": {
+          "bytes": 14874,
+          "sha256": "451cff19be12ea5ee7515fa2f675a84bc872fc2f3df93ab34625f5b3d43020c4"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_two_stage_opamp_labelled": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_two_stage_opamp_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_two_stage_opamp_labelled.asc": "285c8841966b863c5100eca9776cfcfa156b943241ca5006fb58e4871ab1b80a"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_two_stage_opamp_labelled.drawn": {
+          "bytes": 14442,
+          "sha256": "d9c516467b9a387376c5451cab5de28d5ecf95a7feef002c5b99a61f4766f3c9"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_two_stage_opamp_moved": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/suite_two_stage_opamp_moved.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_two_stage_opamp_moved.asc": "b3229c736d89298e87dfdb9e9f5826cf65e8ce53a0c7c03e42f0bfc57fb36716"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_two_stage_opamp_moved.drawn": {
+          "bytes": 14874,
+          "sha256": "451cff19be12ea5ee7515fa2f675a84bc872fc2f3df93ab34625f5b3d43020c4"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/symbol_text": {
       "behaviour": "sheet-drawing-other-text",
       "command": [

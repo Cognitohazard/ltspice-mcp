@@ -114,15 +114,22 @@ def _without_reply_size(said: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.skipif(not _RECORDING, reason="set LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1 to record")
 async def test_record_the_builds(asc_state: SessionState, work_dir: Path):
+    # Every build is made and checked before a kept sheet is touched, so a
+    # build that fails leaves the committed sheets, which other tests read, as
+    # they were.
     record = {}
-    for old in _SHEETS.glob("*.asc"):
-        old.unlink()
+    sheets = {}
     for build in BUILDS:
         built = await run_build(asc_state, build, work_dir)
         said = score(built, work_dir)
         _assert_built(built, said)
         record[build.id] = said
-        (_SHEETS / built.path.name).write_bytes(built.path.read_bytes())
+        sheets[built.path.name] = built.path.read_bytes()
+    for old in _SHEETS.glob("*.asc"):
+        if old.name not in sheets:
+            old.unlink()
+    for name, data in sheets.items():
+        (_SHEETS / name).write_bytes(data)
     write_record(_RECORD, record)
 
 
