@@ -43,6 +43,7 @@ from ltspice_mcp.lib.instance_targeting import (
     TargetEditor,
     apply_edit,
     canonical_target,
+    model_name_refusal,
     select,
     source_lineage,
     source_origins,
@@ -73,6 +74,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     Token,
     emit,
+    is_model_name,
     lex,
     lex_for_edit,
     tokenize_body,
@@ -190,6 +192,9 @@ class AssignVariation(VariationModel):
                 raise ValueError("assignment targets cannot be empty")
             if not values:
                 raise ValueError(f"assignment target {target!r} has no values")
+            if _is_model_swap_target(target):
+                for value in values:
+                    validate_payload("model", None, value)
             assignments[target] = [_validate_scalar(value) for value in values]
         return assignments
 
@@ -247,6 +252,15 @@ class ParamRule(RandomRuleBase):
 class ModelRule(RandomRuleBase):
     rule: Literal["model"]
     param: str
+
+    # Replaces the base class's check of the same name: a model target is
+    # refused, empty or not, with the refusal that names what a model name is.
+    @field_validator("target")
+    @classmethod
+    def _target_not_empty(cls, value: str) -> str:
+        if not is_model_name(value):
+            raise ValueError(model_name_refusal(value))
+        return value
 
 
 # The field descriptions here carry the two facts a caller cannot recover from
@@ -1472,6 +1486,12 @@ def _resolve_assign_family(
     return family
 
 
+def _is_model_swap_target(target: str) -> bool:
+    """Whether an ``assign`` target is a ``REF@model`` swap, whose values are
+    model names (an ``X1:param`` target is a per-instance mismatch instead)."""
+    return ":" not in target and target.casefold().endswith("@model")
+
+
 def _resolve_assignment(
     closure: _DeckClosure,
     target: str,
@@ -1484,7 +1504,7 @@ def _resolve_assignment(
     """
     if ":" in target:
         return _resolve_instance_param(closure, target, value)
-    if target.casefold().endswith("@model"):
+    if _is_model_swap_target(target):
         pattern = target[:-6].casefold()
         _refuse_unread(closure, pattern, kinds=("part",), what="model-swap target", target=target)
         edits: list[ResolvedAssignment] = []

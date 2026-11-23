@@ -932,7 +932,22 @@ def _extract_ends_name(body: str) -> str | None:
     return parts[1]
 
 
-_PLAIN_MODEL_NAME = re.compile(r"(?i:\s*\.model)\s+([^\s={}(),\"';]+)(?=\s|$)")
+#: The characters of a model name: one word with no space, quote, comma, '=',
+#: ';', brace or parenthesis. A leading digit is allowed, as in ``2N2222``,
+#: which both LTspice builds export as a model name (export/attributes).
+_MODEL_NAME = r"[^\s={}(),\"';]+"
+_PLAIN_MODEL_NAME = re.compile(rf"(?i:\s*\.model)\s+({_MODEL_NAME})(?=\s|$)")
+_MODEL_NAME_TEXT = re.compile(_MODEL_NAME)
+
+
+def is_model_name(text: str) -> bool:
+    """Whether ``text`` is a model name as a ``.model`` card declares it.
+
+    The one answer to that question: a model swap and a Monte Carlo model rule
+    both ask here, and ``_extract_model_name`` reads a ``.model`` card's name
+    with the same characters. A lone ``$`` is a comment, never a name.
+    """
+    return _MODEL_NAME_TEXT.fullmatch(text) is not None and text != "$"
 
 
 def _extract_model_name(body: str) -> str | None:
