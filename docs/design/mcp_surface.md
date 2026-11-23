@@ -2503,7 +2503,12 @@ cursors where listed:
     but not L1. It is plain text; a wildcard is refused with the plain
     spelling to use. A netlist's components are the cards the simulator
     reads, as the net query's members are: neither the deck's first line,
-    its title, nor a card after `.end`. On a netlist, `detail: "full"` adds each card's
+    its title, nor a card after `.end`. They are the top level's cards; a
+    card of a `.subckt` body follows them with `subcircuit`, the names of
+    the bodies it sits in, outermost first, and a reference is one card
+    only within its scope. The cards of a subcircuit defined more than
+    once in one scope are left out, since no reference there names one
+    card, and a warning names it. On a netlist, `detail: "full"` adds each card's
     `nodes`, `model` and `params`, keyed as written (a key given twice in
     one spelling reads as its last copy), and `repeated_params` for a
     parameter the card gives more than once, compared without case: every

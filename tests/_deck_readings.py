@@ -401,6 +401,8 @@ async def _inspected(state: SessionState, deck: Path) -> list[Reading]:
             continue
         elements = {}
         for row in result["data"]["components"]:
+            if "subcircuit" in row:
+                continue  # a body's card, not one of the deck's own
             number = plain_number(row["value"]) if row.get("value") else None
             elements[row["reference"].lower()] = Element(
                 nodes=tuple(n.lower() for n in row["nodes"]) if "nodes" in row else None,
