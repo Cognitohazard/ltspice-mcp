@@ -94,8 +94,10 @@ MCP config. uvx needs Git on PATH to install from the repository.
 The maintainer runs `master`, which gets each fix before a release. A change
 to the code lands on `master` after the tests pass on Linux and Windows. A
 tool's arguments, its reply fields and the Python API can change between two
-commits. uvx fetches `master` again each time the client starts the server,
-so each restart runs the newest commit. To stay on one commit, put its hash
+commits.
+
+uvx fetches `master` again each time the client starts the server, so each
+restart runs the newest commit. To stay on one commit, put its hash
 in place of `master`, for example
 `git+https://github.com/cognitohazard/ltspice-mcp@daab2255`.
 
@@ -108,8 +110,8 @@ adds it.
 **Changes since the last release.** `CHANGELOG.md` lists the changes up to
 the last release. Each later change is a short file in
 [`changelog.d/`](https://github.com/cognitohazard/ltspice-mcp/tree/master/changelog.d),
-and the type in its name, such as `breaking` or `fixed`, gives the kind of
-change.
+and the end of its name, such as `.breaking.md` or `.fixed.md`, gives the
+type of change.
 
 **Server version.** A bug report needs the version of the server. A build
 from `master` reports a version such as `0.8.1.dev651+gc17aaf992`, where the
