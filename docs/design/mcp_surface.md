@@ -3184,10 +3184,23 @@ symbol back; the wires it drew stay, for `remove_wire`.
 `remove_wire` removes an exact segment; a segment drawn more than once goes
 whole, and is refused when that would cut its net in two, since asking to
 remove a duplicate is not asking to cut a connection. `remove_component` takes
-`cleanup_wires` to also delete the wires its removal leaves dangling: a wire
-with an end on one of its pins goes when taking it away parts nothing it
-joins by wire, so a wire that still joins two or more pins or labels (another
-wire's, at the pin, or ones along it) stays.
+`cleanup_wires` to also delete what its removal leaves dangling, and it is the
+only op that cleans up. The freed points are the part's pin points that no
+other part's pin is on. From them, until nothing changes: a wire with an end
+on a freed point goes unless taking it splits a net between pins and labels
+(`nets.net_change`), and each end of a taken wire that holds no pin and no
+label becomes a freed point. A label or ground flag on a freed point or along
+a taken wire goes when it joins no pin or other label on the sheet left.
+Nothing not reached from a freed point is touched, and the result does not
+depend on the order of the sheet's records. The op's result lists
+`removed_wires` (one per record taken), `removed_labels`, and `kept_wires`
+(each wire left with an end on a freed point or a pin, with the nets it still
+joins). Each is sent whole: it is bounded by the wires and labels reached from
+one part's own pins. Within one call, a `remove_wire` or `remove_net_label`
+whose target an earlier removal op took succeeds with `already_removed_by`
+(that op's index); a removal that finds nothing otherwise is refused, naming
+the wires at the given ends (ten, then how many more) or the pins and wires
+at the label's point.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either

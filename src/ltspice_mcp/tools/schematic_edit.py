@@ -69,6 +69,7 @@ from ltspice_mcp.lib.pin_legend import (
     find_label_only_pins,
     paginate_view,
 )
+from ltspice_mcp.lib.reply_cuts import CUT, NEVER
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
     KEEPS_WIRING,
@@ -426,7 +427,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "(requested segments already on the sheet, not redrawn) and "
                 "junctions (where the route joined existing wiring off its "
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
-                "report how much they took; remove_directive names each text it "
+                "report how much they took, or already_removed_by when an earlier op of "
+                "the batch took their target; remove_component with cleanup_wires names "
+                "each wire and label it took and each wire it kept, with why; remove_directive names each text it "
                 "removed in removed_texts, with its kind and place, and replace_directive "
                 "gives the text it changed, with what it was and what it is now; "
                 "with find, was and now hold only the lines it touched, from line. "
@@ -471,7 +474,60 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "required": ["kind", "text", "x", "y"],
                         },
                     },
-                    "deleted_wires": {"type": "integer"},
+                    "removed_wires": {
+                        "type": "array",
+                        "items": _SEGMENT_SCHEMA,
+                        CUT: NEVER,
+                        "description": "Each wire record remove_component's cleanup took.",
+                    },
+                    "removed_labels": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                            "required": ["text", "x", "y"],
+                        },
+                        CUT: NEVER,
+                        "description": (
+                            "Each label or ground flag the cleanup took: on the sheet "
+                            "left it joined no pin or other label."
+                        ),
+                    },
+                    "kept_wires": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "wire": _SEGMENT_SCHEMA,
+                                "joins": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "The pieces of the net this wire holds together, "
+                                        "the one at the removed pin first."
+                                    ),
+                                },
+                                "on_pin": {
+                                    "type": "string",
+                                    "description": "Another part's pin on the removed pin's point.",
+                                },
+                            },
+                            "required": ["wire"],
+                        },
+                        CUT: NEVER,
+                        "description": "Each wire the cleanup reached and kept, with why.",
+                    },
+                    "already_removed_by": {
+                        "type": "integer",
+                        "description": (
+                            "The index of the earlier op of this batch that already took "
+                            "what this removal names."
+                        ),
+                    },
                     "text": {
                         "type": "object",
                         "properties": {

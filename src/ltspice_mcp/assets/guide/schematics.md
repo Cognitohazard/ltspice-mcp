@@ -357,6 +357,25 @@ name, place and value, its pins pair with the new symbol's by name (or as
 names the old pins whose wiring was left with nothing (`left_at`) and the new
 pins left unconnected (`unpaired_pins`).
 
+#### Removing what is drawn
+
+Only `remove_component` cleans up after itself, and only with
+`cleanup_wires: true`; `remove_wire` and `remove_net_label` take exactly what
+they name. The cleanup starts at the part's pins that no other part's pin is
+on and follows the wiring out from there: it takes a wire with an end on such
+a point unless taking it would split a net between pins and labels, then
+carries on from the wire's far end when nothing else is there. A label or
+ground flag left on a taken point or wire goes too when it joins no pin or
+other label. Nothing it does not reach from the part's pins is touched. The
+op's entry in `results` lists each wire it took (`removed_wires`), each label
+(`removed_labels`), and each wire with an end on a pin that it kept, with the
+pins and labels that wire still joins (`kept_wires`). A later `remove_wire` or
+`remove_net_label` in the same call whose target the cleanup already took
+succeeds and says so (`already_removed_by`, the index of that op); one that
+finds nothing to remove is refused and names what is there instead. To undo
+the removal, add the part again, redraw `removed_wires` with `wire_pins` and
+put back `removed_labels` with `add_net_label`.
+
 #### Ground and net labels
 
 - **Ground**: give each grounded pin its own ground (`0`) label with an

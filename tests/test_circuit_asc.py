@@ -2540,7 +2540,7 @@ class TestReplaceDirective:
     """replace_directive changes one text and keeps its record: place, size,
     justification and kind."""
 
-    def _apply(self, sheet: Path, instruction: str, text: str, **at: int) -> dict:
+    def _apply(self, sheet: Path, instruction: str, text: str, **at: Any) -> dict:
         """Apply the op to the sheet and save it; a refusal raises before the save."""
         from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
 
@@ -2550,7 +2550,7 @@ class TestReplaceDirective:
         editor.save_netlist(sheet)
         return result
 
-    def _refused(self, sheet: Path, instruction: str, text: str, **at: int) -> str:
+    def _refused(self, sheet: Path, instruction: str, text: str, **at: Any) -> str:
         """The refusal's message, after checking the editor holds the texts it
         held: a refused op changes nothing, so a dry run's later ops see none."""
         from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
@@ -2867,7 +2867,7 @@ class TestMoveRemoveOpWarnings:
             stop_on_error=True,
         )
         op = res["results"][0]
-        assert op["deleted_wires"] >= 1
+        assert op["removed_wires"] == [{"from": {"x": 200, "y": 248}, "to": {"x": 200, "y": 352}}]
         assert "warnings" not in op
         assert _loose_wire_ends(res) == []
 
@@ -4143,7 +4143,11 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 1
+        assert result["removed_wires"] == [{"from": {"x": 96, "y": 292}, "to": {"x": 96, "y": 340}}]
+        assert [kept["joins"] for kept in result["kept_wires"]] == [
+            ["R3.1", "R2.1"],
+            ["R2.1", "R3.1"],
+        ]
         records = _records(asc)
         assert "WIRE 16 196 96 196" in records
         assert "WIRE 96 196 176 196" in records
@@ -4157,7 +4161,10 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 1
+        assert result["removed_wires"] == [{"from": {"x": 96, "y": 196}, "to": {"x": 96, "y": 148}}]
+        assert result["kept_wires"] == [
+            {"wire": {"from": {"x": 96, "y": 292}, "to": {"x": 288, "y": 292}}, "joins": ["R4.1", "R5.1"]}
+        ]
         assert "WIRE 96 292 288 292" in _records(asc)
         assert await _net_pins(asc_state, asc, "R4.1") == {"R4.1", "R5.1"}
 
@@ -4282,7 +4289,10 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 0
+        assert "removed_wires" not in result
+        assert result["kept_wires"] == [
+            {"wire": {"from": {"x": 96, "y": 196}, "to": {"x": 288, "y": 196}}, "joins": ["label '0'", "R2.1"]}
+        ]
         assert "WIRE 96 196 288 196" in _records(asc)
 
     async def test_cleanup_keeps_a_wire_between_labels_of_one_name(
@@ -4299,7 +4309,8 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 0
+        assert "removed_wires" not in result and "removed_labels" not in result
+        assert len(result["kept_wires"]) == 2
         records = _records(asc)
         assert "WIRE 16 196 96 196" in records and "WIRE 96 196 176 196" in records
 

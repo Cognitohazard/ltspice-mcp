@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -41,7 +41,7 @@ def _replace(sheet: Path, **fields: Any) -> dict[str, Any]:
     editor = open_editor(sheet)
     result = apply_op_inplace(editor, _OP.validate_python({"op": "replace_directive", **fields}), sheet)
     editor.save_netlist(sheet)
-    return result["text"]
+    return cast("dict[str, Any]", result["text"])
 
 
 def _refused(sheet: Path, **fields: Any) -> str:
