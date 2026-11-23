@@ -28,14 +28,19 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
+from ltspice_mcp.lib.parser_capture import EXISTING_CACHE_KEYS
 from ltspice_mcp.lib.parser_process import ParserProcessLimits, WarmParser
 from ltspice_mcp.lib.store import is_sha256
 
 RESULT_CACHE_BYTES = 512 * 1024 * 1024
-RESULT_CACHE_ENTRIES = 32
 STAMP_ENTRIES = 256
 """Source stamps remembered at once. A stamp outliving its entry answers
 nothing, so this only bounds the index's own size."""
+RESULT_CACHE_ENTRIES = STAMP_ENTRIES
+"""Entries retained at once, within the byte budget. As many as there are
+stamps, so one call over many cases, each read by every recipe in turn, finds
+each case still held; a parser request names only the most recent
+``EXISTING_CACHE_KEYS`` (``snapshot``)."""
 
 
 class ParserCleanupError(ResultError):
@@ -94,7 +99,7 @@ class ResultCache:
         if type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError("Result cache bytes must be a positive integer")
         if type(max_entries) is not int or not 1 <= max_entries <= RESULT_CACHE_ENTRIES:
-            raise ValueError("Result cache entries must be between 1 and 32")
+            raise ValueError(f"Result cache entries must be between 1 and {RESULT_CACHE_ENTRIES}")
         self.max_bytes = max_bytes
         self.max_entries = max_entries
         self._entries: OrderedDict[str, tuple[ParsedArtifacts, int]] = OrderedDict()
@@ -149,13 +154,15 @@ class ResultCache:
         return value
 
     def snapshot(self, *, require_raw: bool = False) -> dict[str, ParsedArtifacts]:
-        """Strong references, retained by the caller until the parser is reaped."""
+        """Strong references to the most recently used entries a parser
+        request may name, retained by the caller until the parser is reaped."""
         with self._lock:
-            return {
-                key: entry[0]
-                for key, entry in self._entries.items()
+            held = [
+                (key, entry[0])
+                for key, entry in reversed(self._entries.items())
                 if not require_raw or entry[0].raw is not None
-            }
+            ]
+        return dict(held[:EXISTING_CACHE_KEYS])
 
     def clear(self) -> None:
         with self._lock:

@@ -1546,6 +1546,12 @@ class DefinitionRule:
         return None
 
 
+#: A rule that keeps no definition of a name given more than once in one
+#: scope, for a reader of a file as written (a structural diff, a components
+#: listing): it asks only which definitions share a scope and a name.
+AS_WRITTEN = DefinitionRule("a reading as written", "unestablished", "unestablished", "unestablished")
+
+
 def definition_rule(producer: Producer) -> DefinitionRule:
     """The definitions ``producer`` keeps in force, from what is recorded or
     measured; the one derivation, which :func:`settle_definitions` applies.

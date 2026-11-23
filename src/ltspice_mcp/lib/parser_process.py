@@ -550,6 +550,7 @@ def _call_result(
                 "too_large_to_decode",
                 "signals_not_found",
                 "window_refused",
+                "raw_holds_no_point",
             }:
                 raise ValueError("Invalid parser error code")
             raise ParserProcessError(
