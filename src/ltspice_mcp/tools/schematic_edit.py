@@ -494,7 +494,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         CUT: NEVER,
                         "description": (
                             "Each label or ground flag the cleanup took: on the sheet "
-                            "left it joined no pin or other label."
+                            "left it sat on no pin and no wire."
                         ),
                     },
                     "kept_wires": {
@@ -507,8 +507,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                                     "type": "array",
                                     "items": {"type": "string"},
                                     "description": (
-                                        "The pieces of the net this wire holds together, "
-                                        "the one at the removed pin first."
+                                        "One member of each piece of the net this wire "
+                                        "holds together: its first pin in sheet order, "
+                                        "else its first label."
                                     ),
                                 },
                                 "on_pin": {
@@ -539,6 +540,22 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "now": {"type": "string"},
                         },
                         "required": ["kind", "x", "y", "was", "now"],
+                    },
+                    "undo": {
+                        "type": "object",
+                        "description": (
+                            "After a find edit: the replace_directive op that puts the "
+                            "words back."
+                        ),
+                        "properties": {
+                            "op": {"type": "string", "const": "replace_directive"},
+                            "x": {"type": "integer"},
+                            "y": {"type": "integer"},
+                            "find": {"type": "string"},
+                            "instruction": {"type": "string"},
+                            "text": {"type": "string"},
+                        },
+                        "required": ["op", "x", "y", "text"],
                     },
                     "changed": {
                         "type": "object",

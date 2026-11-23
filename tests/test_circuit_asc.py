@@ -2352,7 +2352,10 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert data["results"][0]["error"] == "No wire to remove: no wire has an end at (0,0) or (16,0)."
+        assert data["results"][0]["error"] == (
+            "No wire to remove: no wire has an end at (0,0) or (16,0). To see the wires of "
+            'a net with their ends, call inspect(kind="net", at=[x, y]) on a point of it.'
+        )
 
     async def test_remove_net_label_no_match_raises(self, asc_state: SessionState, work_dir: Path):
 
@@ -2365,7 +2368,10 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert data["results"][0]["error"] == "No net label at (999,999), and nothing else is there."
+        assert data["results"][0]["error"] == (
+            "No net label at (999,999), and nothing else is there. To see the labels of a "
+            'net with their points, call inspect(kind="net", at=[x, y]) on a point of it.'
+        )
 
     async def test_remove_directive_round_trip(self, asc_state: SessionState, work_dir: Path):
 
@@ -4156,7 +4162,7 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         )
         assert result["removed_wires"] == [{"from": {"x": 96, "y": 292}, "to": {"x": 96, "y": 340}}]
         assert [kept["joins"] for kept in result["kept_wires"]] == [
-            ["R3.1", "R2.1"],
+            ["R2.1", "R3.1"],
             ["R2.1", "R3.1"],
         ]
         records = _records(asc)
@@ -4302,7 +4308,7 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         )
         assert "removed_wires" not in result
         assert result["kept_wires"] == [
-            {"wire": {"from": {"x": 96, "y": 196}, "to": {"x": 288, "y": 196}}, "joins": ["label '0'", "R2.1"]}
+            {"wire": {"from": {"x": 96, "y": 196}, "to": {"x": 288, "y": 196}}, "joins": ["R2.1", "label '0'"]}
         ]
         assert "WIRE 96 196 288 196" in _records(asc)
 

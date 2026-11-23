@@ -104,6 +104,9 @@ class TestWhichTextIsChanged:
             ".param a=1\n.param b=2",
             ".param a=4\n.param b=2",
         )
+        assert "TEXT 16 16 Left 2 !.param a=4\\n.param b=2\\n.param c=3" in sheet.read_text(
+            encoding="utf-8"
+        ).splitlines()
 
     def test_a_whole_text_reply_says_the_text_as_the_sheet_holds_it(self, work_dir: Path):
         sheet = _write(work_dir / "whole.asc", "TEXT 16 16 Left 2 !.param a=1")
@@ -115,7 +118,7 @@ class TestWhichTextIsChanged:
 
     def test_find_twice_in_one_text_is_refused_with_each_place(self, work_dir: Path):
         sheet = _write(work_dir / "twice.asc", "TEXT 16 16 Left 2 !.param a=1\\n.param b=1")
-        message = _refused(sheet, find="=1", text="=2")
+        message = _refused(sheet, instruction="regex:^\\.param a", find="=1", text="=2")
         assert "2 times" in message
         assert "1:9" in message and "2:9" in message
         assert "make find longer, taking in neighbouring words" in message
@@ -192,12 +195,40 @@ class TestWhatTheBatchWrites:
         before = sheet.read_bytes()
         done = await _edit(asc_state, "undo.asc", [_find("b=2", "b=5")])
         assert done["commit_state"] == "committed", done
-        fact = done["results"][0]["text"]
-        undone = await _edit(
-            asc_state,
-            "undo.asc",
-            [_find(fact["now"], fact["was"], x=fact["x"], y=fact["y"])],
-        )
+        assert done["results"][0]["undo"] == _find(".param b=5", ".param b=2", x=16, y=16)
+        undone = await _edit(asc_state, "undo.asc", [done["results"][0]["undo"]])
+        assert undone["commit_state"] == "committed", undone
+        assert sheet.read_bytes() == before
+
+    @pytest.mark.parametrize(
+        ("record", "find", "text", "instruction"),
+        [
+            # The edit leaves line 2 empty: now is "", which find cannot take.
+            ("!.param a=1\\n.param b=2", ".param b=2", "", ".param a=1\n"),
+            # now, ".param a=2", is on both lines of the new text.
+            ("!.param a=1\\n.param a=2", "a=1", "a=2", ".param a=2\n.param a=2"),
+            # The new text begins with regex:, so a literal cannot name it.
+            (";regex:x\\nregex:y", "y", "x", "regex:^regex:x\\\\nregex:x\\Z"),
+        ],
+        ids=["line-left-empty", "now-twice", "text-begins-regex"],
+    )
+    async def test_where_find_cannot_undo_the_reply_gives_the_whole_text_form(
+        self, asc_state: SessionState, work_dir: Path, record: str, find: str, text: str,
+        instruction: str,
+    ):
+        sheet = _write(work_dir / "whole_undo.asc", f"TEXT 16 16 Left 2 {record}")
+        before = sheet.read_bytes()
+        done = await _edit(asc_state, "whole_undo.asc", [_find(find, text)])
+        assert done["commit_state"] == "committed", done
+        undo = done["results"][0]["undo"]
+        assert undo == {
+            "op": "replace_directive",
+            "x": 16,
+            "y": 16,
+            "instruction": instruction,
+            "text": record[1:].replace("\\n", "\n"),
+        }
+        undone = await _edit(asc_state, "whole_undo.asc", [undo])
         assert undone["commit_state"] == "committed", undone
         assert sheet.read_bytes() == before
 
@@ -230,7 +261,10 @@ class TestWhatTheBatchWrites:
             asc_state, "chain.asc", [_find("a=1", "a=2"), _find("a=2", "a=3")]
         )
         assert done["commit_state"] == "committed", done
-        assert [r["text"]["now"] for r in done["results"]] == [".param a=2", ".param a=3"]
+        assert [(r["text"]["was"], r["text"]["now"]) for r in done["results"]] == [
+            (".param a=1", ".param a=2"),
+            (".param a=2", ".param a=3"),
+        ]
         assert "TEXT 16 16 Left 2 !.param a=3" in sheet.read_text(encoding="utf-8")
 
     async def test_an_op_looking_for_words_an_earlier_op_took_is_refused(

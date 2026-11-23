@@ -20,7 +20,7 @@
  },
  "02038584de79f6d8": {
   "answer": {
-   "reply": "96375f18edf189c3",
+   "reply": "962dbd6da763b99a",
    "sheet": "e96a58751c84ec0a"
   },
   "tests": [
@@ -92,6 +92,16 @@
    "tests/test_edit_schematic.py::test_a_dry_run_reports_a_mismatch_with_the_netlist"
   ]
  },
+ "0645ad16881e6983": {
+  "answer": {
+   "reply": "ba38933d9ecd1329",
+   "sheet": "c064b176635b7503"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
+  ]
+ },
  "078875ffcb92330e": {
   "answer": {
    "reply": "b764808779f76a17",
@@ -108,6 +118,15 @@
   },
   "tests": [
    "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[plot panes only]"
+  ]
+ },
+ "097f9cbf402b3cbb": {
+  "answer": {
+   "reply": "4c6ebc7ed7d9920f",
+   "sheet": "978168eb0ad4a325"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_wires_to_two_labels_of_one_name_off_any_pin_stay"
   ]
  },
  "0a0920044ddbe2a6": {
@@ -320,7 +339,7 @@
  },
  "117ffa80da31383c": {
   "answer": {
-   "reply": "857cbbe2aafdb787",
+   "reply": "ae6cee5898d3517b",
    "sheet": "6c6ab94b03231648"
   },
   "tests": [
@@ -403,7 +422,7 @@
  },
  "1678edc1430e1b45": {
   "answer": {
-   "reply": "5dfbfcb479c1b837",
+   "reply": "671677b78dfa6396",
    "sheet": null
   },
   "tests": [
@@ -412,7 +431,7 @@
  },
  "1743294a8d49c811": {
   "answer": {
-   "reply": "fe321e8a323644f6",
+   "reply": "6cb46afc37c344d0",
    "sheet": "6235692e78c45cfe"
   },
   "tests": [
@@ -445,6 +464,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_reference_outside_sandbox_names_the_text_alternative"
+  ]
+ },
+ "19642cc2b293eb8d": {
+  "answer": {
+   "reply": "0b34a05f166a3180",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
   ]
  },
  "19aca848f42578fd": {
@@ -531,7 +560,7 @@
  },
  "1c6a16e40f111919": {
   "answer": {
-   "reply": "cf4a616e5673f9b4",
+   "reply": "5de202bd0c6004e3",
    "sheet": "e0a8aa7acd9b20b5"
   },
   "tests": [
@@ -558,7 +587,7 @@
  },
  "1dc12d8485b5aec5": {
   "answer": {
-   "reply": "a667df59b0723705",
+   "reply": "1eb6eb30aa388967",
    "sheet": "376255a809d7f5b7"
   },
   "tests": [
@@ -800,15 +829,6 @@
    "tests/test_circuit_asc.py::TestNoEditSplitsANetItWasNotAskedTo::test_a_part_moved_inside_a_wire_is_said_to_join_it"
   ]
  },
- "2aca61c44e5f86d4": {
-  "answer": {
-   "reply": "bc6b509212e620b8",
-   "sheet": "5869499ce3caddb7"
-  },
-  "tests": [
-   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_cleanup_off_takes_nothing_and_reports_nothing"
-  ]
- },
  "2ae2b3e271d4acd7": {
   "answer": {
    "reply": "6118395b2eb07a56",
@@ -949,7 +969,7 @@
  },
  "33b78b1d6069b550": {
   "answer": {
-   "reply": "a2a82406b1f08ac2",
+   "reply": "1c4de71c62bd9b3b",
    "sheet": "0caa8e7da9b053bc"
   },
   "tests": [
@@ -1030,6 +1050,16 @@
    "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_attribute]"
   ]
  },
+ "3a12e3fea4f4a741": {
+  "answer": {
+   "reply": "2856784b14be9f22",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_recursive_subcircuit_compare.py::test_edit_schematic_reference_stage_states_the_failure"
+  ]
+ },
  "3b41f2c13f80fac4": {
   "answer": {
    "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
@@ -1037,6 +1067,15 @@
   },
   "tests": [
    "tests/test_edit_open_window.py::test_window_pid_goes_with_a_save[discard]"
+  ]
+ },
+ "3bf09ba34882ec5d": {
+  "answer": {
+   "reply": "4d4b9c70114135b2",
+   "sheet": "c0f3531aa6e12659"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[now-twice]"
   ]
  },
  "3c96f67f8a9ba691": {
@@ -1252,6 +1291,15 @@
    "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-source-symbol-made-a-current-source]"
   ]
  },
+ "46d9422580a192c4": {
+  "answer": {
+   "reply": "ee39cafc837514b5",
+   "sheet": "c5c8427117667247"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[text-begins-regex]"
+  ]
+ },
  "47520cd2f71bcf5f": {
   "answer": {
    "reply": "9582e655cf957d5d",
@@ -1457,6 +1505,15 @@
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[move_component]"
   ]
  },
+ "54229bbe7ba1256e": {
+  "answer": {
+   "reply": "7e062ef030f564c2",
+   "sheet": "994a45ddc5a1930c"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_cleanup_off_takes_nothing_and_reports_nothing"
+  ]
+ },
  "557660cf5e631e78": {
   "answer": {
    "reply": "8f544ae360301a63",
@@ -1547,7 +1604,7 @@
  },
  "5c212772473f6b64": {
   "answer": {
-   "reply": "83d2b20d3b244e27",
+   "reply": "d5f3fd9b5dc835cf",
    "sheet": "696eb8e55d1658c0"
   },
   "tests": [
@@ -1665,7 +1722,7 @@
  },
  "6234c8274508c39e": {
   "answer": {
-   "reply": "1d178bc796fe1072",
+   "reply": "59310bba925dbb30",
    "sheet": null
   },
   "tests": [
@@ -1854,7 +1911,7 @@
  },
  "697227684ad07066": {
   "answer": {
-   "reply": "ef7f6c2937b90d7b",
+   "reply": "c7856abc8d7b5cd5",
    "sheet": "0caa8e7da9b053bc"
   },
   "tests": [
@@ -1923,6 +1980,16 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_detour]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_detour]"
+  ]
+ },
+ "6d66d0050941af71": {
+  "answer": {
+   "reply": "cc07821330ec65a6",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
   ]
  },
  "6d78df2f4a93c062": {
@@ -2045,7 +2112,7 @@
  },
  "73113f6d9ab1d38a": {
   "answer": {
-   "reply": "787dec782e50334a",
+   "reply": "6e40ecd78797dfa4",
    "sheet": "2cea0028ab498abb"
   },
   "tests": [
@@ -2192,7 +2259,7 @@
  },
  "7bd7e50c1a0a8656": {
   "answer": {
-   "reply": "adcfc55f43f776bf",
+   "reply": "9b1e596ae0efdabc",
    "sheet": "a2c85c35638158fc"
   },
   "tests": [
@@ -2247,7 +2314,7 @@
  },
  "7d78f5ac7bab3d1d": {
   "answer": {
-   "reply": "a19bfe57cb7e2f8f",
+   "reply": "b054129d0cace1e1",
    "sheet": "1565a5bcb1800dfb"
   },
   "tests": [
@@ -2385,7 +2452,7 @@
  },
  "8744fbf07d2435a2": {
   "answer": {
-   "reply": "39f169e71851f51c",
+   "reply": "afc0d30435592f9a",
    "sheet": "1f3521b2aa65498a"
   },
   "tests": [
@@ -2614,6 +2681,15 @@
    "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-resistor-symbol-made-a-source]"
   ]
  },
+ "910244cc6febfe7e": {
+  "answer": {
+   "reply": "5aa28bea4a59b4ca",
+   "sheet": "aa1e280e0d2fb89b"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[line-left-empty]"
+  ]
+ },
  "92d86276a120bbfb": {
   "answer": {
    "reply": "8709eec8b5f4d3e9",
@@ -2780,6 +2856,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[sallen_key_labelled]"
   ]
  },
+ "9be3eef8daf9db23": {
+  "answer": {
+   "reply": "9eb901a269ccbb76",
+   "sheet": "b82aa0aee4cfaaa6"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[line-left-empty]"
+  ]
+ },
  "9c5dd49cd8c19ae3": {
   "answer": {
    "reply": "d1cc31fcabd785f2",
@@ -2872,7 +2957,7 @@
  },
  "a2b7b897affba191": {
   "answer": {
-   "reply": "53dc202ed5821a6e",
+   "reply": "f589886f66578b10",
    "sheet": "b230d39e26051c2d"
   },
   "tests": [
@@ -3019,11 +3104,20 @@
  },
  "a82d14c70f5dd489": {
   "answer": {
-   "reply": "05fc188f0137c73d",
+   "reply": "4ab0f40746a8a5ed",
    "sheet": "0aa829d47b313c60"
   },
   "tests": [
    "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_dry_run_reports_as_a_commit_and_its_later_ops_see_the_change"
+  ]
+ },
+ "a83cbf5e2b736e82": {
+  "answer": {
+   "reply": "4858bbc34e26376a",
+   "sheet": "adeb71632f8c9a44"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_chain_to_a_lone_pin_leaves_that_pin_floating"
   ]
  },
  "a87fe321057fbe0f": {
@@ -3496,7 +3590,7 @@
  },
  "c2a8bb886f3875d5": {
   "answer": {
-   "reply": "60021c0c6b380dc6",
+   "reply": "3c0c529a20ae7996",
    "sheet": "a2c85c35638158fc"
   },
   "tests": [
@@ -3523,7 +3617,7 @@
  },
  "c4a4b3088bec07c7": {
   "answer": {
-   "reply": "8c20eb2ada90a647",
+   "reply": "a9e5949d2b1ceb96",
    "sheet": "46d3e2ff5aa968c7"
   },
   "tests": [
@@ -3580,6 +3674,25 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
+  ]
+ },
+ "c6f24b40036b9874": {
+  "answer": {
+   "reply": "ba38933d9ecd1329",
+   "sheet": "44202d5c22063149"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
+  ]
+ },
+ "c724bc2b25cc8a51": {
+  "answer": {
+   "reply": "eb7c64f494fc5a75",
+   "sheet": "c376d27e54d9024f"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[text-begins-regex]"
   ]
  },
  "c77db94b400b78d7": {
@@ -3656,7 +3769,7 @@
  },
  "ce83de869ccb0293": {
   "answer": {
-   "reply": "89449b17104ae9f4",
+   "reply": "7a55a1452b1aefa2",
    "sheet": "963601b69bc1109d"
   },
   "tests": [
@@ -3858,7 +3971,7 @@
  },
  "dc657ce0afb63456": {
   "answer": {
-   "reply": "bb880f34dcd71ed8",
+   "reply": "ad93230852f76518",
    "sheet": "888b77594921bfe0"
   },
   "tests": [
@@ -4071,6 +4184,15 @@
    "tests/test_edit_schematic.py::test_view_pagination_cursor_resumption"
   ]
  },
+ "ea9bf2cf2baf3089": {
+  "answer": {
+   "reply": "53fb795608e45280",
+   "sheet": "e2119df623d7d696"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_loop_through_a_pin_of_another_part_goes_whole"
+  ]
+ },
  "eaceff9ef1f9fdfe": {
   "answer": {
    "reply": "7c21440fd3aada9b",
@@ -4092,7 +4214,7 @@
  },
  "eb96d5d34ca1cc53": {
   "answer": {
-   "reply": "bb88e2198dafb80e",
+   "reply": "da9e28ce8dc09ee3",
    "sheet": "bed9c6cced91d89c"
   },
   "tests": [
@@ -4187,6 +4309,15 @@
   ],
   "varies": true
  },
+ "f0e2ed70d0f06b22": {
+  "answer": {
+   "reply": "8e25f9912e1e62ce",
+   "sheet": "9d34e089abd619cd"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[now-twice]"
+  ]
+ },
  "f1013df5f9d18002": {
   "answer": {
    "reply": "d5109bf9e506a123",
@@ -4203,6 +4334,15 @@
   },
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_value_for_a_source_that_plays_a_file_on_a_sheet"
+  ]
+ },
+ "f1a8cfdcd46dc357": {
+  "answer": {
+   "reply": "7117c247d623d999",
+   "sheet": "cfde6e5643938e2f"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_a_later_call_names_the_wires_still_at_the_ends_it_named"
   ]
  },
  "f1bea3b6d0f2ab59": {
@@ -4288,7 +4428,7 @@
  },
  "f83941293ef836b8": {
   "answer": {
-   "reply": "f9f26f85b3cff838",
+   "reply": "04f1a6bb26dfdb40",
    "sheet": "3993c8aff400ea83"
   },
   "tests": [

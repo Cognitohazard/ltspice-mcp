@@ -108,6 +108,24 @@ class TestWhatTheCleanupTakes:
         }
         assert _records(sheet, "WIRE") == []
 
+    async def test_a_chain_to_a_lone_pin_leaves_that_pin_floating(self, asc_state: SessionState):
+        sheet = _sheet(
+            asc_state,
+            "chain_float.asc",
+            _R1,
+            _res("R2", 288, 148),
+            "WIRE 96 196 96 100",
+            "WIRE 96 100 288 100",
+        )
+        reply = await _edit(
+            asc_state, sheet, [{"op": "remove_component", "reference": "R1", "cleanup_wires": True}]
+        )
+        assert reply["results"][0]["removed_wires"] == [
+            _w(96, 100, 288, 100),
+            _w(96, 196, 96, 100),
+        ]
+        assert "Floating pin: R2.1 at (288,100)" in str(reply)
+
     async def test_a_direct_wire_to_a_lone_pin_goes(self, asc_state: SessionState):
         sheet = _sheet(asc_state, "direct.asc", _R1, _res("R2", 288, 244), "WIRE 96 196 288 196")
         assert await _remove(asc_state, sheet) == {"removed_wires": [_w(96, 196, 288, 196)]}
@@ -167,6 +185,29 @@ class TestWhatTheCleanupTakes:
         assert len(reply["removed_wires"]) == 4 and set(reply) == {"removed_wires"}
         assert _records(sheet, "WIRE") == []
 
+    async def test_a_loop_through_a_pin_of_another_part_goes_whole(self, asc_state: SessionState):
+        """pin -> P -> Q -> pin with R2.1 at Q: the loop's only pin is R2.1, so
+        all three wires join nothing and go, and R2.1 is left floating."""
+        sheet = _sheet(
+            asc_state,
+            "loop_pin.asc",
+            _R1,
+            _res("R2", 192, 148),
+            "WIRE 96 196 96 100",
+            "WIRE 96 100 192 100",
+            "WIRE 192 100 96 196",
+        )
+        reply = await _edit(
+            asc_state, sheet, [{"op": "remove_component", "reference": "R1", "cleanup_wires": True}]
+        )
+        assert reply["results"][0]["removed_wires"] == [
+            _w(96, 100, 192, 100),
+            _w(96, 196, 96, 100),
+            _w(192, 100, 96, 196),
+        ]
+        assert _records(sheet, "WIRE") == []
+        assert "Floating pin: R2.1 at (192,100)" in str(reply)
+
     async def test_each_copy_of_a_drawn_twice_wire_is_listed(self, asc_state: SessionState):
         sheet = _sheet(asc_state, "twice.asc", _R1, "WIRE 96 196 96 100", "WIRE 96 100 96 196")
         assert await _remove(asc_state, sheet) == {
@@ -208,7 +249,7 @@ class TestWhatTheCleanupKeeps:
         assert await _remove(asc_state, sheet) == {
             "removed_wires": [_w(96, 196, 96, 100)],
             "kept_wires": [
-                {"wire": _w(16, 100, 96, 100), "joins": ["R3.1", "R2.1"]},
+                {"wire": _w(16, 100, 96, 100), "joins": ["R2.1", "R3.1"]},
                 {"wire": _w(96, 100, 176, 100), "joins": ["R2.1", "R3.1"]},
             ],
         }
@@ -228,7 +269,7 @@ class TestWhatTheCleanupKeeps:
         assert await _remove(asc_state, sheet) == {
             "removed_wires": [_w(96, 292, 96, 340)],
             "kept_wires": [
-                {"wire": _w(16, 196, 96, 196), "joins": ["R3.1", "R2.1"]},
+                {"wire": _w(16, 196, 96, 196), "joins": ["R2.1", "R3.1"]},
                 {"wire": _w(96, 196, 176, 196), "joins": ["R2.1", "R3.1"]},
             ],
         }
@@ -243,7 +284,7 @@ class TestWhatTheCleanupKeeps:
             "FLAG 96 196 0",
         )
         assert await _remove(asc_state, sheet) == {
-            "kept_wires": [{"wire": _w(96, 196, 288, 196), "joins": ["label '0'", "R2.1"]}]
+            "kept_wires": [{"wire": _w(96, 196, 288, 196), "joins": ["R2.1", "label '0'"]}]
         }
         assert _records(sheet, "FLAG") == ["FLAG 96 196 0"]
 
@@ -263,10 +304,32 @@ class TestWhatTheCleanupKeeps:
         )
         assert await _remove(asc_state, sheet) == {
             "kept_wires": [
-                {"wire": _w(16, 196, 96, 196), "joins": ["R3.1, label 'a'", "R2.1, label 'a'"]},
-                {"wire": _w(96, 196, 176, 196), "joins": ["R2.1, label 'a'", "R3.1, label 'a'"]},
+                {"wire": _w(16, 196, 96, 196), "joins": ["R2.1", "R3.1"]},
+                {"wire": _w(96, 196, 176, 196), "joins": ["R2.1", "R3.1"]},
             ]
         }
+
+    async def test_wires_to_two_labels_of_one_name_off_any_pin_stay(
+        self, asc_state: SessionState
+    ):
+        """Two wires meet at the removed pin and each ends on a label 'a' that
+        is on no pin: the wiring joins the two labels, so both wires stay."""
+        sheet = _sheet(
+            asc_state,
+            "named_off_pins.asc",
+            _R1,
+            "WIRE 16 196 96 196",
+            "WIRE 96 196 176 196",
+            "FLAG 16 196 a",
+            "FLAG 176 196 a",
+        )
+        assert await _remove(asc_state, sheet) == {
+            "kept_wires": [
+                {"wire": _w(16, 196, 96, 196), "joins": ["label 'a'", "label 'a'"]},
+                {"wire": _w(96, 196, 176, 196), "joins": ["label 'a'", "label 'a'"]},
+            ]
+        }
+        assert _records(sheet, "FLAG") == ["FLAG 16 196 a", "FLAG 176 196 a"]
 
     async def test_a_wire_on_a_pin_another_part_shares_stays_on_that_pin(
         self, asc_state: SessionState
@@ -288,11 +351,20 @@ class TestWhatTheCleanupKeeps:
         }
 
     async def test_cleanup_off_takes_nothing_and_reports_nothing(self, asc_state: SessionState):
-        sheet = _sheet(asc_state, "off.asc", _R1, "WIRE 96 196 96 100", "FLAG 96 100 a")
+        """Without cleanup the loose ends stay, and the sheet's findings name them."""
+        sheet = _sheet(
+            asc_state, "off.asc", _R1, "WIRE 96 196 96 100", "FLAG 96 100 a", "FLAG 96 292 b"
+        )
         reply = await _edit(asc_state, sheet, [{"op": "remove_component", "reference": "R1"}])
         assert "results" not in reply
+        assert reply["rules_run"]["dangling_wire_end"] == 1
+        assert reply["rules_run"]["dangling_label"] == 1
+        assert reply["warnings"] == [
+            "Wire end at (96,196) meets no pin, net label, or other wire",
+            "Dangling label 'b' at (96,292)",
+        ]
         assert _records(sheet, "WIRE") == ["WIRE 96 196 96 100"]
-        assert _records(sheet, "FLAG") == ["FLAG 96 100 a"]
+        assert _records(sheet, "FLAG") == ["FLAG 96 100 a", "FLAG 96 292 b"]
 
 
 # R2.1 and R3.1 joined twice: through R1.1's point and through R1.2's, round a
@@ -472,10 +544,37 @@ class TestRemovalsInOneBatch:
     ):
         sheet = _sheet(asc_state, "later.asc", _R1, "WIRE 96 196 96 100", "FLAG 96 100 a")
         await _remove(asc_state, sheet)
-        with pytest.raises(NetlistError):
+        before = sheet.read_bytes()
+        with pytest.raises(NetlistError) as refused:
             apply_one(asc_state, sheet, {"op": "remove_wire", "x1": 96, "y1": 196, "x2": 96, "y2": 100})
-        with pytest.raises(NetlistError):
+        assert str(refused.value).startswith(
+            "No wire to remove: no wire has an end at (96,100) or (96,196)."
+        )
+        with pytest.raises(NetlistError) as refused:
             apply_one(asc_state, sheet, {"op": "remove_net_label", "x": 96, "y": 100})
+        assert str(refused.value).startswith("No net label at (96,100), and nothing else is there.")
+        assert sheet.read_bytes() == before
+
+    async def test_a_later_call_names_the_wires_still_at_the_ends_it_named(
+        self, asc_state: SessionState
+    ):
+        """The cleanup took the wire from the pin to P; the wire on from P,
+        past the label there, stays and the refusal names it."""
+        sheet = _sheet(
+            asc_state,
+            "later_named.asc",
+            _R1,
+            "WIRE 96 196 96 100",
+            "WIRE 96 100 192 100",
+            "FLAG 96 100 a",
+        )
+        await _remove(asc_state, sheet)
+        before = sheet.read_bytes()
+        with pytest.raises(NetlistError) as refused:
+            apply_one(asc_state, sheet, {"op": "remove_wire", "x1": 96, "y1": 196, "x2": 96, "y2": 100})
+        message = str(refused.value)
+        assert "the wires with an end at (96,100) or (96,196) are (96,100)->(192,100)" in message
+        assert sheet.read_bytes() == before
 
     async def test_a_wire_moved_away_earlier_in_the_batch_is_not_said_removed(
         self, asc_state: SessionState
@@ -496,7 +595,11 @@ class TestRemovalsInOneBatch:
             {
                 "index": 1,
                 "op": "remove_wire",
-                "error": "No wire to remove: no wire has an end at (400,100).",
+                "error": (
+                    "No wire to remove: no wire has an end at (400,100). To see the wires "
+                    "of a net with their ends, call inspect(kind=\"net\", at=[x, y]) on a "
+                    "point of it."
+                ),
             }
         ]
 

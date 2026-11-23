@@ -28,7 +28,8 @@ Change a directive or comment with `replace_directive`, which keeps its place
 on the sheet; a `regex:` instruction saves typing the old text. To change one
 value, such as one `.param` in a block of several, give `find` (the words as
 the text reads them, found once) and `text` (the words that replace them);
-`instruction`, or `x` and `y`, narrow where `find` is looked for.
+`instruction`, or `x` and `y`, narrow where `find` is looked for. The
+result's `undo` is the op that puts the old words back.
 
 ### Finding the sheet the user has open
 
@@ -365,8 +366,13 @@ they name. The cleanup starts at the part's pins that no other part's pin is
 on and follows the wiring out from there: it takes a wire with an end on such
 a point unless taking it would split a net between pins and labels, then
 carries on from the wire's far end when nothing else is there. A label or
-ground flag left on a taken point or wire goes too when it joins no pin or
-other label. Nothing it does not reach from the part's pins is touched. The
+ground flag left on a taken point or wire goes too when it sits on no pin and
+no wire. Nothing it does not reach from the part's pins is touched. So a stub
+from the pin to P and on to Q, with nothing at P or Q, goes whole, both wires;
+a wire from the pin to R2.1 with a ground flag on the pin stays, with the flag,
+because it still grounds R2.1. No other op cleans up: `move_component`,
+`replace_component` and `move` leave the wiring a part leaves behind where it
+is (`replace_component` names those pins in `left_at`). The
 op's entry in `results` lists each wire it took (`removed_wires`), each label
 (`removed_labels`), and each wire with an end on a pin that it kept, with the
 pins and labels that wire still joins (`kept_wires`). A later `remove_wire` or
