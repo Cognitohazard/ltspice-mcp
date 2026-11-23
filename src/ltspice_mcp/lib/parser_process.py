@@ -43,6 +43,17 @@ _KILLED_REAP_WAIT_S = 0.2
 reap it. The call reports the tree unconfirmed either way."""
 _REPLY_BYTES = 4096
 """The longest reply line a worker or guardian writes."""
+_DARWIN_ALLOCATOR = {
+    "MallocMaxMagazines": "1",
+    "MallocMediumZone": "0",
+    "MallocNanoZone": "0",
+}
+"""How the macOS worker's allocator is set up; libmalloc reads these only at
+start. By default it keeps a pool per CPU or cluster, and on Apple silicon a
+medium pool reserves 128 MiB of address space at its first allocation, so
+moving the worker to another CPU after its address-space limit is set can
+spend most of a small budget at once. One small-object pool and no medium
+pool leave only the decoder's own allocations to grow the address space."""
 _CANCEL_CHECK_S = 0.05
 """How often a call in flight looks at its cancel event. A reply, an early
 exit or excess diagnostics wake it at once; only cancellation waits this long."""
@@ -295,6 +306,7 @@ class ParserTree:
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1",
+            **(_DARWIN_ALLOCATOR if sys.platform == "darwin" else {}),
         }
         argv = [
             executable,
