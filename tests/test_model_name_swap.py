@@ -232,8 +232,10 @@ VOUT_SWAPPED = (9 - 17**0.5) / 8  # Beta=4m, Vto=-1: 0.6096
 
 def _follower(work_dir: Path, swapped: str) -> str:
     """A JFET follower on model 2N5485, which declares ``swapped`` beside it;
-    the two models differ in Beta and Vto, so V(out) says which one ran."""
-    name = f"follower_{swapped}.cir"
+    the two models differ in Beta and Vto, so V(out) says which one ran. The
+    file name holds no model name, because a model name may hold a character
+    (``:``) that no Windows file name can."""
+    name = "follower.cir"
     (work_dir / name).write_text(
         "* JFET source follower\n"
         "V1 vdd 0 5\n"
@@ -292,7 +294,7 @@ _SWAP_FORMS = {
 
 def _drawn_deck(work_dir: Path, name: str) -> str:
     """The follower on model ``name`` alone, for a Monte Carlo draw on it."""
-    netlist = f"drawn_{name}.cir"
+    netlist = "drawn.cir"
     (work_dir / netlist).write_text(
         "* JFET source follower\nV1 vdd 0 5\nV2 in 0 0\n"
         f"J1 vdd in out {name}\nR1 out 0 1k\n"
