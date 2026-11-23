@@ -88,8 +88,10 @@ class TestSemanticGoldens:
         svg = _build(tmp_path, GOLDEN_ASC)
         polys = [p for p in _elements(svg, "polygon") if p.get("class") == "gnd"]
         assert len(polys) == 1
-        # Inverted triangle, top edge through the flag connection point (100,108).
-        assert polys[0].get("points") == "94,108 106,108 100,118"
+        # On pin A, on box2's left edge, with no wire: the base through the
+        # flag's point (100,108) and the apex to the left, out of the part, as
+        # LTspice draws a ground on a bare pin (``symbol_geometry.pin_side``).
+        assert polys[0].get("points") == "100,102 100,114 90,108"
 
     def test_net_label_text(self, tmp_path: Path) -> None:
         svg = _build(tmp_path, GOLDEN_ASC)
@@ -313,15 +315,15 @@ class TestCropBounds:
         assert content is not None
         # Hand-computed, including the glyphs' estimated reach (0.76 of the
         # 23-unit em above the baseline, 0.21 below):
-        #   left  94 = ground glyph at x=100 minus its 6-wide half-width
+        #   left  90 = ground glyph at x=100, pointing left, minus its depth 10
         #   top   88 = "X1" baseline 105 minus 17.5
         #   right 249 = "OUT" starts at its point 200 and is 49 wide
         #   bot  138 = "5" baseline 133 plus 4.8
-        assert (content.x1, content.y1, content.x2, content.y2) == (94, 88, 249, 138)
+        assert (content.x1, content.y1, content.x2, content.y2) == (90, 88, 249, 138)
         svg = render_svg(scene, margin=16)
         root = ET.fromstring(svg)
-        # margin 16 → 78 72, 187 x 82
-        assert root.get("viewBox") == "78 72 187 82"
+        # margin 16 → 74 72, 191 x 82
+        assert root.get("viewBox") == "74 72 191 82"
 
     def test_long_attribute_value_is_not_cropped(self, tmp_path: Path) -> None:
         # Field regression: a trailing value such as "100n" ran past the right
