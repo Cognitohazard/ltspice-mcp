@@ -42,10 +42,10 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import CodeType
-from typing import Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
-from pydantic import Field
+from pydantic import Field, StringConstraints, model_validator
 from spicelib import AscEditor, SpiceEditor
 from spicelib.editor.asc_editor import LTSPICE_ATTRIBUTES, LTSPICE_PARAMETERS
 from spicelib.editor.asy_reader import AsyReader
@@ -1507,6 +1507,153 @@ def _listed_texts(texts: Sequence[Text], shown: int = 10) -> str:
     more = len(texts) - shown
     return f"{listed}; and {more} more" if more > 0 else listed
 
+def _text_place(text: Text) -> dict[str, Any]:
+    return {"kind": _text_kind(text), "x": int(text.coord.X), "y": int(text.coord.Y)}
+
+
+def _named_text(editor: AscEditor, instruction: str, x: int | None, y: int | None) -> Text:
+    """The one text ``instruction`` names, as remove_directive names texts,
+    picked by its anchor when ``x``, ``y`` are given; refused unless exactly one."""
+    named = _text_matcher(instruction)
+    matched = [text for text in editor.directives if named(text)]
+    if not matched:
+        raise _no_text_matched(instruction)
+    if x is not None:
+        there = [text for text in matched if _xy(text.coord) == (x, y)]
+        if not there:
+            raise NetlistError(
+                f"None of the texts {instruction!r} names is anchored at "
+                f"({x}, {y}); they are {_listed_texts(matched)}."
+            )
+        matched = there
+    if len(matched) > 1:
+        place = " at that anchor" if x is not None else ""
+        fix = (
+            "Move one of them first: texts on one anchor cannot be told apart."
+            if x is not None
+            else "Give the x and y of the one to change."
+        )
+        raise NetlistError(
+            f"replace_directive changes one text, and {instruction!r} names "
+            f"{len(matched)}{place}: {_listed_texts(matched)}. {fix}"
+        )
+    return matched[0]
+
+
+def _write_replaced_text(text: Text, new: str) -> None:
+    """Give ``text`` the words ``new``, as it reads, after the checks every
+    replace_directive makes of a new text: not empty, and for a directive,
+    runnable. A comment is not checked."""
+    if not new.strip():
+        raise NetlistError(
+            f"replace_directive would leave the text at ({int(text.coord.X)}, "
+            f"{int(text.coord.Y)}) empty; use remove_directive to remove a text."
+        )
+    if _text_kind(text) == "directive":
+        _refuse_unrunnable_directive(new)
+    text.text = _text_record_body(new)
+
+
+def _reads(words: str) -> str:
+    """Words as a text reads them: a line break, however it is typed, as one ``\\n``."""
+    return words.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _occurrences(shown: str, find: str) -> list[int]:
+    """Where ``find`` starts in ``shown``, overlapping occurrences included."""
+    found: list[int] = []
+    at = shown.find(find)
+    while at >= 0:
+        found.append(at)
+        at = shown.find(find, at + 1)
+    return found
+
+
+def _line_column(shown: str, at: int) -> str:
+    line = shown.count("\n", 0, at) + 1
+    column = at - shown.rfind("\n", 0, at)
+    return f"{line}:{column}"
+
+
+def _lines_through(words: str, first: int, end: int) -> str:
+    """The lines of ``words`` from line ``first`` (0-based) through the one
+    holding character ``end - 1``, or ``first`` alone when ``end`` is at its start."""
+    last = max(words.count("\n", 0, max(end, 0)), first)
+    return "\n".join(words.split("\n")[first : last + 1])
+
+
+def _replace_found_words(editor: AscEditor, op: "OpReplaceDirective", find: str) -> dict[str, Any]:
+    """Change the words ``find`` names, found exactly once in the texts searched:
+    the one ``instruction`` names, else those anchored at ``x``, ``y``, else
+    every directive and comment on the sheet."""
+    find = _reads(find)
+    if op.instruction is not None:
+        searched = [_named_text(editor, op.instruction, op.x, op.y)]
+    elif op.x is not None:
+        searched = [text for text in editor.directives if _xy(text.coord) == (op.x, op.y)]
+        if not searched:
+            raise NetlistError(f"No directive or comment is anchored at ({op.x}, {op.y}).")
+    else:
+        searched = list(editor.directives)
+    holding = [text for text in searched if find in _shown_text(text.text)]
+    if not holding:
+        raise _words_not_found(find, searched, named=op.instruction is not None)
+    if len(holding) > 1:
+        fix = (
+            "move one of them first: texts on one anchor cannot be told apart"
+            if op.x is not None
+            else "give instruction, or x and y"
+        )
+        raise NetlistError(
+            f"{find!r} is in {len(holding)} texts: {_listed_texts(holding)}. "
+            f"replace_directive changes one; {fix}."
+        )
+    (text,) = holding
+    shown = _shown_text(text.text)
+    places = _occurrences(shown, find)
+    if len(places) > 1:
+        at = ", ".join(_line_column(shown, place) for place in places[:10])
+        more = f" and {len(places) - 10} more" if len(places) > 10 else ""
+        raise NetlistError(
+            f"{find!r} occurs {len(places)} times in {shown!r} at "
+            f"({int(text.coord.X)}, {int(text.coord.Y)}), at line:column {at}{more}; "
+            "make find longer, taking in neighbouring words."
+        )
+    (at,) = places
+    words = _reads(op.text)
+    new = shown[:at] + words + shown[at + len(find) :]
+    _write_replaced_text(text, new)
+    first = shown.count("\n", 0, at)
+    return {
+        "op": "replace_directive",
+        "text": {
+            **_text_place(text),
+            "line": first + 1,
+            "was": _lines_through(shown, first, at + len(find)),
+            "now": _lines_through(new, first, at + len(words)),
+        },
+    }
+
+
+def _words_not_found(find: str, searched: Sequence[Text], *, named: bool) -> NetlistError:
+    """The refusal of a find in no text searched; it names the text when one was
+    named, and the reading form when find is in the record's own spelling."""
+    if named:
+        where = f"the text {_shown_text(searched[0].text)!r}"
+    elif searched:
+        where = "any directive or comment searched"
+    else:
+        where = "any directive or comment: the sheet has none"
+    message = f"{find!r} is not in {where}."
+    reading = "\n".join(decode_text_lines(find))
+    if reading != find and any(reading in _shown_text(text.text) for text in searched):
+        message += (
+            " It is written as the record spells it, a line break as \\n and a "
+            f"backslash doubled; as the text reads it is {reading!r}."
+        )
+    return NetlistError(message)
+
+
 
 # ---------------------------------------------------------------------------
 # Handlers — schematic-only operations (.asc only)
@@ -2635,14 +2782,40 @@ class OpRemoveDirective(StrictModel):
     )
 
 
+#: A string kept as given: its space around the words is part of what it says.
+_ExactText = Annotated[str, StringConstraints(strip_whitespace=False)]
+
+
 class OpReplaceDirective(StrictModel):
-    """Change one text; its place, size, justification and kind stay."""
+    """Change one text, whole or the part ``find`` names; its place, size,
+    justification and kind stay."""
 
     op: Literal["replace_directive"]
-    instruction: str = Field(description="Names one text, as remove_directive names them.")
-    text: str = Field(description="The new text.")
-    x: int | None = Field(default=None, description="With y, picks the named text anchored there.")
+    instruction: str | None = Field(
+        default=None,
+        description="Names one text, as remove_directive names them. Required without find.",
+    )
+    find: Annotated[_ExactText, StringConstraints(min_length=1)] | None = Field(
+        default=None,
+        description=(
+            "Words to change, as the text reads, found once in the texts searched; "
+            "text replaces only them."
+        ),
+    )
+    text: _ExactText = Field(description="The new text, or with find the words that replace it.")
+    x: int | None = Field(
+        default=None, description="With y, picks the text anchored there."
+    )
     y: int | None = None
+
+    @model_validator(mode="after")
+    def _names_a_text(self) -> "OpReplaceDirective":
+        if self.instruction is None and self.find is None:
+            raise ValueError(
+                "replace_directive takes instruction, naming the text to replace whole, "
+                "or find, the words in a text to change."
+            )
+        return self
 
 
 class PlotPaneSpec(StrictModel):
@@ -3328,53 +3501,20 @@ def apply_op_inplace(
         }
 
     if isinstance(op, OpReplaceDirective):
-        # One text, named as remove_directive names it, keeps its record (place,
-        # size, justification, kind) and takes the new text.
-        # Everything is checked before the text changes, so a refused op leaves
-        # the sheet as it was, and a dry run's later ops see it so.
+        # One text keeps its record (place, size, justification, kind) and takes
+        # the new text, whole or in the words find names. Everything is checked
+        # before the text changes, so a refused op leaves the sheet as it was,
+        # and a dry run's later ops see it so.
         if (op.x is None) != (op.y is None):
             raise NetlistError("replace_directive takes x and y together, or neither.")
-        named = _text_matcher(op.instruction)
-        matched = [text for text in editor.directives if named(text)]
-        if not matched:
-            raise _no_text_matched(op.instruction)
-        if op.x is not None:
-            there = [
-                text for text in matched if (int(text.coord.X), int(text.coord.Y)) == (op.x, op.y)
-            ]
-            if not there:
-                raise NetlistError(
-                    f"None of the texts {op.instruction!r} names is anchored at "
-                    f"({op.x}, {op.y}); they are {_listed_texts(matched)}."
-                )
-            matched = there
-        if len(matched) > 1:
-            place = " at that anchor" if op.x is not None else ""
-            fix = (
-                "Move one of them first: texts on one anchor cannot be told apart."
-                if op.x is not None
-                else "Give the x and y of the one to change."
-            )
-            raise NetlistError(
-                f"replace_directive changes one text, and {op.instruction!r} names "
-                f"{len(matched)}{place}: {_listed_texts(matched)}. {fix}"
-            )
-        (text,) = matched
-        kind = _text_kind(text)
-        if kind == "directive":
-            _refuse_unrunnable_directive(op.text)
+        if op.find is not None:
+            return _replace_found_words(editor, op, op.find)
+        assert op.instruction is not None  # the model requires one of the two
+        text = _named_text(editor, op.instruction, op.x, op.y)
+        new = op.text.strip()
         was = _shown_text(text.text)
-        text.text = _text_record_body(op.text)
-        return {
-            "op": "replace_directive",
-            "text": {
-                "kind": kind,
-                "x": int(text.coord.X),
-                "y": int(text.coord.Y),
-                "was": was,
-                "now": _shown_text(text.text),
-            },
-        }
+        _write_replaced_text(text, new)
+        return {"op": "replace_directive", "text": {**_text_place(text), "was": was, "now": new}}
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
 
