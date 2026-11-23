@@ -83,6 +83,17 @@ PINATTR SpiceOrder 2
 """
 
 
+def _drawn_ground(at: tuple[int, int], way: str) -> tuple[tuple[int, int], ...]:
+    """The corners of the ground triangle both builds draw at ``at``, pointing
+    ``way``: a base 18 units either side of the point and an apex 18 units
+    away (``draw/ground_flags``)."""
+    x, y = at
+    apex = {"down": (x, y + 18), "up": (x, y - 18), "right": (x + 18, y), "left": (x - 18, y)}
+    if way in ("down", "up"):
+        return ((x - 18, y), (x + 18, y), apex[way])
+    return ((x, y - 18), (x, y + 18), apex[way])
+
+
 class TestAsyParse:
     def test_parses_elements_pins_windows(self, tmp_path: Path) -> None:
         asy = _write(tmp_path / "box2.asy", BOX2_ASY)
@@ -239,6 +250,7 @@ class TestFlagPlacement:
         grounded = sheet + f"FLAG {a[0]} {a[1]} 0\n"
         (flag,) = build_scene(_write(tmp_path / "ground.asc", grounded), resolver).flags
         assert flag.orientation == on_a[0]
+        assert ground_polygon(flag) == _drawn_ground(a, on_a[0])
 
     @pytest.mark.parametrize("rotation", ROTATIONS)
     def test_a_pins_wiring_direction_is_the_side_its_flags_are_drawn_on(
@@ -258,7 +270,9 @@ class TestFlagPlacement:
         drawn = {(pin.x, pin.y): pin.outward for part in scene.symbols for pin in part.pins}
         compared, inside = 0, set()
         for i, name in enumerate(names):
-            info = symbol_info_of(name, read_symbol(read_spice_text(SUITE_SYMBOLS / f"{name}.asy")))
+            info = symbol_info_of(
+                name, read_symbol(read_spice_text(SUITE_SYMBOLS / f"{name}.asy"))
+            )
             for pin in compute_placed_geometry(info, i * 256, 0, rotation)["pins"]:
                 side = drawn[pin["x"], pin["y"]]
                 if side:
@@ -327,10 +341,12 @@ class TestFlagPlacement:
     @pytest.mark.parametrize(
         ("orientation", "expected"),
         [
-            ("down", ((94, 108), (106, 108), (100, 118))),
-            ("up", ((94, 108), (106, 108), (100, 98))),
-            ("right", ((100, 102), (100, 114), (110, 108))),
-            ("left", ((100, 102), (100, 114), (90, 108))),
+            # Both builds draw the base 18 units either side of the point and
+            # the apex 18 units away (draw/ground_flags).
+            ("down", ((82, 108), (118, 108), (100, 126))),
+            ("up", ((82, 108), (118, 108), (100, 90))),
+            ("right", ((100, 90), (100, 126), (118, 108))),
+            ("left", ((100, 90), (100, 126), (82, 108))),
         ],
     )
     def test_ground_polygon_geometry(self, orientation: str, expected: tuple) -> None:
@@ -387,6 +403,7 @@ class TestFlagPlacement:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         assert scene.flags[0].orientation == expected
         assert scene.flags[0].unconnected is False
+        assert ground_polygon(scene.flags[0]) == _drawn_ground(flag_xy, expected)
 
     def test_scene_label_rotation_matches_probe(self, tmp_path: Path) -> None:
         asc = _write(

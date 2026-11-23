@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,12 +19,11 @@ import pytest
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_scene import (
-    GND_DEPTH,
-    GND_HALF_W,
     NetFlag,
     Scene,
     build_scene,
     drawn_text_extent,
+    ground_polygon,
     line_height,
     sheet_view,
 )
@@ -36,8 +36,6 @@ from tests.ltspice_recorder import INPUTS
 #: index 2, and half the base and the depth of the ground triangle at that size.
 DEFAULT_FONT = 28
 GROUND_TRIANGLE = (18, 18)
-#: The triangle the server draws and holds text against, which no build drew.
-GROUND_TRIANGLE_SMALLER_ON_THE_SERVER_ONLY = (6, 10)
 #: A value as the server keeps it, and as both builds draw it.
 DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY = {"66u": "66µ", "20u": "20µ", "100u": "100µ"}
 #: What a symbol draws of its own that the layout check says it does not read
@@ -137,10 +135,57 @@ def test_a_ground_flag_is_a_triangle_at_the_text_size(
             )
 
 
-def test_the_servers_ground_triangle_is_smaller_than_either_build_draws_it():
-    """The render draws this triangle and ``attribute_text_overlap`` holds text
-    against it, so text over the outer part of a flag's triangle is not reported."""
-    assert (GND_HALF_W, GND_DEPTH) == GROUND_TRIANGLE_SMALLER_ON_THE_SERVER_ONLY
+#: Every recorded sheet with a ground the scene draws, at the default text size.
+#: The sheet at ``SchFontSize=40`` is left out: the scene lays a sheet out at the
+#: default size, its text as its grounds.
+SHEETS_WITH_GROUNDS = [
+    "draw/ground_flags",
+    "draw/gnd_and_zero_flags",
+    "draw/suite_nmos4_mirrored",
+    "draw/suite_nmos_mirror_labelled",
+    "draw/suite_two_stage_opamp_drawn",
+    "draw/suite_two_stage_opamp_labelled",
+    "draw/suite_two_stage_opamp_moved",
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SHEETS_WITH_GROUNDS)))
+def test_the_scenes_ground_triangle_is_the_one_ltspice_draws(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Every ground triangle the scene lays out has the size and the turn of
+    the triangle the build drew there: each corner, taken from the triangle's
+    centre, lies on a drawn one. The render draws the scene's triangle and the
+    layout check holds text against it, so both cover what LTspice draws.
+
+    Corners are compared from the centre because the scale taken from a
+    sheet's wires can place a whole drawing a unit or two off (the suite
+    sheets), which moves a triangle without changing its size. A drawn point
+    is a whole number of image units, so each corner and the centre may each
+    lie half an image unit off along an axis: the tolerance is one image unit
+    in sheet units, and never less than ``NEAR``."""
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    near = max(NEAR, 1 / scale.per_unit)
+    grounds = [flag for flag in _scene(build, case_id, tmp_path).flags if flag.is_ground]
+    assert grounds
+    for flag in grounds:
+        corners = _from_centre(_triangle(drawn, scale, flag))
+        assert len(corners) == 3, flag
+        for x, y in _from_centre(ground_polygon(flag)):
+            assert any(abs(x - a) <= near and abs(y - b) <= near for a, b in corners), (
+                f"{flag}: no drawn corner at ({x}, {y}) from the centre among {sorted(corners)}"
+            )
+
+
+def _from_centre(
+    corners: Iterable[tuple[float, float]],
+) -> set[tuple[float, float]]:
+    """Each corner less the mean of the corners."""
+    points = list(corners)
+    cx = sum(x for x, _ in points) / len(points)
+    cy = sum(y for _, y in points) / len(points)
+    return {(x - cx, y - cy) for x, y in points}
 
 
 def _cell(text: dict[str, Any], scale: _Scale) -> tuple[float, float, float, float]:

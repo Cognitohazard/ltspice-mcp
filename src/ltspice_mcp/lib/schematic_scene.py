@@ -114,11 +114,14 @@ _ADVANCES = (
 _OTHER_ADVANCE = 637
 
 # Placement of the ground glyph relative to its FLAG coordinate, and its
-# extent. Shared so the crop box and the drawn output cannot drift apart.
-# A net label is size-2 text like the rest.
+# extent: half its base and its depth, as both builds draw it at the default
+# text size (the draw/ground_flags recordings). LTspice scales the triangle with
+# its SchFontSize setting, as it scales text; the scene lays out both at the
+# default. Shared so the crop box, the drawn output and the layout check cannot
+# drift apart. A net label is size-2 text like the rest.
 FLAG_LABEL_SIZE = 2
-GND_HALF_W = 6
-GND_DEPTH = 10
+GND_HALF_W = 18
+GND_DEPTH = 18
 
 # Side of the small square LTspice draws at a flag that connects to nothing.
 UNCONNECTED_MARKER = 4
@@ -633,8 +636,8 @@ class Scene:
 
         Geometry contributes exact points; text contributes an *estimated*
         extent (see :func:`text_extent`) so a long attribute value or net label
-        is not cropped away, and the ground glyph contributes the box it
-        actually occupies below its flag coordinate.
+        is not cropped away, and a ground contributes its whole triangle
+        (:func:`ground_polygon`), whichever way it points.
         """
         pts: list[tuple[int, int]] = []
         boxes: list[BBox] = []
