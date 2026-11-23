@@ -114,6 +114,13 @@ _ALLOWED: dict[str, str] = {
         "total or route; no branch is near the cap today"
     ),
     "lib/deck_prep.py:stage_sheet": "bounds the files staged for an export, not a reply list",
+    "lib/result_cache.py:snapshot": (
+        "bounds the cached identities one parser request names, so the worker may "
+        "answer 'cached'; a key it does not name is parsed, so nothing is cut"
+    ),
+    "lib/parser_worker.py:parse_request": (
+        "refuses a parser request naming more cached identities than the bound; not a reply"
+    ),
     "lib/experiment_inputs.py:_refusal": (
         "a refusal's sample of constructs, after their total, ending in 'and N more' "
         "with the route (fix these and submit again), and of each one's places, "

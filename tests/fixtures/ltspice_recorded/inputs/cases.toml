@@ -7534,7 +7534,7 @@ M2 = { node_count = "m_four", nodes = ["vdd", "gn", "s2", "s2"], model = "nm" }
 [[grid.element-node.cell]]
 cases = ["deck/bjt_three_node"]
 [grid.element-node.cell.items]
-Q1 = { node_count = "q_three", nodes = ["c1", "b1", "e1"], model = "qn", differs = [{ build = "ltspice26", routes = ["inspect components", "api inspect components"], reason = "inspect's components listing keys the deck's cards by reference across every scope (instances_by_ref with no scope), so the Q1 inside subcircuit CE4 replaces the top-level Q1: the row shows the body's nodes c, b, e and 0 under the top-level name, with no warning." }, { build = "ltspice17", routes = ["inspect components", "api inspect components"], reason = "inspect's components listing keys the deck's cards by reference across every scope (instances_by_ref with no scope), so the Q1 inside subcircuit CE4 replaces the top-level Q1: the row shows the body's nodes c, b, e and 0 under the top-level name, with no warning." }] }
+Q1 = { node_count = "q_three", nodes = ["c1", "b1", "e1"], model = "qn" }
 Q2 = { node_count = "q_four", nodes = ["c2", "b2", "e2"], model = "qn" }
 
 # Cells of element-grid ------------------------------------------------------

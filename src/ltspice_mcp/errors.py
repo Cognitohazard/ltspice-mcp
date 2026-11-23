@@ -401,6 +401,16 @@ class OtherRawNotWritten(ResultError):
     takes_family_hint = False
 
 
+class ResultHoldsNoPointError(ResultError):
+    """A results file holds no point: it is empty, or its first plot declares
+    none, as a simulator that stopped before its first solution leaves it.
+    Its own code, so a reader that can answer from the run's log alone (the
+    summary) tells this from a file it could not read."""
+
+    code = "raw_holds_no_point"
+    takes_family_hint = False
+
+
 class PlotNotFoundError(ResultError):
     """A read named a plot (``plot_index``) its results file does not hold:
     the file can be read, and the request is what does not fit it."""

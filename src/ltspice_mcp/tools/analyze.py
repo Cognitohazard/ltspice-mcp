@@ -39,6 +39,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     ResultError,
     ResultFileNotFoundError,
+    ResultHoldsNoPointError,
     python_route_text,
 )
 from ltspice_mcp.lib import (
@@ -101,6 +102,7 @@ from ltspice_mcp.lib.recipes import (
     ScalarRecipe,
     StepSelectionFields,
     StepSelector,
+    SummaryRecipe,
     WaveformRecipe,
     validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
@@ -1022,7 +1024,7 @@ def _unresolved_source(
 
 
 async def _resolve_sources(
-    inputs: list[AnalyzeSourceInput], state: SessionState
+    inputs: list[AnalyzeSourceInput], state: SessionState, *, summary_only: bool = False
 ) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[Observation]]:
     runs: list[_ResolvedRun] = []
     missing: list[dict[str, Any]] = []
@@ -1122,8 +1124,15 @@ async def _resolve_sources(
             for run in unmatched
         )
         for case in selected:
+            # A call of summaries alone reads what a failed run's log says of
+            # why it ended; any other recipe has nothing of such a run to read.
             ctx = await services.read_selected_case(
-                job, case, state, require_raw=False, other_raw=source_input.other_raw
+                job,
+                case,
+                state,
+                require_raw=False,
+                other_raw=source_input.other_raw,
+                reads_why_it_ended=summary_only,
             )
             if isinstance(ctx, services.CaseUnread):
                 row: dict[str, Any] = {
@@ -1181,16 +1190,18 @@ async def _capture_ltspice_raws(
     transient is not read, and one that is absent or cannot be read is not
     this recipe's failure."""
     for run in runs:
-        raw = run.source.raw
-        dialect = run.source.explicit_dialect or run.source.dialect
-        if raw is None or dialect not in (None, "ltspice"):
-            continue
-        if run.source.plot_index == 0 and not await asyncio.to_thread(
-            may_hold_compressed_transient, raw
-        ):
+        if not await _may_be_coarse(run.source):
             continue
         with contextlib.suppress(ResultError), services.analysis_deadline(deadline):
             await _captured_source(run.source, state, captures, require_raw=True)
+
+
+async def _may_be_coarse(source: services.AnalysisSource) -> bool:
+    """Whether :func:`_capture_ltspice_raws` reads this source's raw."""
+    raw = source.raw
+    if raw is None or (source.explicit_dialect or source.dialect) not in (None, "ltspice"):
+        return False
+    return source.plot_index != 0 or await asyncio.to_thread(may_hold_compressed_transient, raw)
 
 
 def _coarse_waveform_observations(
@@ -1424,17 +1435,28 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
     assert args.sources is not None and args.recipes is not None
     loop = asyncio.get_running_loop()
     initialization_deadline = max(deadline, loop.time() + _MIN_ITEM_DEADLINE_S)
-    runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
+    work = _work_items(args.recipes)
+    runs, missing, source_jobs, observations = await _resolve_sources(
+        args.sources,
+        state,
+        summary_only=all(item["recipe"].get("metric") == "summary" for item in work),
+    )
     manifests: list[dict[str, Any]] = []
     captured_logs: dict[str, DecodedLog] = {}
     captures: dict[_CaptureKey, ParsedArtifacts] = {}
+    # A measurements recipe reads the raw a run may have left coarse
+    # (_capture_ltspice_raws); reading it here as well makes that one read of
+    # the run, which every later read of its log is answered from.
+    reads_coarse_raws = any(item["recipe"].get("metric") == "measurements" for item in work)
     for index, run in enumerate(runs):
         try:
             capture_key = _capture_key(run.source)
             artifacts = captures.get(capture_key)
             if artifacts is None:
                 with services.analysis_deadline(initialization_deadline):
-                    artifacts = await services.load_artifacts(run.source, state, require_raw=False)
+                    artifacts = await _initial_capture(
+                        run.source, state, with_raw=reads_coarse_raws
+                    )
                 captures[capture_key] = artifacts
             manifest = _manifest_for(run, artifacts)
             manifests.append(manifest)
@@ -1501,6 +1523,23 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
         source_jobs=source_jobs,
         ttl_hours=state.config.result_set_ttl_hours,
     )
+
+
+async def _initial_capture(
+    source: services.AnalysisSource, state: SessionState, *, with_raw: bool
+) -> ParsedArtifacts:
+    """The run's first read: its log, and its raw where a recipe reads that
+    whole raw later. A raw that cannot be read leaves the read to the log,
+    as a refused coarse-raw read does; a read that ran out of time is not
+    tried again."""
+    if with_raw and await _may_be_coarse(source):
+        try:
+            return await services.load_artifacts(source, state, require_raw=True)
+        except AnalysisDeadlineExceeded:
+            raise
+        except ResultError:
+            pass
+    return await services.load_artifacts(source, state, require_raw=False)
 
 
 async def _verify_direct_sources(
@@ -2621,10 +2660,33 @@ async def _evaluate_item(
                             )
                         )
                     continue
-                run = replace(
-                    run,
-                    source=await _captured_source(run.source, state, captures, require_raw=True),
-                )
+                captured: services.AnalysisSource | None = None
+                if not isinstance(recipe, SummaryRecipe):
+                    captured = await _captured_source(
+                        run.source, state, captures, require_raw=True
+                    )
+                elif run.source.raw is not None:
+                    with contextlib.suppress(ResultHoldsNoPointError):
+                        captured = await _captured_source(
+                            run.source, state, captures, require_raw=True
+                        )
+                if captured is None:
+                    # No point to step through, in a results file or in a job's
+                    # case that kept none: the summary is what the run's log
+                    # says, once for the run (``metrics.summary``).
+                    records.append(
+                        Record(
+                            manifest_id=run.manifest_id,
+                            source=run.label,
+                            identity=point_identity(run.source, None, {}, plot_index=None),
+                            value=_promote_headlines(
+                                recipe.metric,
+                                await _adapter_value(recipe, run.source, 0, state),
+                            ),
+                        )
+                    )
+                    continue
+                run = replace(run, source=captured)
                 planned = await _step_plan(steps, run.source, state, step_plans)
                 step_plan = planned.steps
                 run = replace(
