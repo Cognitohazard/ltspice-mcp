@@ -138,12 +138,13 @@ class SheetPart:
         return self.record.attr(name)
 
     def shown_attribute(self, name: str) -> str:
-        """The text the scene draws for attribute ``name`` through its window:
-        the part's own value, and none for a value written as ``""``
-        (``draw/attribute_defaults``). LTspice also draws the symbol's value
-        when the part gives none, which the scene does not lay out yet; the
-        layout check says so (``verify.LAYOUT_COVERAGE``)."""
-        return shown_value(self.attribute(name))
+        """The text LTspice draws for attribute ``name`` through its window:
+        the part's own value, else its symbol's, and none for a value written
+        as ``""``, which hides the symbol's too (``draw/attribute_defaults``)."""
+        own = self.attribute(name)
+        if own is None and self.symbol is not None and self.usable:
+            own = self.symbol.file.attr(name)
+        return shown_value(own)
 
     @property
     def element(self) -> str:

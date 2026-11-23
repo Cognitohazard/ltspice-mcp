@@ -6839,6 +6839,237 @@
         ".emf"
       ]
     },
+    "draw/suite_nmos4_mirrored": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_nmos4_mirrored.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "draw/suite_nmos4_mirrored.asc": "3769f1e718d1b3ef331d042ad31fb20c18c0924501bdb628be053663c6621d2b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_nmos4_mirrored.drawn": {
+          "bytes": 2286,
+          "sha256": "352ca51f558d742a8d6b58eeaf9d95e834412f74391abb394a56d782ea3eba1f"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_nmos4_orientations": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_nmos4_orientations.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "draw/suite_nmos4_orientations.asc": "a2f8a3648e1d25458abdd71c295b252e604dba1726fe6550e4bc520b9f53f6ff"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_nmos4_orientations.drawn": {
+          "bytes": 46936,
+          "sha256": "20e97724ae381bac34d2780281d3966b9ffe2643fcda373af48d8c743e2e4606"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_nmos_mirror_labelled": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_nmos_mirror_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_nmos_mirror_labelled.asc": "bbb86b989fd7bf93d4ca9a431a8e94fd4c5e056cdb2986edb514e2f75cffdea5"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_nmos_mirror_labelled.drawn": {
+          "bytes": 4964,
+          "sha256": "75618cb1611d48f5ac3be84cb5aac5937bae0de1636f7f8be4869121ba59c68d"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_npn_orientations": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_npn_orientations.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/npn.asy": "9379afabb39ad3c874ab2f616d6865c08a62828c41cc68fd624e491a29f9a934",
+        "draw/suite_npn_orientations.asc": "d57a7aa15b5d8edb6cf6cb8c0da6d57d3fe6901d902c305bf42aecad2e97f1c8"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_npn_orientations.drawn": {
+          "bytes": 37486,
+          "sha256": "9bb8a56ed42d40e3919daecd652b029f123fbf06cedbd9cab2a772656492e8fe"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_res_orientations": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_res_orientations.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/suite_res_orientations.asc": "d3c9260eff0932f54359847b470ceb0f5b6d7ce5be89ca41500bab32854a5ec4",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_res_orientations.drawn": {
+          "bytes": 32494,
+          "sha256": "d484488456342d0e28906b54d33667bef9963ec9ad7dbb0c5c2ec4fbcbfe06d7"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_two_stage_opamp_drawn": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_two_stage_opamp_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_two_stage_opamp_drawn.asc": "b3229c736d89298e87dfdb9e9f5826cf65e8ce53a0c7c03e42f0bfc57fb36716"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_two_stage_opamp_drawn.drawn": {
+          "bytes": 14870,
+          "sha256": "abed10d9b907d3231bf259c998da571c13992430fc5be9d03d74f126bdcc2c2d"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_two_stage_opamp_labelled": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_two_stage_opamp_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_two_stage_opamp_labelled.asc": "285c8841966b863c5100eca9776cfcfa156b943241ca5006fb58e4871ab1b80a"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_two_stage_opamp_labelled.drawn": {
+          "bytes": 14438,
+          "sha256": "ac74a789d8abab1e8a939ced8ed6d98ff5999f15372ee5bd34411a48980de0f3"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/suite_two_stage_opamp_moved": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/suite_two_stage_opamp_moved.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/suite_two_stage_opamp_moved.asc": "b3229c736d89298e87dfdb9e9f5826cf65e8ce53a0c7c03e42f0bfc57fb36716"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/suite_two_stage_opamp_moved.drawn": {
+          "bytes": 14870,
+          "sha256": "abed10d9b907d3231bf259c998da571c13992430fc5be9d03d74f126bdcc2c2d"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/symbol_text": {
       "behaviour": "sheet-drawing-other-text",
       "command": [

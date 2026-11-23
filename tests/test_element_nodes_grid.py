@@ -42,7 +42,7 @@ GRID = grid("element-node")
 
 #: How many routes answer otherwise than a recorded cell, per build, each
 #: declared on its cell (``differs``). A count may only fall.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 2, "ltspice17": 2}
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 0, "ltspice17": 0}
 
 
 def _recorded(build: str, case_id: str) -> bool:

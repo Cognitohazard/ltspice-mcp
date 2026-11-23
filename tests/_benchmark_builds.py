@@ -583,7 +583,7 @@ def _two_stage_opamp_drawing(sources_dy: int = 0) -> Drawing:
 
 def _two_stage_opamp() -> Build:
     # The inputs are ports, each joined to its source by a label alone.
-    return _two_stage_opamp_drawing().build({"label_island": 2, "attribute_text_overlap": 9})
+    return _two_stage_opamp_drawing().build({"label_island": 2, "attribute_text_overlap": 6})
 
 
 def _two_stage_opamp_moved() -> Build:
@@ -599,7 +599,7 @@ def _two_stage_opamp_moved() -> Build:
         "references": ["Vdd", "Vinp", "Vinn"],
         "drag": True,
     }
-    drawn = d.build({"label_island": 2, "attribute_text_overlap": 9})
+    drawn = d.build({"label_island": 2, "attribute_text_overlap": 6})
     return replace(drawn, style="moved", calls=(*drawn.calls, (lift,)))
 
 

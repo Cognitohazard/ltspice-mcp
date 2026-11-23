@@ -92,7 +92,7 @@
    "ops": 30,
    "origins_from_pins": 8,
    "refused": 0,
-   "reply_bytes": 3483
+   "reply_bytes": 3477
   },
   "digests": [
    "c88321afee254ed6fcafabc866ec10d1d1d9bebd3f821d62fb7c72ec043d7c5a"
@@ -134,7 +134,7 @@
    "ops": 30,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 4704
+   "reply_bytes": 4696
   },
   "digests": [
    "40fef114bf33284bcf994ee6720cc2b87158a7bbb32129ecb39e662390f09257"
@@ -176,7 +176,7 @@
    "ops": 21,
    "origins_from_pins": 5,
    "refused": 0,
-   "reply_bytes": 2938
+   "reply_bytes": 2932
   },
   "digests": [
    "c4456e2cf09211f6f0e2a6ee7c5fae685f2e8650301e2d35c1686245485fbffc"
@@ -217,7 +217,7 @@
    "ops": 21,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 3351
+   "reply_bytes": 3424
   },
   "digests": [
    "eb8729a9d0120934d5b14d8f4383248fc7302cd8202119f189db780ffebac353"
@@ -248,7 +248,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 2,
+   "attribute_text_overlap": 3,
    "label_island": 3
   }
  },
@@ -665,7 +665,7 @@
    "ops": 58,
    "origins_from_pins": 14,
    "refused": 0,
-   "reply_bytes": 7331
+   "reply_bytes": 7062
   },
   "digests": [
    "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61"
@@ -696,7 +696,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 9,
+   "attribute_text_overlap": 6,
    "label_island": 2
   }
  },
@@ -707,7 +707,7 @@
    "ops": 61,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 8993
+   "reply_bytes": 8493
   },
   "digests": [
    "adcad5f63545894caf1b80b1147decf2e98040f0fb78edd2914bbaa5c8217925"
@@ -738,7 +738,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 18,
+   "attribute_text_overlap": 12,
    "label_island": 8
   }
  },
@@ -749,7 +749,7 @@
    "ops": 59,
    "origins_from_pins": 14,
    "refused": 0,
-   "reply_bytes": 10182
+   "reply_bytes": 9912
   },
   "digests": [
    "e22c2793e261e8c253226123ed05659fa2f063b107be82a262cd4caa64a448bc",
@@ -781,7 +781,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 9,
+   "attribute_text_overlap": 6,
    "label_island": 2
   }
  },

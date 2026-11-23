@@ -12,8 +12,8 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
-from ltspice_mcp.lib.parser_capture import CapturedInputs
-from ltspice_mcp.lib.result_cache import ResultCache, resident_size
+from ltspice_mcp.lib.parser_capture import EXISTING_CACHE_KEYS, CapturedInputs
+from ltspice_mcp.lib.result_cache import RESULT_CACHE_ENTRIES, ResultCache, resident_size
 from tests.conftest import LIVENESS_S, header
 
 
@@ -142,8 +142,18 @@ def test_waiting_parser_admission_can_cancel_without_touching_active_call():
 def test_invalid_limits_refuse():
     with pytest.raises(ValueError, match="positive"):
         ResultCache(max_bytes=0, max_entries=1)
-    with pytest.raises(ValueError, match="32"):
-        ResultCache(max_bytes=1, max_entries=33)
+    with pytest.raises(ValueError, match=str(RESULT_CACHE_ENTRIES)):
+        ResultCache(max_bytes=1, max_entries=RESULT_CACHE_ENTRIES + 1)
+
+
+def test_a_parser_request_names_only_the_most_recent_entries(empty_logs):
+    cache = ResultCache()
+    keys = [f"{index:064x}" for index in range(EXISTING_CACHE_KEYS + 3)]
+    for key in keys:
+        cache.put(key, parsed(None, key, empty_logs))
+    cache.get(keys[0])
+    assert cache.entry_count == len(keys)
+    assert set(cache.snapshot()) == {keys[0], *keys[-EXISTING_CACHE_KEYS + 1 :]}
 
 
 def test_log_backing_metadata_is_charged_and_oversized_logs_are_not_retained(tmp_path):

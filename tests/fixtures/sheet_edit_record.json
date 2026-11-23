@@ -74,6 +74,16 @@
    "tests/test_edit_schematic.py::test_a_dry_run_reports_a_mismatch_with_the_netlist"
   ]
  },
+ "0645ad16881e6983": {
+  "answer": {
+   "reply": "ba38933d9ecd1329",
+   "sheet": "c064b176635b7503"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
+  ]
+ },
  "078875ffcb92330e": {
   "answer": {
    "reply": "b764808779f76a17",
@@ -366,6 +376,16 @@
    "tests/test_edit_schematic.py::test_reference_outside_sandbox_names_the_text_alternative"
   ]
  },
+ "19642cc2b293eb8d": {
+  "answer": {
+   "reply": "0b34a05f166a3180",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
+  ]
+ },
  "19aca848f42578fd": {
   "answer": {
    "reply": "9d25dc6cc4b4680a",
@@ -432,7 +452,7 @@
  },
  "1c1a17e02e87f498": {
   "answer": {
-   "reply": "24c97315ce310f1e",
+   "reply": "bc98eee9ad995073",
    "sheet": "88c9ff221b645b1b"
   },
   "tests": [
@@ -724,7 +744,7 @@
  },
  "2e5570504b8617b7": {
   "answer": {
-   "reply": "859035ecb3b3e377",
+   "reply": "1690f52f4e3c18a8",
    "sheet": "89c7502b2db3c9e2"
   },
   "tests": [
@@ -877,6 +897,16 @@
    "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_attribute]"
   ]
  },
+ "3a12e3fea4f4a741": {
+  "answer": {
+   "reply": "2856784b14be9f22",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_recursive_subcircuit_compare.py::test_edit_schematic_reference_stage_states_the_failure"
+  ]
+ },
  "3b41f2c13f80fac4": {
   "answer": {
    "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
@@ -1009,7 +1039,7 @@
  },
  "4273c285db7f3c56": {
   "answer": {
-   "reply": "52edc7aacb195769",
+   "reply": "72fa6517e04d4d46",
    "sheet": "6fc11c0de7f0f741"
   },
   "tests": [
@@ -1037,7 +1067,7 @@
  },
  "44936f3231a1fddb": {
   "answer": {
-   "reply": "643fb72600d476c0",
+   "reply": "bf974999b6f8f040",
    "sheet": "dd78c4a3320c7d3c"
   },
   "tests": [
@@ -1231,7 +1261,7 @@
  },
  "50713347ba1b3a02": {
   "answer": {
-   "reply": "643fb72600d476c0",
+   "reply": "bf974999b6f8f040",
    "sheet": "dd78c4a3320c7d3c"
   },
   "tests": [
@@ -1485,7 +1515,7 @@
  },
  "61ed6a671d7946e6": {
   "answer": {
-   "reply": "c87b3d4a0a5dd004",
+   "reply": "8bb604c19a4b7414",
    "sheet": "bab9cd389e43e638"
   },
   "tests": [
@@ -1727,6 +1757,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_detour]"
   ]
  },
+ "6d66d0050941af71": {
+  "answer": {
+   "reply": "cc07821330ec65a6",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
+  ]
+ },
  "6d78df2f4a93c062": {
   "answer": {
    "reply": "76a0f4764b352f70",
@@ -1801,7 +1841,7 @@
  },
  "721e38944487c29c": {
   "answer": {
-   "reply": "3940d4c02445b693",
+   "reply": "260db9345109dc96",
    "sheet": "7e46f18271775e61"
   },
   "tests": [
@@ -1858,7 +1898,7 @@
  },
  "73e5782b31b157b8": {
   "answer": {
-   "reply": "18b6557e1a538e93",
+   "reply": "ff75c18212f7c568",
    "sheet": "be2910d5a44c2ad2"
   },
   "tests": [
@@ -1886,7 +1926,7 @@
  },
  "75736c9e6e06daf9": {
   "answer": {
-   "reply": "4cceb97b61a84b57",
+   "reply": "3abc0eb3a51d7b84",
    "sheet": "21b15924f8cb8e38"
   },
   "tests": [
@@ -2272,7 +2312,7 @@
  },
  "8d6a2038790cdb1c": {
   "answer": {
-   "reply": "5488d3afba85e8a3",
+   "reply": "1e4d8eb9025e2b1e",
    "sheet": "88c9ff221b645b1b"
   },
   "tests": [
@@ -2557,7 +2597,7 @@
  },
  "9f54541b119dadfc": {
   "answer": {
-   "reply": "95d6b10aff040029",
+   "reply": "3a1091e0615ca862",
    "sheet": "ffba5e1e9d340bbf"
   },
   "tests": [
@@ -2768,7 +2808,7 @@
  },
  "a8dfba030831ed9a": {
   "answer": {
-   "reply": "a7e1ed5014e08e04",
+   "reply": "4bd9db9d6ef1eeb7",
    "sheet": "879e5d6f510a331b"
   },
   "tests": [
@@ -2955,7 +2995,7 @@
  },
  "b4aa88448c3c3e06": {
   "answer": {
-   "reply": "c2ba3b8847246d09",
+   "reply": "b32f70377287e01c",
    "sheet": "d9f7dcc1a8cc6399"
   },
   "tests": [
@@ -3190,7 +3230,7 @@
  },
  "c2ef9dc91b06b977": {
   "answer": {
-   "reply": "58d3aef74f580fa7",
+   "reply": "0a291a96b210a73a",
    "sheet": "30e2f036e5f18bc4"
   },
   "tests": [
@@ -3256,6 +3296,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
+  ]
+ },
+ "c6f24b40036b9874": {
+  "answer": {
+   "reply": "ba38933d9ecd1329",
+   "sheet": "44202d5c22063149"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
   ]
  },
  "c77db94b400b78d7": {

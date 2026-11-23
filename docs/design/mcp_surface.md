@@ -2384,12 +2384,13 @@ the `sha256` `edit_schematic` returned to confirm the image shows that
 revision. The export block's `sha256` is the netlist's.
 
 The layout check reads a part's name, value, Value2, SpiceModel, SpiceLine
-and SpiceLine2 where LTspice draws them, through their windows, with each
-extent estimated from the font's widths rather than measured off its glyphs.
-Any of them but the name written as `""` has no text, and LTspice draws none. A symbol's
-own text, its pin names, an attribute in any other window and a value a part
-takes from its symbol are not read, which the layout check's `observations`
-say, and so does a render's.
+and SpiceLine2 where LTspice draws them, through their windows, taking a value
+from the part's symbol when the part gives none, with each extent estimated
+from the font's widths rather than measured off its glyphs. Any of them but
+the name written as `""` has no text, and LTspice draws none, not even the
+symbol's. A symbol's own text, its pin names and an attribute in any other
+window are not read, which the layout check's `observations` say, and so does
+a render's.
 `attribute_text_overlap` reports text that a wire, a line another
 part draws or a ground flag passes through, or that lies over a rectangle or
 circle another part draws or over other text, by more than the estimate's
@@ -2504,7 +2505,12 @@ cursors where listed:
     but not L1. It is plain text; a wildcard is refused with the plain
     spelling to use. A netlist's components are the cards the simulator
     reads, as the net query's members are: neither the deck's first line,
-    its title, nor a card after `.end`. On a netlist, `detail: "full"` adds each card's
+    its title, nor a card after `.end`. They are the top level's cards; a
+    card of a `.subckt` body follows them with `subcircuit`, the names of
+    the bodies it sits in, outermost first, and a reference is one card
+    only within its scope. The cards of a subcircuit defined more than
+    once in one scope are left out, since no reference there names one
+    card, and a warning names it. On a netlist, `detail: "full"` adds each card's
     `nodes`, `model` and `params`, keyed as written (a key given twice in
     one spelling reads as its last copy), and `repeated_params` for a
     parameter the card gives more than once, compared without case: every
@@ -3085,7 +3091,7 @@ it, and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth. `errors`, `warnings` and `meas_errors` are built from the run's conditions, the source of `diagnostics`: each distinct line the simulator wrote an error or a warning word on is listed by that word (`log_conditions.said_lines`, `said_as`), a line with no word is in neither list, and a relayed line carries that word as its `severity`, or none. Past 50 distinct lines of one condition, `lines_left_out` gives how many more there were, by code. For QSPICE and Xyce, with no recorded wording, a line is read by the generic patterns the server used before it had recordings, under `simulator_error` and `simulator_warning` |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth. `errors`, `warnings` and `meas_errors` are built from the run's conditions, the source of `diagnostics`: each distinct line the simulator wrote an error or a warning word on is listed by that word (`log_conditions.said_lines`, `said_as`), a line with no word is in neither list, and a relayed line carries that word as its `severity`, or none. Past 50 distinct lines of one condition, `lines_left_out` gives how many more there were, by code. For QSPICE and Xyce, with no recorded wording, a line is read by the generic patterns the server used before it had recordings, under `simulator_error` and `simulator_warning`. A run whose results file holds no point (the simulator stopped before its first solution: `ltspice17/log/err_timestep`, `ltspice26/log/err_source_loop`) is summarised from its log alone, with `results_hold_no_point: true` and no plot fields; with no log beside the file, `log_not_found: true` |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed) or `unreadable`, and a value printed once for a stepped run carries `printed_once`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran, dc, ac, noise | `signal` | `window?`, on tran and dc only; `quantiles?`, tran only — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes. An AC or FRA run gives the magnitude in dB and the phase; a noise run has no `mean`. `metrics.signal_stats_defined` decides which runs it reads, over a window or whole |

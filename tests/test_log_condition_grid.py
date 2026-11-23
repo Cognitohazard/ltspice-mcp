@@ -417,14 +417,6 @@ def _summary_value(reply: dict[str, Any]) -> dict[str, Any]:
     return row["value"]
 
 
-def _refused_for_an_empty_raw(reply: dict[str, Any]) -> bool:
-    return any(
-        "expected positive count" in failure.get("message", "")
-        or "contains no complete plots" in failure.get("message", "")
-        for failure in reply.get("failures", ())
-    )
-
-
 _SUMMARY: dict[str, Any] = {
     "recipes": [{"key": "s", "metric": "summary"}],
     "include": {"per_run": {"limit": 10}, "fields": ["value"]},
@@ -463,17 +455,11 @@ async def _every_route(
         state, "analyze_results", sources=[{"path": str(raw), "label": "p"}], **_SUMMARY
     )
     api = SyncApi(state)
-    if _refused_for_an_empty_raw(by_path):
-        # The build wrote a results file holding no point; the summary of a
-        # path reads the raw first and refuses it, so it reports nothing the
-        # log says. Said, not skipped silently.
-        not_run["summary, by path"] = "raw_holds_no_point"
-    else:
-        routes["summary, by path"] = _fields(_summary_value(by_path))
-        api_by_path = await asyncio.to_thread(
-            lambda: api.analyze_results(sources=[{"path": str(raw), "label": "p"}], **_SUMMARY)
-        )
-        routes["api summary, by path"] = _fields(_summary_value(api_by_path))
+    routes["summary, by path"] = _fields(_summary_value(by_path))
+    api_by_path = await asyncio.to_thread(
+        lambda: api.analyze_results(sources=[{"path": str(raw), "label": "p"}], **_SUMMARY)
+    )
+    routes["api summary, by path"] = _fields(_summary_value(api_by_path))
     # A producer the server has no recording of reads with every recorded
     # LTspice build's wording, and one it does not know with every simulator's.
     routes["every recorded LTspice build's rules"] = log_conditions.run_diagnostics(
@@ -568,7 +554,7 @@ async def test_every_recorded_cell_states_its_condition_on_every_route(
     expected = {_states(cell, build) for cell in cells} - {"none"}
     not_run: dict[str, str] = {}
     routes = await _every_route(build, case_id, work_dir, not_run)
-    assert set(not_run.values()) <= {"include_unstaged", "raw_holds_no_point"}, not_run
+    assert set(not_run.values()) <= {"include_unstaged"}, not_run
     print(f"routes not run for {build}/{case_id}: {not_run}")
     text = _log_text(build, case_id)
     named = log_banner_build(text) is not None or rec.generation(build) == "xvii"
