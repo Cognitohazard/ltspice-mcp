@@ -23,7 +23,11 @@ from ltspice_mcp.config import (
     SIM_SECTION,
     ServerConfig,
 )
-from ltspice_mcp.lib import capabilities, hidden_desktop
+from ltspice_mcp.lib import (
+    capabilities,
+    hidden_desktop,
+    simulator_env,  # noqa: F401 - routes spicelib's launches through simulator_environment
+)
 from ltspice_mcp.lib.families import FAMILIES
 from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.symbol_library import SymbolLibrary

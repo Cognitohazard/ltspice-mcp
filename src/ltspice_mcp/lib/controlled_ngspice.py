@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -24,6 +23,7 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
     same_executable,
 )
+from ltspice_mcp.lib.simulator_env import simulator_environment
 from ltspice_mcp.lib.store import Store
 
 if TYPE_CHECKING:
@@ -211,7 +211,7 @@ def controlled_ngspice(
             # A captured include closure needs neither ambient search path.
             env = {
                 key: value
-                for key, value in os.environ.items()
+                for key, value in simulator_environment().items()
                 if not key.upper().startswith("SPICE_")
             }
             env.update(environment)
