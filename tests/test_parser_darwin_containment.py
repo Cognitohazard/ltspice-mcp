@@ -177,7 +177,19 @@ def test_the_owner_ends_the_worker_while_another_thread_holds_the_gil():
         _OWNER
         + """
 signal.signal(signal.SIGUSR1, lambda *_: None)
-time.sleep(0.2)  # timing: lets the owner thread enter write; the mask test does not depend on it
+if sys.platform == "darwin":
+    parser_bootstrap._darwin_owner_proof(owner, time.monotonic() + 30)
+else:
+    # Wait until the kernel shows the owner thread asleep in the pipe write.
+    task = f"/proc/self/task/{owner.native_id}"
+    give_up = time.monotonic() + 30
+    while not (
+        open(f"{task}/stat").read().rsplit(")", 1)[1].split()[0] == "S"
+        and "pipe_write" in open(f"{task}/wchan").read()
+    ):
+        if time.monotonic() >= give_up:
+            raise SystemExit("the owner thread was not seen asleep in write")
+        time.sleep(0.01)
 signal.pthread_kill(owner.ident, signal.SIGUSR1)
 print("holding", flush=True)
 ctypes.PyDLL(None).sleep(60)
@@ -269,10 +281,14 @@ def test_a_mapping_under_the_budget_that_fails_is_refused():
         """
         import resource
         from ltspice_mcp.lib import parser_bootstrap
+        import sys
+        # macOS refuses a limit below the address space already mapped, so
+        # there the limit and the budget are measured from that base.
+        base = parser_bootstrap._darwin_base() if sys.platform == "darwin" else 0
         _, hard = resource.getrlimit(resource.RLIMIT_AS)
-        resource.setrlimit(resource.RLIMIT_AS, (512 << 20, hard))
+        resource.setrlimit(resource.RLIMIT_AS, (base + (512 << 20), hard))
         try:
-            parser_bootstrap._prove_under_budget(1 << 30)
+            parser_bootstrap._prove_under_budget(base + (1 << 30))
         except parser_bootstrap.ContainmentFailed as error:
             raise SystemExit(str(error))
         """
@@ -384,9 +400,16 @@ def _parse(directory: Path, *, warm: bool) -> None:
 def test_a_regular_file_as_owner_fails_before_any_import(call_dir, tmp_path, monkeypatch, warm):
     directory = call_dir()
     real_pipe = os.pipe
+    replaced: list[int] = []
 
     def file_as_owner():
-        read, _ = real_pipe()
+        # Only the owner pipe, the supervisor's first: subprocess makes the
+        # rest, and they must stay pipes.
+        if replaced:
+            return real_pipe()
+        read, write = real_pipe()
+        os.close(write)
+        replaced.append(read)
         return read, os.open(tmp_path / "owner", os.O_WRONLY | os.O_CREAT)
 
     monkeypatch.setattr(os, "pipe", file_as_owner)
@@ -395,6 +418,22 @@ def test_a_regular_file_as_owner_fails_before_any_import(call_dir, tmp_path, mon
     assert caught.value.code == "ownership_failed"
     assert "owner pipe" in str(caught.value)
     assert not parser_file_in(directory, "imported.txt").exists()
+
+
+@macos
+def test_the_owner_proof_refuses_a_thread_that_is_not_in_write():
+    import threading
+
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(parser_bootstrap.ContainmentFailed, match="not seen asleep in write"):
+            # timing: the deadline the proof gives up at, short so the refusal comes quickly
+            parser_bootstrap._darwin_owner_proof(thread, time.monotonic() + 0.5)
+    finally:
+        release.set()
+        thread.join(LIVENESS_S)
 
 
 @macos

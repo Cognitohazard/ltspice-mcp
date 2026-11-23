@@ -207,9 +207,9 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v -n auto
 
-  check-macos: &check-macos
+  check-macos:
     # The suite on a native macOS interpreter, on the matrix's middle
-    # interpreter as on Windows, on Apple silicon here and on Intel below. The
+    # interpreter as on Windows, on Apple silicon and on Intel. The
     # result parser runs here under its macOS containment (lib/parser_bootstrap.py);
     # tests/test_parser_darwin_containment.py has the cases only macOS runs.
     # The server refuses a recoverable ngspice run on macOS, and a test of one
@@ -217,7 +217,11 @@ jobs:
     # must pass here. A landing is held to Linux and Windows: these jobs run at
     # the release tier, and on a pull request that sets the `macos` input.
     if: inputs.tier == 'release' || inputs.macos
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -247,10 +251,6 @@ jobs:
         run: |
           export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
           uv run pytest tests/ -v -n auto -ra
-
-  check-macos-intel:
-    <<: *check-macos
-    runs-on: macos-26-intel
 
   audit:
     if: inputs.tier != 'docs'

@@ -103,7 +103,8 @@ limits its own address space, core files and process count, proves each limit
 holds, and starts a thread that ends the parser when the server's end of a
 pipe closes, before it reads its first request or imports any decoding code.
 It refuses to run as root, which the process limit does not bind, and any
-other platform. `test_parser_darwin_containment.py` checks each step: the
+other platform. There the memory limit is headroom over the address space the worker
+has mapped when it starts, and the worker can start no process. `test_parser_darwin_containment.py` checks each step: the
 pipe, the thread and the limit proofs run on any POSIX host, and the cases
 that need the macOS kernel (a refused owner pipe, an inherited lower address
 space limit, a decode just under and one over the budget, a run as root) run
@@ -124,8 +125,8 @@ cannot.
 
 The release gate in `publish.yml`, and a pull request that changes the
 parser's containment (*CI tiers* below), also run the suite on native macOS
-runners, one on Apple silicon (`check-macos`) and one on Intel
-(`check-macos-intel`, in `.github/workflows/checks.yml`): Python 3.12, ngspice
+runners, on Apple silicon and on Intel (`check-macos (macos-26)` and
+`check-macos (macos-26-intel)`, in `.github/workflows/checks.yml`): Python 3.12, ngspice
 and Cairo from Homebrew, one xdist worker per core, and no coverage gate. On a
 host whose parser refuses (another platform, or macOS as root),
 `tests/parser_refusal.py` reports a test that fails because of that refusal as
@@ -151,6 +152,40 @@ startup is verified.
 
 Everything else runs on macOS and must pass. The job runs with `-ra`, so its
 summary lists every skip with its reason.
+
+The optional Sky130 integration tests find a `sky130A` root containing
+`libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
+console ngspice. `test_nested_targeting.py` changes the width and threshold of a transistor
+inside one subcircuit instance and checks with ngspice that only that
+instance changes, then reads that transistor's operating point through
+`analyze_results`.
+
+`test_native_experiments.py` tests the `pdk_native` variation of
+`run_experiments`, which samples the PDK's own statistical models (guide
+section 'sky130'). It needs a Sky130A installation that matches the profile
+`sky130-e6f9c887-ngspice-v1`, because the server checks the PDK's model files
+against that profile's hashes. It runs each of the four modes (`nominal`,
+`mismatch`, `process`, `combined`) and compares the result with ngspice run
+directly on the same prepared input. It also checks that a sample gives the
+same values whether it runs alone, serially or in parallel; that an edit to a
+device in an included file is applied to a copy of that file; that a case
+whose prepared input or included file changed after preparation fails before
+launch; that a case cancelled before launch records no submission; and that
+each case's record of its seed, inputs and model files (`native_statistics`)
+is stored and read back. The model files are not bundled with the server, so
+a `pdk_native` variation also needs that PDK installed at runtime.
+
+A test that depends on a POSIX facility skips on Windows with the reason
+(symlinks need a privilege; `wslpath` does not exist) instead of failing. Write
+a fixture that must be byte-exact with `newline="\n"` and read it with
+`encoding="utf-8"`, because the platform newline and codec differ on Windows.
+`.gitattributes` turns line-ending conversion off for the whole repository, so
+a checkout has the committed bytes on every platform.
+
+The upload step has no local check. To test trusted publishing and the
+metadata check without a release tag, dispatch the publish workflow by hand
+against TestPyPI with an explicit version.
+
 ### CI tiers
 
 CI (`.github/workflows/ci.yml`) calls the reusable `checks.yml`, which the
@@ -159,7 +194,7 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos`, `check-macos-intel` |
+| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos (macos-26)`, `check-macos (macos-26-intel)` |
 | push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |

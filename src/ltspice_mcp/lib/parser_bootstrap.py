@@ -86,7 +86,8 @@ def _write(directory: Path | None, name: str, value: dict[str, Any]) -> None:
 
 
 def _reply(fd: int, value: dict[str, Any]) -> None:
-    """One line to the supervisor; it may already be gone, which ends nothing here."""
+    """One line to the supervisor. If it is gone, this ends nothing on Linux and
+    Windows; on macOS, where SIGPIPE keeps its default, the write ends the worker."""
     line = json.dumps({"version": 1, **value}, separators=(",", ":")).encode("ascii") + b"\n"
     with contextlib.suppress(OSError):
         os.write(fd, line)
