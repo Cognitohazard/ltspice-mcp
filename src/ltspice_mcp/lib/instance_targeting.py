@@ -36,9 +36,9 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     TokenKind,
     emit,
-    is_model_name,
     lex,
     tokenize_body,
+    written_model_name_refusal,
 )
 from ltspice_mcp.lib.spice_lex_ops import rename_subckt
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
@@ -66,15 +66,6 @@ def validate_segments(instance: Sequence[str]) -> None:
         raise ValueError("instance must be a nonempty list of nonempty reference segments")
 
 
-def model_name_refusal(text: str) -> str:
-    """The refusal for a text that is not a model name, naming the fix."""
-    return (
-        f"{text!r} is not a model name: write the name as its .model card declares "
-        "it, one word with no space, quote, comma, '=', ';', brace or parenthesis, "
-        "and not a lone '$' (a leading digit, as in 2N2222, is fine)"
-    )
-
-
 def validate_payload(attribute: Attribute, parameter: str | None, value: str | float | int) -> str:
     if (parameter is not None) != (attribute == "parameter"):
         raise ValueError("parameter is required iff attribute is parameter")
@@ -84,8 +75,8 @@ def validate_payload(attribute: Attribute, parameter: str | None, value: str | f
         raise ValueError("assignment must be finite")
     text = str(value)
     if attribute == "model":
-        if not is_model_name(text):
-            raise ValueError(model_name_refusal(text))
+        if (refusal := written_model_name_refusal(text)) is not None:
+            raise ValueError(refusal)
         return text
     if not text.strip() or any(c in text for c in "\r\n;$"):
         raise ValueError("payload must be nonempty, single-line and comment-free")

@@ -118,8 +118,8 @@ def test_structured_grid_clones_selected_ancestry_and_preserves_peer(tmp_path):
 @pytest.mark.parametrize(
     ("attribute", "parameter", "value", "reason"),
     [
-        ("model", None, "n w=2u", "is not a model name"),
-        ("model", None, "n\n.end", "is not a model name"),
+        ("model", None, "n w=2u", "holds white space"),
+        ("model", None, "n\n.end", "holds a control character"),
         ("parameter", "w", "1u l=9u", "parameter payload must be one expression"),
         ("parameter", "w", "{1} l=9u", "parameter payload must be one expression"),
         ("parameter", "w", "1}", r"unexpected '\}' \(no matching opener\)"),
@@ -131,7 +131,7 @@ def test_structured_grid_clones_selected_ancestry_and_preserves_peer(tmp_path):
         ("value", "w", "1", "parameter is required iff attribute is parameter"),
         ("parameter", None, "1", "parameter is required iff attribute is parameter"),
         ("parameter", "w=x", "1", "parameter must be an identifier"),
-        ("model", None, "n\r.end", "is not a model name"),
+        ("model", None, "n\r.end", "holds a control character"),
         ("parameter", "w", "1)", r"unexpected '\)' \(no matching opener\)"),
         ("parameter", "w", "{1}junk", "parameter payload must be one expression"),
     ],

@@ -1284,7 +1284,7 @@ pending = "Written where no LTspice runs: record on Windows with scripts/record_
 
 [behaviour.model-name-leading-digit]
 summary = "Whether a build reads a model name that starts with a digit (2N5486) as the name of a .model card, as a model swap writes it on an instance."
-model = ["lib/spice_lex.py", "lib/spice_lex.py:is_model_name", "lib/instance_targeting.py", "lib/variations.py"]
+model = ["lib/spice_lex.py", "lib/spice_lex.py:is_model_name", "lib/spice_lex.py:written_model_name_refusal", "lib/instance_targeting.py", "lib/variations.py"]
 # J1 is swapped from 2N5485 to 2N5486, which differ in Beta and Vto: v(out) is
 # 0.6096 with 2N5486 and 1.5063 with 2N5485.
 inputs = ["deck/model_name_leading_digit.cir"]

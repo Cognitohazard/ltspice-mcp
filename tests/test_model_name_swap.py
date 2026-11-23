@@ -1,20 +1,25 @@
-"""Which text is a model name, through every form that names one.
+"""Which text is a model name: read in a deck, and written into one.
 
-``spice_lex.is_model_name`` answers it, with the characters the lexer reads a
-``.model`` card's name with. A ``REF@model`` swap and the ``instances`` form
-ask it through ``instance_targeting.validate_payload``, and a Monte Carlo
-``rule: "model"`` target asks it directly, all while the call's arguments are
-validated, so a text that is no model name is refused before anything runs.
-The value path (``assign {"J1": [...]}``) writes a component value, which may
-be a model name followed by an area, so it does not ask.
-
-A model name may start with a digit (``2N2222``, as both LTspice builds export
-it), and a text SPICE would read as a number (``1k``, ``2N``) is a model name
-too, because the lexer reads it as one on a ``.model`` card.
+Two questions, two answers, both in ``spice_lex``. ``is_model_name`` reads a
+name a user's deck declares, with the characters the lexer reads a ``.model``
+card's name with; a Monte Carlo ``rule: "model"`` target names such a card and
+asks it. ``written_model_name_refusal`` answers for a name the server writes:
+a ``REF@model`` swap and the ``instances`` form ask it through
+``instance_targeting.validate_payload``. A written name is held to what the
+recordings show LTspice reading in a model name (letters, digits and
+``_ . : -``, a leading digit included, as in ``2N2222``), and a text
+``format.is_scaled_number`` reads whole as a number (a number with at most a
+scale suffix) is
+refused, since a simulator can take it for an area or a value. Each refusal
+comes while the call's arguments are validated, so nothing runs. The value
+path (``assign {"J1": [...]}``) writes a component value, which may be a model
+name followed by an area, so it asks neither.
 """
 
 from __future__ import annotations
 
+import itertools
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -26,9 +31,16 @@ from ltspice_mcp.api import Api, ApiValidationError
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit, validate_payload
 from ltspice_mcp.lib.simulator import detect_simulators
-from ltspice_mcp.lib.spice_lex import is_model_name, lex
+from ltspice_mcp.lib.spice_lex import (
+    SpiceLexError,
+    TokenKind,
+    is_model_name,
+    lex,
+    tokenize_body,
+    written_model_name_refusal,
+)
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
-from ltspice_mcp.lib.variations import AssignVariation, InstanceAssignment, ModelRule
+from ltspice_mcp.lib.variations import AssignVariation, ModelRule
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput
 from tests import _ltspice_recorded as rec
@@ -37,19 +49,33 @@ from tests.conftest import FIXTURES_DIR, dispatch, patch_stub_bootstrap, termina
 #: Part numbers whose model names start with a digit.
 PART_NUMBERS = ("2N5486", "1N4148", "2N2222")
 
-#: Texts SPICE reads as a number elsewhere; on a ``.model`` card the lexer
-#: reads each as the model's name.
+#: Texts ``format.is_scaled_number`` reads whole as a number. On a ``.model``
+#: card the lexer reads each as the model's name, but the server writes none.
 NUMBER_LIKE = ("2222", "1k", "1e3", "2N")
 
-#: Names master accepted: a letter or underscore first, then each character it
-#: allowed after it.
-MASTER_NAMES = ("NM", "_nm", "nch_1v8", "BSIM4.0", "lib:nch", "nch-lvt", "Q2N3904")
+#: Names holding a control character.
+CONTROL = ("NM\x00", "NM\x07", "NM\x7f")
 
-#: Texts that are a model name nowhere: what the refusal is for.
+#: Names holding a character no recording shows in a model name, or starting
+#: with one that no recording shows first.
+UNRECORDED = ("N$1", "a!b", "a+b", "a/b", "a#b", "a[1]", "a|b", "\u00e41", ".nm", "-nm", ":nm")
+
+#: Names the rule before leading digits were allowed accepted: a letter or
+#: underscore first, then each character it allowed after it.
+EARLIER_NAMES = ("NM", "_nm", "nch_1v8", "BSIM4.0", "lib:nch", "nch-lvt", "Q2N3904")
+
+#: Texts that are a model name nowhere: what the read refusal is for.
 NOT_NAMES = ("", "2N 5486", 'NM"x', "NM'x", "NM,x", "NM=x", "NM;x", "{NM}", "NM(x)", "$")
 
 #: What every refusal says to do.
-FIX = "write the name as its .model card declares it"
+FIX = ".model card declares it"
+
+#: The reason each kind of written name is refused for.
+AS_NUMBER = "reads whole as a number"
+AS_CONTROL = "a control character"
+AS_UNRECORDED = "no recording shows LTspice reading"
+
+SWAP_FORMS = ("ref_at_model", "instances")
 
 
 def _forms(name: Any) -> dict[str, dict[str, Any]]:
@@ -70,25 +96,67 @@ def _forms(name: Any) -> dict[str, dict[str, Any]]:
     }
 
 
-# --- the one definition --------------------------------------------------
+def _validate(form: str, name: Any) -> None:
+    RunExperimentsInput.model_validate(
+        {"circuits": [{"path": "dut.cir"}], "variations": [_forms(name)[form]]}
+    )
 
 
-@pytest.mark.parametrize("name", PART_NUMBERS + NUMBER_LIKE + MASTER_NAMES + ("N$1",))
-def test_a_model_name_is_what_the_lexer_reads_as_a_model_cards_name(name: str):
+# --- the two definitions -------------------------------------------------
+
+
+@pytest.mark.parametrize("name", PART_NUMBERS + NUMBER_LIKE + CONTROL + UNRECORDED + EARLIER_NAMES)
+def test_the_lexer_still_reads_each_name_on_a_model_card_of_an_existing_deck(name: str):
     (card,) = [c for c in lex(f".model {name} NJF(Beta=1m)\n").cards if c.kind == "model"]
     assert card.name == name
     assert is_model_name(name)
 
 
+@pytest.mark.parametrize("name", NUMBER_LIKE + CONTROL + UNRECORDED)
+def test_a_name_the_lexer_reads_is_not_always_one_the_server_writes(name: str):
+    # The two definitions differ on purpose: reading must take whatever a
+    # user's deck declares, writing only what a recording shows LTspice read.
+    assert is_model_name(name)
+    assert written_model_name_refusal(name) is not None
+
+
+def _earlier_rule_accepts(text: str) -> bool:
+    """The rule ``validate_payload("model", ...)`` held a written name to before
+    leading digits were allowed."""
+    if not text.strip() or any(c in text for c in "\r\n;$"):
+        return False
+    try:
+        tokens = tokenize_body(text)
+    except SpiceLexError:
+        return False
+    return (
+        len(tokens) == 1
+        and tokens[0].kind == TokenKind.BARE
+        and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$:-]*", text) is not None
+    )
+
+
+def test_a_written_name_the_earlier_rule_refused_is_refused_unless_it_only_starts_with_a_digit():
+    alphabet = "aZ_0.:-$+ \"'\x00e"
+    for size in range(1, 4):
+        for chars in itertools.product(alphabet, repeat=size):
+            text = "".join(chars)
+            accepted = written_model_name_refusal(text) is None
+            if _earlier_rule_accepts(text):
+                assert accepted, text
+            elif accepted:
+                assert text[0].isdigit() and _earlier_rule_accepts("a" + text[1:]), text
+
+
 @pytest.mark.parametrize("text", NOT_NAMES)
-def test_a_text_that_is_no_model_name_is_refused_by_the_one_definition(text: str):
+def test_a_text_that_is_no_model_name_is_refused_by_both_definitions(text: str):
     assert not is_model_name(text)
     with pytest.raises(ValueError, match=FIX):
         validate_payload("model", None, text)
 
 
 @pytest.mark.parametrize("build", ["ltspice26", "ltspice17"])
-def test_the_recorded_export_names_2n2222_a_model_by_the_one_definition(build: str):
+def test_the_recorded_export_names_2n2222_a_model_by_both_definitions(build: str):
     path = FIXTURES_DIR / "ltspice_recorded" / build / "export" / "attributes.net"
     cards = {
         card.name: card for card in lex(path.read_text(encoding="utf-8", errors="replace")).cards
@@ -100,10 +168,10 @@ def test_the_recorded_export_names_2n2222_a_model_by_the_one_definition(build: s
         assert validate_payload("model", None, model) == "2N2222"
 
 
-# --- each caller of the definition, at input ---------------------------------
+# --- each caller, at input ---------------------------------------------------
 
 
-@pytest.mark.parametrize("name", PART_NUMBERS + MASTER_NAMES)
+@pytest.mark.parametrize("name", PART_NUMBERS + EARLIER_NAMES)
 def test_every_form_accepts_a_model_name_at_input(name: str):
     forms = _forms(name)
     AssignVariation.model_validate(forms["ref_at_model"])
@@ -111,36 +179,39 @@ def test_every_form_accepts_a_model_name_at_input(name: str):
     ModelRule.model_validate(forms["monte_carlo_model_rule"]["rules"][0])
 
 
-@pytest.mark.parametrize("name", NUMBER_LIKE)
-def test_every_form_accepts_a_number_like_text_as_a_model_name(name: str):
-    forms = _forms(name)
-    AssignVariation.model_validate(forms["ref_at_model"])
-    InstanceAssignment.model_validate(forms["instances"]["instances"][0])
-    ModelRule.model_validate(forms["monte_carlo_model_rule"]["rules"][0])
+@pytest.mark.parametrize(
+    ("names", "reason"),
+    [(NUMBER_LIKE, AS_NUMBER), (CONTROL, AS_CONTROL), (UNRECORDED, AS_UNRECORDED)],
+    ids=["number_like_by_the_lexers_number_reader", "control", "unrecorded"],
+)
+@pytest.mark.parametrize("form", SWAP_FORMS)
+def test_every_swap_form_refuses_a_name_it_must_not_write_at_input(
+    form: str, names: tuple[str, ...], reason: str
+):
+    for name in names:
+        with pytest.raises(ValidationError, match=reason):
+            _validate(form, name)
 
 
-def test_an_integer_value_swaps_to_the_model_its_digits_name():
-    variation = AssignVariation.model_validate({"kind": "assign", "assign": {"J1@model": [2222]}})
-    assert variation.assign["J1@model"] == [2222]
+@pytest.mark.parametrize("name", NUMBER_LIKE + UNRECORDED)
+def test_a_monte_carlo_model_rule_reads_a_name_the_deck_declares_however_written(name: str):
+    # The rule writes no name: it draws on a card the deck already declares.
+    ModelRule.model_validate(_forms(name)["monte_carlo_model_rule"]["rules"][0])
 
 
-def test_a_dollar_inside_a_name_is_a_model_name_and_a_lone_dollar_is_a_comment():
-    AssignVariation.model_validate({"kind": "assign", "assign": {"J1@model": ["N$1"]}})
-    with pytest.raises(ValidationError, match=FIX):
-        AssignVariation.model_validate({"kind": "assign", "assign": {"J1@model": ["$"]}})
+def test_an_integer_swap_value_reads_as_a_number_and_is_refused():
+    with pytest.raises(ValidationError, match=AS_NUMBER):
+        AssignVariation.model_validate({"kind": "assign", "assign": {"J1@model": [2222]}})
 
 
 @pytest.mark.parametrize("text", NOT_NAMES)
-@pytest.mark.parametrize("form", ["ref_at_model", "instances", "monte_carlo_model_rule"])
+@pytest.mark.parametrize("form", [*SWAP_FORMS, "monte_carlo_model_rule"])
 def test_every_form_refuses_a_text_that_is_no_model_name_at_input(form: str, text: str):
-    variation = _forms(text)[form]
     with pytest.raises(ValidationError, match=FIX):
-        RunExperimentsInput.model_validate(
-            {"circuits": [{"path": "dut.cir"}], "variations": [variation]}
-        )
+        _validate(form, text)
 
 
-@pytest.mark.parametrize("name", PART_NUMBERS + NUMBER_LIKE + MASTER_NAMES)
+@pytest.mark.parametrize("name", PART_NUMBERS + EARLIER_NAMES)
 def test_the_write_claim_rewrites_the_instance_to_the_swapped_name(name: str):
     # The route a REF@model swap takes after expansion: apply_edit on a copy
     # of the card, then the written card is read back as an instance.
@@ -247,8 +318,8 @@ def api(ngspice_state: SessionState, monkeypatch: pytest.MonkeyPatch):
 @_needs_ngspice
 @pytest.mark.asyncio
 @pytest.mark.parametrize("form", list(_SWAP_FORMS))
-@pytest.mark.parametrize("name", PART_NUMBERS)
-async def test_a_swap_to_a_part_number_runs_the_swapped_model_through_the_tool(
+@pytest.mark.parametrize("name", PART_NUMBERS + EARLIER_NAMES)
+async def test_a_swap_to_a_part_number_or_a_name_the_earlier_rule_accepts_runs_it_through_the_tool(
     ngspice_state: SessionState, work_dir: Path, name: str, form: str
 ):
     payload = _payload(_follower(work_dir, name), _SWAP_FORMS[form](name))
@@ -259,8 +330,8 @@ async def test_a_swap_to_a_part_number_runs_the_swapped_model_through_the_tool(
 
 @_needs_ngspice
 @pytest.mark.parametrize("form", list(_SWAP_FORMS))
-@pytest.mark.parametrize("name", PART_NUMBERS)
-def test_a_swap_to_a_part_number_runs_the_swapped_model_through_the_api(
+@pytest.mark.parametrize("name", PART_NUMBERS + EARLIER_NAMES)
+def test_a_swap_to_a_part_number_or_a_name_the_earlier_rule_accepts_runs_it_through_the_api(
     api: Api, work_dir: Path, name: str, form: str
 ):
     payload = _payload(_follower(work_dir, name), _SWAP_FORMS[form](name))
@@ -313,6 +384,43 @@ def test_a_text_that_is_no_model_name_is_refused_by_the_api_before_a_run(
 ):
     payload = _payload(_follower(work_dir, "2N5486"), _forms(text)[form])
     with pytest.raises(ApiValidationError, match=FIX):
+        api.run_experiments(**payload)
+    assert not _raw_files(work_dir)
+
+
+#: One written name of each refused kind, with the reason it is refused for.
+_UNWRITTEN = [
+    ("2222", AS_NUMBER),
+    ("1k", AS_NUMBER),
+    ("1e3", AS_NUMBER),
+    ("NM\x01", AS_CONTROL),
+    ("N$1", AS_UNRECORDED),
+]
+
+
+@_needs_ngspice
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("text", "reason"), _UNWRITTEN)
+@pytest.mark.parametrize("form", SWAP_FORMS)
+async def test_a_swap_to_a_name_it_must_not_write_is_refused_by_the_tool_before_a_run(
+    ngspice_state: SessionState, work_dir: Path, form: str, text: str, reason: str
+):
+    payload = _payload(_follower(work_dir, "2N5486"), _forms(text)[form])
+    result = await dispatch(ngspice_state, "run_experiments", payload)
+    assert result.is_error
+    assert reason in str(result.structured_content), result.structured_content
+    assert "job_id" not in (result.structured_content or {})
+    assert not _raw_files(work_dir)
+
+
+@_needs_ngspice
+@pytest.mark.parametrize(("text", "reason"), _UNWRITTEN)
+@pytest.mark.parametrize("form", SWAP_FORMS)
+def test_a_swap_to_a_name_it_must_not_write_is_refused_by_the_api_before_a_run(
+    api: Api, work_dir: Path, form: str, text: str, reason: str
+):
+    payload = _payload(_follower(work_dir, "2N5486"), _forms(text)[form])
+    with pytest.raises(ApiValidationError, match=re.escape(reason)):
         api.run_experiments(**payload)
     assert not _raw_files(work_dir)
 

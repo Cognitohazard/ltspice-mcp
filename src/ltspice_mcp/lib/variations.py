@@ -43,7 +43,6 @@ from ltspice_mcp.lib.instance_targeting import (
     TargetEditor,
     apply_edit,
     canonical_target,
-    model_name_refusal,
     select,
     source_lineage,
     source_origins,
@@ -255,11 +254,18 @@ class ModelRule(RandomRuleBase):
 
     # Replaces the base class's check of the same name: a model target is
     # refused, empty or not, with the refusal that names what a model name is.
+    # The target names a card the deck already declares, so it is read by the
+    # lexer's definition (``is_model_name``), not held to the narrower rule
+    # for a name the server writes (``written_model_name_refusal``).
     @field_validator("target")
     @classmethod
     def _target_not_empty(cls, value: str) -> str:
         if not is_model_name(value):
-            raise ValueError(model_name_refusal(value))
+            raise ValueError(
+                f"{value!r} is not a model name: write the name as its .model card "
+                "declares it, one word with no space, quote, comma, '=', ';', brace "
+                "or parenthesis, and not a lone '$'"
+            )
         return value
 
 
