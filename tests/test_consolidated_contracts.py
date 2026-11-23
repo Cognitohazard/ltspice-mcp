@@ -844,7 +844,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # changes only the words it names: one value in a block of .param lines
     # needed the whole block retyped, which risked changing its other lines.
     # Measured 16,634.
-    "edit_schematic": 16650,
+    # Raised by about 100 characters for remove_component's cleanup, whose
+    # result now names the wires and labels it took and the wires it kept, so
+    # the removal can be checked and undone; it used to give only a count.
+    # Measured 16,732.
+    "edit_schematic": 16750,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
