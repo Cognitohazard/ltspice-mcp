@@ -527,6 +527,41 @@ def test_every_text_on_the_suite_sheets_lies_where_ltspice_draws_it(
             away.append((case_id, text, x, y))
     expected = CORNER_LABEL_DRAWN_BELOW_BY_LTSPICE_AND_TO_THE_RIGHT_BY_THE_SCENE
     assert set(away) == {key for key in expected if key[0] == case_id}
-    # And nothing the build draws is left out, a value from the symbol included.
+    # And the build draws each text as many times as the scene lays it out, a
+    # value from the symbol included.
     shown = Counter(DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY.get(t, t) for t, *_ in texts)
-    assert not Counter(t["text"] for t in drawn["texts"] if t["text"]) - shown
+    assert Counter(t["text"] for t in drawn["texts"] if t["text"]) == shown
+
+
+#: The suite sheets with a ground on a part's pin and no wire there.
+SUITE_SHEETS_WITH_GROUNDS = [
+    "draw/suite_nmos4_mirrored",
+    "draw/suite_nmos_mirror_labelled",
+    "draw/suite_two_stage_opamp_drawn",
+    "draw/suite_two_stage_opamp_labelled",
+    "draw/suite_two_stage_opamp_moved",
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUITE_SHEETS_WITH_GROUNDS)))
+def test_every_ground_on_the_suite_sheets_points_where_ltspice_draws_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """A ground on a part's pin with no wire points out of the part, on the
+    side its pin faces (``symbol_geometry.pin_side``), as a label's text goes."""
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    grounds = [flag for flag in _scene(build, case_id, tmp_path).flags if flag.is_ground]
+    assert grounds
+    for flag in grounds:
+        # The apex is the corner whose other two, the base's ends, lie level or
+        # upright: within a few units, at these sheets' coarse scale.
+        corners = _triangle(drawn, scale, flag)
+        ((x, y),) = [
+            (cx, cy)
+            for cx, cy in corners
+            if len(base := sorted(corners - {(cx, cy)})) == 2
+            and min(abs(base[0][0] - base[1][0]), abs(base[0][1] - base[1][1])) <= 3
+        ]
+        way = ("right" if x > 0 else "left") if abs(x) > abs(y) else ("down" if y > 0 else "up")
+        assert way == flag.orientation, (flag.x, flag.y)

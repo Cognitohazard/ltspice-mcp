@@ -352,8 +352,8 @@ model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_rende
 # wires it holds, which give the scale from the image's units to sheet units.
 
 [behaviour.sheet-drawing-other-text]
-summary = "What else a build draws on a part: SpiceLine, SpiceLine2 and SpiceModel text through visible WINDOW 39, 40 and 38 lines, a window at the symbol's origin and one at size 0, two attributes at one point drawn over each other, a symbol's own value when the part gives none, nothing for a value written as \"\", and a symbol's own TEXT line and its pin names."
-model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/sheet_findings.py", "lib/schematic_renderer.py", "tools/verify.py"]
+summary = "What else a build draws on a part: SpiceLine, SpiceLine2 and SpiceModel text through visible WINDOW 39, 40 and 38 lines, a window at the symbol's origin and one at size 0, two attributes at one point drawn over each other, a symbol's own value when the part gives none, nothing for a value written as \"\", and a symbol's own TEXT line and its pin names. And the suite's own sheets drawn with its stand-in symbols, every text and ground on them: a net label or a ground on a part's pin with no wire is drawn out of the part, on the side of the symbol's box the pin lies on, the top or bottom at a corner."
+model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/sheet_findings.py", "lib/schematic_renderer.py", "lib/symbol_geometry.py", "tools/verify.py"]
 
 # ---------------------------------------------------------------- decks
 

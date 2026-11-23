@@ -40,9 +40,10 @@ from ltspice_mcp.lib.sheet import (
     read_sheet_text,
 )
 from ltspice_mcp.lib.sheet_findings import Part, SheetView, label_connects
-from ltspice_mcp.lib.symbol_file import SymbolArc, SymbolFile
+from ltspice_mcp.lib.symbol_file import SymbolArc
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
+    pin_side,
     place_box,
     place_point,
 )
@@ -227,14 +228,11 @@ def _outward_at(symbols: Sequence[PlacedSymbol], x: int, y: int) -> set[str]:
     """The side a part faces out on at its pin at ``(x, y)``, as the side a
     wire there would occupy, when one part's pin is there, else nothing.
 
-    Both builds lay a net label on a part's pin with no wire out away from the
-    part, on the side of the symbol's box the pin lies on, the top or bottom
-    at a corner, as the symbol is drawn, then turned with the part
-    (``draw/suite_nmos4_orientations``, ``draw/suite_npn_orientations``, every
-    placement; ``DrawPin.outward``). Where a wire meets the label the wire
-    decides, and where two parts' pins meet nothing is recorded, so the label
-    keeps its resting side. A ground flag on a pin is not recorded either and
-    keeps its own.
+    Both builds draw a net label or a ground on a part's pin with no wire out
+    of the part, on the side ``symbol_geometry.pin_side`` gives
+    (``DrawPin.outward``). Where a wire meets the flag the wire decides. Where
+    two parts' pins meet, or the pin lies inside its symbol's box, nothing is
+    recorded, so the flag keeps its resting side.
     """
     sides = [
         pin.outward
@@ -248,25 +246,6 @@ def _outward_at(symbols: Sequence[PlacedSymbol], x: int, y: int) -> set[str]:
     return {_GLYPH_AWAY_FROM[sides[0]]}
 
 
-def _outward(file: SymbolFile, x: int, y: int) -> tuple[int, int] | None:
-    """Which way the symbol-local pin at ``(x, y)`` faces out of the symbol's
-    box: up or down on its top or bottom edge, which win at a corner, else
-    left or right; ``None`` for a pin inside the box."""
-    box = file.bbox
-    if y == box.y1:
-        return (0, -1)
-    if y == box.y2:
-        return (0, 1)
-    if x == box.x1:
-        return (-1, 0)
-    if x == box.x2:
-        return (1, 0)
-    return None
-
-
-_SIDE_OF = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
-
-
 def resolve_flag_placement(
     is_ground: bool, occupied: Sequence[str] | set[str]
 ) -> tuple[str, bool]:
@@ -275,26 +254,30 @@ def resolve_flag_placement(
     ``orientation`` is the side the glyph extends toward — the ground triangle's
     apex, or the side a net label's text sits on. ``text_vertical`` is True when
     a net label's text is rotated a quarter turn to run along the wire axis.
+    ``occupied`` is the sides a wire runs off the point in, or, on a part's pin
+    with no wire, the side opposite the one the part faces out on
+    (``_outward_at``).
 
-    Verified against an LTspice screenshot of the reference schematic: with a
-    single attached wire the glyph always continues the wire's travel, and a net
-    label on a *vertical* wire has its text rotated to read bottom-to-top while
-    one on a horizontal wire stays horizontal.
+    With one side occupied the glyph continues away from it, and a net label
+    on a vertical run has its text rotated to read bottom-to-top while one on a
+    horizontal run stays horizontal: checked against a screenshot of the
+    reference schematic for a single wire, and against both builds' drawings
+    for a pin with no wire (``draw/suite_*``).
 
-    Two cases are **not** verified and are documented fallbacks, because that
-    schematic yielded only one sample of each:
+    Two cases are **not** established, and are documented fallbacks:
 
-    * More than one wire — a corner, or a flag dropped mid-span — where no
-      single wire determines a side. The code scans for the first side no wire
-      occupies, in resting-first order. For the one corner sample available (a
-      wire from the west meeting one running south) that yields a horizontal
-      label above the point, which is what LTspice drew; note the scan can give
-      a *ground* at that same corner "up" rather than its usual "down", a case
-      the reference schematic does not cover. So: one observed sample, plus a
-      collision-avoidance rule of ours — not an established LTspice rule.
-    * The rotated text read bottom-to-top in both vertical samples available, so
-      that is implemented unconditionally; whether LTspice ever flips the
-      reading direction by side is untested.
+    * More than one side occupied — a corner, or a flag dropped mid-span. The
+      code takes the first side nothing occupies, in resting-first order. Of
+      two corner samples, it matches one (a wire from the west meeting one
+      running south: a label above the point) and not the other (wires to the
+      left and up: LTspice centres the label below, and this gives the right,
+      ``CORNER_LABEL_DRAWN_BELOW_BY_LTSPICE_AND_TO_THE_RIGHT_BY_THE_SCENE`` in
+      ``tests/test_recorded_ltspice_drawing.py``). The scan can also give a
+      *ground* at a corner "up" rather than its usual "down", which no sample
+      covers.
+    * The rotated text read bottom-to-top in every vertical sample, so that is
+      implemented unconditionally; whether LTspice ever flips the reading
+      direction by side is untested.
     """
     dirs = set(occupied)
     if len(dirs) == 1:
@@ -433,8 +416,8 @@ def flag_label_layout(flag: NetFlag) -> TextLayout:
 
     A label on a vertical wire has its text turned to read bottom to top (see
     :func:`resolve_flag_placement`). LTspice starts or ends the text at the
-    point, centred across the wire; with no wire to run along, the text sits
-    centred above or below the point.
+    point, centred across the wire; with no wire and no part's pin to run
+    along, the text sits centred above or below the point.
     """
     align = _FLAG_JUSTIFICATIONS.get((flag.orientation, flag.text_vertical), "Left")
     layout = text_layout(align, FLAG_LABEL_SIZE)
@@ -527,8 +510,9 @@ class DrawPin:
     x: int
     y: int
     name: str = ""
-    #: The side the part faces out on at this pin, turned with the part:
-    #: where a net label on the pin with no wire puts its text (``_outward``).
+    #: The side the part faces out on at this pin, turned with the part
+    #: (``symbol_geometry.pin_side``): where a net label or a ground on the pin
+    #: with no wire is drawn; empty for a pin inside the symbol's box.
     outward: str = ""
 
     def points(self) -> tuple[tuple[int, int], ...]:
@@ -587,7 +571,8 @@ class NetFlag:
     is_ground: bool
     # Direction the glyph extends away from the connection point: the ground
     # triangle's apex, or the side the net-label text sits on. Derived from the
-    # attached wires by :func:`resolve_flag_placement`.
+    # attached wires, or from the part whose pin the flag is on, by
+    # :func:`resolve_flag_placement`.
     orientation: str = "down"
     # Net label only: text is rotated a quarter turn to run along a vertical wire.
     text_vertical: bool = False
@@ -781,9 +766,9 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
         if poly is not None:
             placed.graphics.append(poly)
     outward = {
-        place_point(pin.x, pin.y, ox, oy, rot): _SIDE_OF[_apply_rotation(*facing, rot)]
+        place_point(pin.x, pin.y, ox, oy, rot): side
         for pin in drawing.pins
-        if (facing := _outward(drawing, pin.x, pin.y)) is not None
+        if (side := pin_side(drawing.bbox, pin.x, pin.y, rot)) is not None
     }
     placed.pins.extend(
         DrawPin(pin.x, pin.y, pin.name, outward.get((pin.x, pin.y), "")) for pin in part.pins
@@ -908,7 +893,7 @@ def scene_of_sheet(
     flags = [NetFlag(x, y, name, is_ground=(name.strip() == "0")) for x, y, name in sheet.labels]
     for fl in flags:
         occupied = wire_directions_at(wires, fl.x, fl.y)
-        if not occupied and not fl.is_ground:
+        if not occupied:
             occupied = _outward_at(scene.symbols, fl.x, fl.y)
         orientation, text_vertical = resolve_flag_placement(fl.is_ground, occupied)
         scene.flags.append(

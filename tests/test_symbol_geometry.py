@@ -372,44 +372,58 @@ class TestPinDirection:
     """Test pin wire direction inference from position relative to bbox center."""
 
     # Bbox at origin spanning (0,0) to (100,80) — center at (50, 40)
-    BBOX_X = 0
-    BBOX_Y = 0
-    BBOX_W = 100
-    BBOX_H = 80
+    BBOX = BBox(0, 0, 100, 80)
+
+    def test_a_pin_on_an_edge_faces_out_of_it_and_a_corner_up_or_down(self):
+        """The side ``pin_side`` gives, which LTspice draws a flag on: a
+        transistor's drain at its box's corner faces up, not right."""
+        assert _pin_direction(100, 40, self.BBOX, "R0") == "right"
+        assert _pin_direction(0, 40, self.BBOX, "R0") == "left"
+        assert _pin_direction(100, 0, self.BBOX, "R0") == "up"
+        assert _pin_direction(100, 80, self.BBOX, "R0") == "down"
+        assert _pin_direction(100, 0, self.BBOX, "R90") == "right"
+
+    def test_a_symbol_drawn_as_one_line_faces_out_at_its_ends(self):
+        """A box with no height has no top or bottom, so a level symbol's end
+        pins face left and right, and an upright one's up and down."""
+        assert _pin_direction(0, 0, BBox(0, 0, 64, 0), "R0") == "left"
+        assert _pin_direction(64, 0, BBox(0, 0, 64, 0), "R0") == "right"
+        assert _pin_direction(0, 0, BBox(0, 0, 0, 64), "R0") == "up"
+        assert _pin_direction(0, 64, BBox(0, 0, 0, 64), "R0") == "down"
 
     def test_right_edge(self):
         # Pin far to the right of center
-        d = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(90, 40, self.BBOX, "R0")
         assert d == "right"
 
     def test_left_edge(self):
-        d = _pin_direction(10, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(10, 40, self.BBOX, "R0")
         assert d == "left"
 
     def test_top_edge(self):
         # Pin far above center (y < cy)
-        d = _pin_direction(50, 5, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(50, 5, self.BBOX, "R0")
         assert d == "up"
 
     def test_bottom_edge(self):
-        d = _pin_direction(50, 75, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(50, 75, self.BBOX, "R0")
         assert d == "down"
 
     def test_rotation_flips_direction(self):
         """A pin on the right edge under R0 should report left under R180."""
-        d_r0 = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
-        d_r180 = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R180")
+        d_r0 = _pin_direction(90, 40, self.BBOX, "R0")
+        d_r180 = _pin_direction(90, 40, self.BBOX, "R180")
         assert d_r0 == "right"
         assert d_r180 == "left"
 
     def test_r90_rotates_direction(self):
         """A pin on the right edge under R0 should report down under R90."""
-        d = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R90")
+        d = _pin_direction(90, 40, self.BBOX, "R90")
         assert d == "down"
 
     def test_mirror_m0_flips_horizontal(self):
         """M0 mirrors x-axis: right becomes left."""
-        d = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "M0")
+        d = _pin_direction(90, 40, self.BBOX, "M0")
         assert d == "left"
 
     def test_centered_bbox(self):
@@ -419,15 +433,15 @@ class TestPinDirection:
         """
         # Bug regression: previously, _pin_direction assumed bbox started at (0,0),
         # so a pin at (0,-40) on a centered symbol was misclassified.
-        d = _pin_direction(0, -40, -50, -40, 100, 80, "R0")
+        d = _pin_direction(0, -40, BBox(-50, -40, 50, 40), "R0")
         assert d == "up"
 
     def test_center_pin_defaults(self):
         """A pin at the exact center picks a direction (not 'unknown')."""
-        d = _pin_direction(50, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(50, 40, self.BBOX, "R0")
         assert d in ("up", "down", "left", "right")
 
     def test_zero_bbox_no_crash(self):
         """Zero-size bbox should not crash (max(w,1) guard)."""
-        d = _pin_direction(5, 5, 0, 0, 0, 0, "R0")
-        assert d in ("up", "down", "left", "right", "unknown")
+        d = _pin_direction(5, 5, BBox(0, 0, 0, 0), "R0")
+        assert d in ("up", "down", "left", "right")

@@ -47,6 +47,8 @@ from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_file import read_symbol
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
+    compute_placed_geometry,
+    symbol_info_of,
 )
 from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver
 from tests._schematic_fixtures import (
@@ -54,6 +56,7 @@ from tests._schematic_fixtures import (
     BOX2_ASY,
     STACKED_ATTRS_ASY,
     open_editor,
+    suite_resolver,
 )
 from tests._schematic_fixtures import (
     asc_with_box2 as _asc_with_box2,
@@ -64,6 +67,20 @@ from tests._schematic_fixtures import (
 from tests._schematic_fixtures import (
     write_file as _write,
 )
+
+SUITE_SYMBOLS = Path(__file__).parent / "fixtures" / "symbols"
+ROTATIONS = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
+#: A box whose pin ``E`` is on its left edge and ``I`` inside it.
+INNER_PIN_ASY = """Version 4
+SymbolType CELL
+RECTANGLE Normal 0 0 64 64
+PIN 0 32 NONE 0
+PINATTR PinName E
+PINATTR SpiceOrder 1
+PIN 48 32 NONE 0
+PINATTR PinName I
+PINATTR SpiceOrder 2
+"""
 
 
 class TestAsyParse:
@@ -205,8 +222,9 @@ class TestFlagPlacement:
     ) -> None:
         """box2's pin A is on its box's left edge and B on its right, so a label
         on either with no wire puts its text out of the part, turned with it,
-        as both builds draw it (``draw/suite_nmos4_orientations``). A wire
-        there decides instead, and a ground keeps its resting side."""
+        as both builds draw it (``draw/suite_nmos4_orientations``), and a
+        ground there points out of the part too
+        (``draw/suite_two_stage_opamp_drawn``). A wire there decides instead."""
         _write(tmp_path / "box2.asy", BOX2_ASY)
         resolver = SymbolResolver(local_dir=tmp_path)
         sheet = _asc_with_box2(rotation, 96, 96)
@@ -220,7 +238,59 @@ class TestFlagPlacement:
         assert (flag.orientation, flag.text_vertical) == ("down", True)
         grounded = sheet + f"FLAG {a[0]} {a[1]} 0\n"
         (flag,) = build_scene(_write(tmp_path / "ground.asc", grounded), resolver).flags
-        assert flag.orientation == "down"
+        assert flag.orientation == on_a[0]
+
+    @pytest.mark.parametrize("rotation", ROTATIONS)
+    def test_a_pins_wiring_direction_is_the_side_its_flags_are_drawn_on(
+        self, tmp_path: Path, rotation: str
+    ) -> None:
+        """The ``dir`` the tools give a pin and the side a label or ground on
+        it is drawn on are one answer (``symbol_geometry.pin_side``), at every
+        placement of every symbol the suite holds, a transistor's corner pins
+        included, where LTspice draws the flag above or below the part."""
+        names = sorted(path.stem for path in SUITE_SYMBOLS.glob("*.asy"))
+        sheet = "Version 4\nSHEET 1 8000 800\n" + "".join(
+            f"SYMBOL {name} {i * 256} 0 {rotation}\nSYMATTR InstName X{i}\n"
+            for i, name in enumerate(names)
+        )
+        path = _write(tmp_path / "every_symbol.asc", sheet)
+        scene = build_scene(path, suite_resolver(path))
+        drawn = {(pin.x, pin.y): pin.outward for part in scene.symbols for pin in part.pins}
+        compared, inside = 0, set()
+        for i, name in enumerate(names):
+            info = symbol_info_of(name, read_symbol(read_spice_text(SUITE_SYMBOLS / f"{name}.asy")))
+            for pin in compute_placed_geometry(info, i * 256, 0, rotation)["pins"]:
+                side = drawn[pin["x"], pin["y"]]
+                if side:
+                    assert side == pin["dir"], (name, pin)
+                    compared += 1
+                else:
+                    inside.add((name, pin["name"]))
+        assert compared > 2 * len(names)
+        # The stand-in nmos draws a box round its gate's lead.
+        assert inside == {("nmos", "G")}
+
+    def test_a_pin_inside_its_symbols_box_has_a_wiring_direction_and_no_label_side(
+        self, tmp_path: Path
+    ) -> None:
+        """A pin inside its symbol's box gets the edge it lies nearest as its
+        ``dir``, since a caller wiring it needs one. No recording shows where
+        LTspice draws a label on such a pin, so the scene keeps the label's
+        resting side there."""
+        _write(tmp_path / "inner.asy", INNER_PIN_ASY)
+        info = symbol_info_of("inner", read_symbol(INNER_PIN_ASY))
+        assert [p["dir"] for p in compute_placed_geometry(info, 96, 96)["pins"]] == [
+            "left",
+            "right",
+        ]
+        sheet = (
+            "Version 4\nSHEET 1 880 680\nSYMBOL inner 96 96 R0\nSYMATTR InstName U1\n"
+            "FLAG 96 128 edge\nFLAG 144 128 inside\n"
+        )
+        resolver = SymbolResolver(local_dir=tmp_path)
+        scene = build_scene(_write(tmp_path / "inner.asc", sheet), resolver)
+        assert [pin.outward for pin in scene.symbols[0].pins] == ["left", ""]
+        assert [f.orientation for f in scene.flags] == ["left", "up"]
 
     def test_no_wire_uses_resting_orientation(self) -> None:
         assert resolve_flag_placement(True, set()) == ("down", False)
