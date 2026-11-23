@@ -2890,6 +2890,14 @@ test that pins each.
   Syntactically explicit forms are selected before bare-target resolution:
     "REF@model", or the glob "M*@model"  -> instance model swap
        (the corner idiom: {"M*@model": ["NTT", "NSS", "NFF"]})
+       A name the swap writes (here, or an `instances` target with
+       attribute "model") is held to what recordings show LTspice read:
+       letters, digits and `_ . : -`, starting with a letter, digit or `_`,
+       and not a number with at most a scale suffix (`2222`, `1k`, `1e3`;
+       `2N5486` and `1k5` have more after the number and are accepted);
+       any other is refused at input (`spice_lex.written_model_name_refusal`).
+       A Monte Carlo `rule: "model"` names a card the deck declares, so it
+       takes any name the lexer reads (`spice_lex.is_model_name`).
     "INSTANCE:{delvto|mulu0}"            -> explicit per-instance mismatch
        value; "X1:delvto" for a single-FET body, or the qualified
        "X1.M0:delvto" for a multi-FET body. Supported only through

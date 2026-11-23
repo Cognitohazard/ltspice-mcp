@@ -1,0 +1,9 @@
+* JFET source follower swapped from model 2N5485 to model 2N5486
+V1 vdd 0 5
+V2 in 0 0
+J1 vdd in out 2N5486
+R1 out 0 1k
+.model 2N5485 NJF(Beta=0.9m Vto=-2.8)
+.model 2N5486 NJF(Beta=4m Vto=-1)
+.op
+.end

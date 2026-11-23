@@ -32,14 +32,20 @@ from ltspice_mcp.lib.hierarchy import (
     walk_active,  # noqa: TID251 - source_lineage calls require_established first
 )
 from ltspice_mcp.lib.montecarlo import render_variant_model_card
-from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    TokenKind,
+    emit,
+    lex,
+    tokenize_body,
+    written_model_name_refusal,
+)
 from ltspice_mcp.lib.spice_lex_ops import rename_subckt
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.subckt_mismatch import ClosureFile
 
 Attribute = Literal["value", "model", "parameter"]
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_MODEL = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:-]*\Z")
 
 
 def canonical_target(instance: Sequence[str], attribute: str, parameter: str | None = None) -> str:
@@ -68,13 +74,14 @@ def validate_payload(attribute: Attribute, parameter: str | None, value: str | f
     if isinstance(value, (int, float)) and not math.isfinite(value):
         raise ValueError("assignment must be finite")
     text = str(value)
+    if attribute == "model":
+        if (refusal := written_model_name_refusal(text)) is not None:
+            raise ValueError(refusal)
+        return text
     if not text.strip() or any(c in text for c in "\r\n;$"):
         raise ValueError("payload must be nonempty, single-line and comment-free")
     tokens = tokenize_body(text)
-    if attribute == "model":
-        if len(tokens) != 1 or tokens[0].kind != TokenKind.BARE or not _MODEL.fullmatch(text):
-            raise ValueError("model must be one legal model reference token")
-    elif attribute == "parameter":
+    if attribute == "parameter":
         # Lex in the destination slot; exactly one complete KEY_VALUE must survive.
         slot = tokenize_body("p=" + text)
         if (
