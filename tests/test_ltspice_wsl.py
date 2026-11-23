@@ -31,7 +31,7 @@ class TestLTspiceWSLRun:
                 "ltspice_mcp.lib.ltspice_wsl.to_windows_path",
                 return_value="C:\\tmp\\x.cir",
             ),
-            patch("spicelib.sim.simulator.run_function", return_value=0) as mock_run,
+            patch("ltspice_mcp.lib.ltspice_wsl.run_simulator", return_value=0) as mock_run,
             patch.object(LTspiceWSL, "spice_exe", ["/fake/exe"]),
         ):
             result = LTspiceWSL.run(netlist)
@@ -52,7 +52,7 @@ class TestLTspiceWSLRun:
                 "ltspice_mcp.lib.ltspice_wsl.to_windows_path",
                 return_value="C:\\tmp\\x.cir",
             ),
-            patch("spicelib.sim.simulator.run_function", return_value=0) as mock_run,
+            patch("ltspice_mcp.lib.ltspice_wsl.run_simulator", return_value=0) as mock_run,
             patch.object(LTspiceWSL, "spice_exe", ["/fake/exe"]),
         ):
             result = LTspiceWSL.run(netlist, cmd_line_switches=["-ascii"], timeout=42.0)
@@ -70,7 +70,7 @@ class TestLTspiceWSLRun:
                 "ltspice_mcp.lib.ltspice_wsl.to_windows_path",
                 return_value="C:\\tmp\\x.cir",
             ),
-            patch("spicelib.sim.simulator.run_function", return_value=0) as mock_run,
+            patch("ltspice_mcp.lib.ltspice_wsl.run_simulator", return_value=0) as mock_run,
             patch.object(LTspiceWSL, "spice_exe", ["/fake/exe"]),
         ):
             result = LTspiceWSL.run(netlist, exe_log=True)

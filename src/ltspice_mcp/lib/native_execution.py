@@ -21,6 +21,7 @@ from ltspice_mcp.lib.pdk_native import (
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.redirect import same_location
 from ltspice_mcp.lib.simulator_build import executable_identity
+from ltspice_mcp.lib.simulator_env import simulator_environment
 from ltspice_mcp.lib.store import Store
 
 
@@ -41,6 +42,7 @@ def observe_simulator(simulator: type) -> SimulatorFacts:
                 encoding="utf-8",
                 errors="replace",
                 timeout=5,
+                env=simulator_environment(),
             )
             if completed.returncode == 0:
                 banner = completed.stdout + completed.stderr

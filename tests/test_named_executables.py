@@ -667,7 +667,7 @@ class TestWsl:
             "ltspice_mcp.lib.ltspice_wsl.to_windows_path", lambda path: r"C:\runs\deck.net"
         )
         monkeypatch.setattr(
-            "spicelib.sim.simulator.run_function",
+            "ltspice_mcp.lib.ltspice_wsl.run_simulator",
             lambda command, **kwargs: launched.append(command) or 0,
         )
 
