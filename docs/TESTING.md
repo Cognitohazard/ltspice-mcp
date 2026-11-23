@@ -97,21 +97,17 @@ and run in the ordinary suite.
 The server parses every `.raw` and `.log` file in a separate parser process
 with a deadline and a memory limit (`lib/parser_process.py`), and kills that
 process and every process it started when a read ends, times out or is
-cancelled. This runs on Linux and native Windows only. On macOS the server
-refuses to parse (`ParserProcessError` with code `unsupported_platform`,
-which the caller receives as a failed result read) before it writes any file
-for the parser or starts a process, and the parser's entry module
-(`lib/parser_bootstrap.py`) refuses too when started directly, before it reads
-its first request or imports any decoding code; `test_parser_process.py`
-checks both. Its checks that set `sys.platform` to another value run anywhere
-and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
-native macOS interpreter, run in CI's macOS job (release tier only) and skip
-elsewhere; a pass there also shows only the refusal and does not show a working macOS parser.
-Supporting macOS needs
-native tests there of the hard memory limit, applied before any decoding code
-is imported, and of the parser's cleanup after a deadline, after repeated
-cancellation and after the server process dies, including a child process
-that tries to break away from the parser's process tree.
+cancelled. On Linux and native Windows this is the supported path. On macOS
+it is experimental: the parser's entry module (`lib/parser_bootstrap.py`)
+limits its own address space, core files and process count, proves each limit
+holds, and starts a thread that ends the parser when the server's end of a
+pipe closes, before it reads its first request or imports any decoding code.
+It refuses to run as root, which the process limit does not bind, and any
+other platform. `test_parser_darwin_containment.py` checks each step: the
+pipe, the thread and the limit proofs run on any POSIX host, and the cases
+that need the macOS kernel (a refused owner pipe, an inherited lower address
+space limit, a decode just under and one over the budget, a run as root) run
+only on macOS and skip elsewhere.
 
 Every CI tier but docs (*CI tiers* below), so every landing that changes code
 and every release, runs the suite on a native Windows runner
@@ -126,20 +122,22 @@ suite runs unless ngspice reads it. The runner's code page is cp1252 and its
 paths have no spaces, so a run on a user's machine still covers what this job
 cannot.
 
-The release gate in `publish.yml`, and no landing, also runs the suite on a
-native macOS runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
-ngspice and Cairo from Homebrew, one xdist worker per core, and no coverage gate. Because the server
-refuses to parse there, a test that reads a result fails there for that reason
-alone, and `tests/parser_refusal.py` reports it as skipped, with the refusal as
-its reason. On a host whose parser refuses, that plugin records each refusal
-the supervisor's check raises while a test runs, and reports a test that fails
+The release gate in `publish.yml`, and a pull request that changes the
+parser's containment (*CI tiers* below), also run the suite on native macOS
+runners, one on Apple silicon (`check-macos`) and one on Intel
+(`check-macos-intel`, in `.github/workflows/checks.yml`): Python 3.12, ngspice
+and Cairo from Homebrew, one xdist worker per core, and no coverage gate. On a
+host whose parser refuses (another platform, or macOS as root),
+`tests/parser_refusal.py` reports a test that fails because of that refusal as
+skipped, with the refusal as its reason. It records each refusal the
+supervisor's check raises while a test runs, and reports a test that fails
 after one as skipped; the check itself still runs and raises. A test that meets
 the refusal and passes is reported as passed, and any other failure stays a
 failure. The plugin cannot see a refusal in a process the test started itself
 (a program that runs the supervisor, the `run_code` worker, or the parser's
 entry module started directly), so such a test carries the plugin's `needs_parsing` mark, which
 skips it with the same reason; the tests of a warm parser, which is called past
-the supervisor's check, skip in their shared fixture. On Linux and Windows the
+the supervisor's check, skip in their shared fixture. Where the parser runs the
 plugin changes no report, and `test_parser_refusal.py` checks both behaviours
 on every platform.
 
@@ -151,47 +149,8 @@ skips on `CONTROLLED_STARTUP_REFUSED` there, which asks the server's own check,
 so it skips where the server refuses and runs wherever the table says the
 startup is verified.
 
-Everything else runs on macOS and must pass: schematic editing and rendering,
-netlist and deck checks, the job and run machinery, the decoders called in the
-test's own process, the `run_code` worker, the refusal checks above, and the
-ngspice end-to-end tests that do not read a result. The job runs with `-ra`,
-so its summary lists every skip with its reason. Most of the tests that skip
-for the parser refusal are tests of `analyze_results`, `plot_waveform`, the
-recorded LTspice results and the parser itself.
-
-The optional Sky130 integration tests find a `sky130A` root containing
-`libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
-console ngspice. `test_nested_targeting.py` changes the width and threshold of a transistor
-inside one subcircuit instance and checks with ngspice that only that
-instance changes, then reads that transistor's operating point through
-`analyze_results`.
-
-`test_native_experiments.py` tests the `pdk_native` variation of
-`run_experiments`, which samples the PDK's own statistical models (guide
-section 'sky130'). It needs a Sky130A installation that matches the profile
-`sky130-e6f9c887-ngspice-v1`, because the server checks the PDK's model files
-against that profile's hashes. It runs each of the four modes (`nominal`,
-`mismatch`, `process`, `combined`) and compares the result with ngspice run
-directly on the same prepared input. It also checks that a sample gives the
-same values whether it runs alone, serially or in parallel; that an edit to a
-device in an included file is applied to a copy of that file; that a case
-whose prepared input or included file changed after preparation fails before
-launch; that a case cancelled before launch records no submission; and that
-each case's record of its seed, inputs and model files (`native_statistics`)
-is stored and read back. The model files are not bundled with the server, so
-a `pdk_native` variation also needs that PDK installed at runtime.
-
-A test that depends on a POSIX facility skips on Windows with the reason
-(symlinks need a privilege; `wslpath` does not exist) instead of failing. Write
-a fixture that must be byte-exact with `newline="\n"` and read it with
-`encoding="utf-8"`, because the platform newline and codec differ on Windows.
-`.gitattributes` turns line-ending conversion off for the whole repository, so
-a checkout has the committed bytes on every platform.
-
-The upload step has no local check. To test trusted publishing and the
-metadata check without a release tag, dispatch the publish workflow by hand
-against TestPyPI with an explicit version.
-
+Everything else runs on macOS and must pass. The job runs with `-ra`, so its
+summary lists every skip with its reason.
 ### CI tiers
 
 CI (`.github/workflows/ci.yml`) calls the reusable `checks.yml`, which the
@@ -200,7 +159,7 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos`, `check-macos-intel` |
 | push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
@@ -215,8 +174,11 @@ push to it runs full again while the label stays. Adding any other label
 starts a run that skips every check and cancels nothing. A pull request retitled to `Rollup…` after it was opened runs
 full from its next push, or at once if it is labelled `full-ci`.
 
-A landing is held to Linux and Windows; macOS is checked at release. No
-tier a landing gets runs `check-macos`, so a macOS regression first shows
+A landing is held to Linux and Windows; macOS is checked at release. The
+exception is a pull request that changes `lib/parser_bootstrap.py`,
+`parser_process.py`, `parser_worker.py`, `parser_service.py` or `proc_kill.py`:
+`ci.yml` then passes `macos` to `checks.yml`, which runs both macOS jobs at
+whatever tier the pull request gets. Otherwise a macOS regression first shows
 when a release is cut, and holds the release until it is fixed. To run the
 release tier on a branch before then, start CI by hand on it: the Actions
 tab, the CI workflow, "Run workflow", or `gh workflow run ci.yml --ref

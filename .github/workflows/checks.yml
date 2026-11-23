@@ -11,6 +11,8 @@ name: Checks
 #            macOS is checked at release.
 #   pr:      static, changelog, audit, the Linux suite on Python 3.12, Windows.
 #   docs:    static, changelog, the Linux suite on Python 3.12.
+# The `macos` input adds the macOS jobs to any tier; ci.yml sets it for a pull
+# request that changes the result parser's process containment.
 # A job a tier leaves out is skipped by its own `if`, so it still reports, as
 # skipped, under the name it has in the release tier, and a required check of
 # that name passes. For that reason each interpreter of the Linux suite is its
@@ -24,6 +26,10 @@ on:
         description: "Which jobs run: release, full, pr or docs."
         type: string
         default: release
+      macos:
+        description: "Run the macOS jobs whatever the tier."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -201,18 +207,17 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v -n auto
 
-  check-macos:
+  check-macos: &check-macos
     # The suite on a native macOS interpreter, on the matrix's middle
-    # interpreter as on Windows. The server refuses to parse results on macOS
-    # (lib/parser_bootstrap.py, docs/TESTING.md "Platforms and the release
-    # gate"), so a test that fails only because of that refusal is reported as
-    # skipped with the refusal as its reason (tests/parser_refusal.py). It also
-    # refuses a recoverable ngspice run there, and a test of one skips
-    # (needs_controlled_startup in tests/conftest.py). Everything else must
-    # pass here. Release tier only: a landing is held to Linux and Windows,
-    # and macOS is checked at release.
-    if: inputs.tier == 'release'
-    runs-on: macos-latest
+    # interpreter as on Windows, on Apple silicon here and on Intel below. The
+    # result parser runs here under its macOS containment (lib/parser_bootstrap.py);
+    # tests/test_parser_darwin_containment.py has the cases only macOS runs.
+    # The server refuses a recoverable ngspice run on macOS, and a test of one
+    # skips (needs_controlled_startup in tests/conftest.py). Everything else
+    # must pass here. A landing is held to Linux and Windows: these jobs run at
+    # the release tier, and on a pull request that sets the `macos` input.
+    if: inputs.tier == 'release' || inputs.macos
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -232,9 +237,8 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: brew install ngspice cairo
 
-      # No coverage gate: every test that reads a result skips here, so the
-      # whole-package coverage falls below the Linux floor for a reason that
-      # says nothing about macOS. -ra lists every skip with its reason.
+      # No coverage gate: the floor is enforced on the Linux job. -ra lists
+      # every skip with its reason.
       # Homebrew's library folder is not on dyld's default search path on Apple
       # silicon, so cairocffi finds libcairo only through the fallback path. It
       # is exported inside the step because macOS removes DYLD_* variables from
@@ -243,6 +247,10 @@ jobs:
         run: |
           export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
           uv run pytest tests/ -v -n auto -ra
+
+  check-macos-intel:
+    <<: *check-macos
+    runs-on: macos-26-intel
 
   audit:
     if: inputs.tier != 'docs'

@@ -1,7 +1,8 @@
-"""Fixed parser gate and Linux guardian; imports no decoder before admission.
+"""Fixed parser gate, Linux guardian and macOS self-containment.
 
-An unsupported host is refused here as well as by the supervisor, so direct
-bootstrap execution cannot bypass the containment requirement.
+Imports no decoder before admission. An unsupported host is refused here as
+well as by the supervisor, so direct bootstrap execution cannot bypass the
+containment requirement.
 
 A worker serves requests, one line each, until its input ends: after each it
 writes one reply line (``done`` or ``error``) to the supervisor and reads the
@@ -11,6 +12,13 @@ worker. On Linux the guardian reads that gate, starts the worker inside its
 limits, and relays every later request to it. The end of the guardian's input
 means the supervisor is done or gone: the guardian kills and reaps the whole
 tree, reports the reap on its output, and exits.
+
+On macOS there is no guardian. Before it reads the gate the worker contains
+itself (``_darwin_containment``): hard limits on its address space and on
+starting processes, so the worker is the whole tree, and an owner thread asleep
+in ``write`` on a full pipe whose only read end the supervisor holds, so the
+worker dies by ``SIGPIPE`` once the supervisor is gone, even while a decoder
+holds the GIL.
 
 ``directory`` names a one-call tree's control directory (its process, cleanup
 and error records); a tree kept between calls has none and reports on its
@@ -23,11 +31,14 @@ import contextlib
 import ctypes
 import importlib
 import json
+import mmap
 import os
 import selectors
 import signal
+import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -36,13 +47,26 @@ _REPLY_BYTES = 4096
 """The longest reply line a worker or guardian writes to the supervisor."""
 
 
+_OWNER_EXIT = 70
+"""The macOS worker's exit status when its owner thread leaves ``write``."""
+
+_OWNER_PROOF_S = 2.0
+"""How long the macOS worker waits to see its owner thread asleep in ``write``."""
+
+_OWNER_POLL_S = 0.01
+
+
 def require_containment_platform() -> None:
     """Refuse hosts without an established memory and process ownership contract."""
     if sys.platform == "darwin":
-        raise RuntimeError(
-            "macOS parser containment is unavailable: hard memory limits, "
-            "owner-death cleanup and escaped-child ownership have not been validated"
-        )
+        # macOS exempts a real uid of 0 from the process limit the worker's
+        # containment rests on.
+        if os.getuid() == 0 or os.geteuid() == 0:
+            raise RuntimeError(
+                "parser containment on macOS needs a non-root user: "
+                "root ignores the process limit"
+            )
+        return
     if sys.platform not in {"linux", "win32"}:
         raise RuntimeError("Parser containment is unavailable on this platform")
 
@@ -117,6 +141,288 @@ def _linux_limits(memory: int) -> None:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
+class ContainmentFailed(RuntimeError):
+    """A macOS containment step failed; the message names the step and its values."""
+
+    parser_code = "ownership_failed"
+
+
+@contextlib.contextmanager
+def _step(name: str):
+    """Report an ``OSError`` or ``ValueError`` inside a containment step as its failure."""
+    try:
+        yield
+    except ContainmentFailed:
+        raise
+    except (OSError, ValueError) as error:
+        raise ContainmentFailed(f"{name}: {type(error).__name__}: {error}") from error
+
+
+def _proof_allowance(memory: int) -> int:
+    """How far under the budget the mapping that must succeed stays."""
+    return memory // 2 if memory < 128 * 1024 * 1024 else 64 * 1024 * 1024
+
+
+def _darwin_base() -> int:
+    """The task's virtual size now, which the address-space limit is set above."""
+    if sys.platform != "darwin":
+        raise RuntimeError("macOS-only parser containment")
+    libc = ctypes.CDLL(None, use_errno=True)
+    task = ctypes.c_uint.in_dll(libc, "mach_task_self_")
+    task_info = libc.task_info
+    task_info.argtypes = [
+        ctypes.c_uint,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    task_info.restype = ctypes.c_int
+    info = (ctypes.c_uint64 * 6)()
+    count = ctypes.c_uint(12)  # MACH_TASK_BASIC_INFO_COUNT
+    status = task_info(task, 20, info, ctypes.byref(count))  # MACH_TASK_BASIC_INFO
+    if status != 0:
+        raise ContainmentFailed(f"limits: task_info failed with kern_return_t {status}")
+    return int(info[0])  # virtual_size
+
+
+def _set_limit(name: str, which: int, value: int, base: int) -> None:
+    import resource
+
+    try:
+        resource.setrlimit(which, (value, value))
+    except (OSError, ValueError) as error:
+        hard = resource.getrlimit(which)[1]
+        raise ContainmentFailed(
+            f"limits: setting {name} to {value} failed (measured base {base}, "
+            f"hard limit {hard}): {error}"
+        ) from error
+
+
+def _darwin_limits(memory: int) -> int:
+    """Set the hard limits on core files, address space and processes; the address-space cap.
+
+    The address-space limit covers the mappings the worker makes itself, so the
+    budget counts what the worker maps after the base was measured. Memory the
+    kernel places in the task on another's behalf (Mach out-of-line copies) is
+    outside it. Both values of each limit are set: a soft limit alone could be
+    raised back to the hard one.
+    """
+    import resource
+
+    base = _darwin_base()
+    page = mmap.PAGESIZE
+    limit = -(-(base + memory) // page) * page
+    _set_limit("RLIMIT_CORE", resource.RLIMIT_CORE, 0, base)
+    _set_limit("RLIMIT_AS", resource.RLIMIT_AS, limit, base)
+    _set_limit("RLIMIT_NPROC", resource.RLIMIT_NPROC, 0, base)
+    return limit
+
+
+def _prove_limit(name: str, which: int, value: int) -> None:
+    """The limit reads back as ``value`` for both its soft and hard values."""
+    import resource
+
+    current = resource.getrlimit(which)
+    if current != (value, value):
+        raise ContainmentFailed(f"limit proof: {name} is {current}, not ({value}, {value})")
+
+
+def _prove_over_budget(memory: int) -> None:
+    """A mapping one page over the budget is refused."""
+    size = memory + mmap.PAGESIZE
+    try:
+        mapping = mmap.mmap(-1, size, flags=mmap.MAP_PRIVATE)
+    except OSError:
+        return
+    mapping.close()
+    raise ContainmentFailed(
+        f"limit proof: a mapping of {size} bytes, over the memory budget of {memory}, succeeded"
+    )
+
+
+def _prove_under_budget(memory: int) -> None:
+    """A mapping of the budget less an allowance succeeds; it is released at once."""
+    size = memory - _proof_allowance(memory)
+    try:
+        mapping = mmap.mmap(-1, size, flags=mmap.MAP_PRIVATE)
+    except OSError as error:
+        raise ContainmentFailed(
+            f"limit proof: a mapping of {size} bytes, under the memory budget of {memory}, "
+            f"failed: {error}"
+        ) from error
+    mapping.close()
+
+
+def _prove_no_fork() -> None:
+    """A trial fork is refused; run while the worker has one thread."""
+    try:
+        pid = os.fork()  # noqa: TID251 - the trial that proves the worker cannot fork
+    except OSError:
+        return
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    raise ContainmentFailed("limit proof: a trial fork succeeded, so RLIMIT_NPROC does not hold")
+
+
+def _fill_owner_pipe(fd: int) -> None:
+    """Check that ``fd`` is the write end of a pipe, fill it, and leave it blocking.
+
+    ``SIGPIPE`` is restored to its default first, so a write to the pipe once
+    its last reader is gone ends the process without running any Python.
+    """
+    import fcntl
+
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    with _step("owner pipe"):
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISFIFO(mode):
+            raise ContainmentFailed(f"owner pipe: descriptor {fd} is not a pipe (mode {mode:o})")
+        access = fcntl.fcntl(fd, fcntl.F_GETFL) & (os.O_WRONLY | os.O_RDWR)
+        if access != os.O_WRONLY:
+            raise ContainmentFailed(f"owner pipe: descriptor {fd} is not a pipe's write end")
+        os.set_blocking(fd, False)
+        try:
+            chunk = 65536
+            while chunk:
+                try:
+                    os.write(fd, bytes(chunk))
+                except BlockingIOError:
+                    chunk //= 2
+        finally:
+            os.set_blocking(fd, True)
+
+
+def _start_owner_thread(fd: int, deadline: float) -> threading.Thread:
+    """Start the thread that sleeps in ``write`` on the full owner pipe.
+
+    It blocks every signal but ``SIGPIPE`` first, so no signal ends its sleep
+    and leaves it waiting for the GIL; ``SIGPIPE`` stays deliverable to it.
+    If ``write`` ever returns or raises, it ends the worker.
+    """
+    ready = threading.Event()
+
+    def own() -> None:
+        try:
+            signal.pthread_sigmask(signal.SIG_BLOCK, signal.valid_signals() - {signal.SIGPIPE})
+            ready.set()
+            os.write(fd, b"\0")
+        finally:
+            os._exit(_OWNER_EXIT)
+
+    thread = threading.Thread(target=own, name="parser-owner", daemon=True)
+    thread.start()
+    if not ready.wait(max(0.0, deadline - time.monotonic())):
+        raise ContainmentFailed("owner thread: it did not start within the deadline")
+    return thread
+
+
+class _DlInfo(ctypes.Structure):
+    _fields_ = [
+        ("dli_fname", ctypes.c_char_p),
+        ("dli_fbase", ctypes.c_void_p),
+        ("dli_sname", ctypes.c_char_p),
+        ("dli_saddr", ctypes.c_void_p),
+    ]
+
+
+def _darwin_owner_proof(thread: threading.Thread, deadline: float) -> None:
+    """Wait until the owner thread is seen waiting in the kernel inside ``write``."""
+    if sys.platform != "darwin":
+        raise RuntimeError("macOS-only parser containment")
+    libc = ctypes.CDLL(None)
+    mach_thread = libc.pthread_mach_thread_np
+    mach_thread.argtypes = [ctypes.c_void_p]
+    mach_thread.restype = ctypes.c_uint
+    thread_info = libc.thread_info
+    thread_info.argtypes = [
+        ctypes.c_uint,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    thread_info.restype = ctypes.c_int
+    get_state = libc.thread_get_state
+    get_state.argtypes = [
+        ctypes.c_uint,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    get_state.restype = ctypes.c_int
+    dladdr = libc.dladdr
+    dladdr.argtypes = [ctypes.c_void_p, ctypes.POINTER(_DlInfo)]
+    dladdr.restype = ctypes.c_int
+    machine = os.uname().machine
+    if machine == "arm64":
+        flavor, count, pc_index, mask = 6, 68, 32, (1 << 47) - 1  # ARM_THREAD_STATE64
+    elif machine == "x86_64":
+        flavor, count, pc_index, mask = 4, 42, 16, (1 << 64) - 1  # x86_THREAD_STATE64
+    else:
+        raise ContainmentFailed(f"owner proof: no thread state layout for {machine}")
+    port = mach_thread(thread.ident)
+    run_state: object = None
+    symbol: object = None
+    while True:
+        basic = (ctypes.c_int * 10)()
+        basic_count = ctypes.c_uint(10)  # THREAD_BASIC_INFO_COUNT
+        status = thread_info(port, 3, basic, ctypes.byref(basic_count))  # THREAD_BASIC_INFO
+        run_state = basic[6] if status == 0 else f"thread_info failed ({status})"
+        state = (ctypes.c_uint64 * (count // 2))()
+        state_count = ctypes.c_uint(count)
+        status = get_state(port, flavor, state, ctypes.byref(state_count))
+        if status == 0:
+            info = _DlInfo()
+            found = dladdr(state[pc_index] & mask, ctypes.byref(info))
+            symbol = info.dli_sname.decode("ascii", "replace") if found and info.dli_sname else None
+        else:
+            symbol = f"thread_get_state failed ({status})"
+        if run_state == 3 and symbol in {"write", "__write_nocancel"}:  # TH_STATE_WAITING
+            return
+        if time.monotonic() >= deadline:
+            raise ContainmentFailed(
+                f"owner proof: the owner thread was not seen asleep in write within "
+                f"{_OWNER_PROOF_S} s (run state {run_state}, at {symbol})"
+            )
+        time.sleep(_OWNER_POLL_S)
+
+
+def _darwin_containment(memory: int, owner_fd: int) -> None:
+    """Contain this worker on macOS before any decoder is imported.
+
+    Limits first, proved while the worker has one thread; then the owner pipe
+    and its thread, proved asleep in ``write``. Any failure raises
+    ``ContainmentFailed`` naming the step.
+    """
+    import resource
+
+    with _step("limits"):
+        limit = _darwin_limits(memory)
+    with _step("limit proof"):
+        _prove_limit("RLIMIT_AS", resource.RLIMIT_AS, limit)
+        _prove_limit("RLIMIT_NPROC", resource.RLIMIT_NPROC, 0)
+        _prove_over_budget(memory)
+        _prove_under_budget(memory)
+        _prove_no_fork()
+    _fill_owner_pipe(owner_fd)
+    deadline = time.monotonic() + _OWNER_PROOF_S
+    with _step("owner thread"):
+        thread = _start_owner_thread(owner_fd, deadline)
+    with _step("owner proof"):
+        _darwin_owner_proof(thread, deadline)
+
+
+def _containment_reply(error: ContainmentFailed) -> dict[str, Any]:
+    """The reply line for a failed containment, its message cut to fit one reply."""
+    message = str(error)
+    while True:
+        reply = {"status": "error", "code": "ownership_failed", "message": message,
+                 "pid": os.getpid()}
+        if len(json.dumps({"version": 1, **reply}, separators=(",", ":"))) < _REPLY_BYTES:
+            return reply
+        message = message[: len(message) // 2]
+
+
 def _read_gate(fd: int, size: int, deadline: float) -> bytes:
     data = bytearray()
     with selectors.DefaultSelector() as selector:
@@ -163,12 +469,20 @@ def _decoder(
     deadline: float,
     module: str,
     guardian_pid: int,
+    owner_fd: int = -1,
 ) -> int:
     if sys.platform == "linux":
         _prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG, before any decoder import.
         if os.getppid() != guardian_pid:
             return 1
         _linux_limits(memory)
+    if sys.platform == "darwin":
+        try:
+            _darwin_containment(memory, owner_fd)
+        except ContainmentFailed as error:
+            _error(directory, error, errors)
+            _reply(1, _containment_reply(error))
+            return 1
     # Replies keep their own descriptor; anything a decoder prints goes nowhere.
     replies = os.dup(1)
     silent = os.open(os.devnull, os.O_WRONLY)
@@ -351,13 +665,18 @@ def _relay(data: bytes, target: Any) -> None:
 
 def main() -> int:
     require_containment_platform()
-    mode, directory, memory, size, errors, deadline, grace, module, guardian_pid = sys.argv[1:]
+    mode, directory, memory, size, errors, deadline, grace, module, guardian_pid, *rest = (
+        sys.argv[1:]
+    )
     control = Path(directory) if directory else None
     args = (control, int(memory), int(size), int(errors), float(deadline))
     if mode == "guardian" and sys.platform == "linux":
         return _guardian(*args, float(grace), module)
     if mode == "worker":
-        return _decoder(*args, module, int(guardian_pid))
+        # On macOS the supervisor passes the owner pipe's write end; without
+        # one, the owner pipe step fails.
+        owner = int(rest[0]) if rest else -1
+        return _decoder(*args, module, int(guardian_pid), owner)
     raise ValueError("Invalid parser bootstrap mode")
 
 

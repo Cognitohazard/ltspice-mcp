@@ -296,36 +296,50 @@ class ParserTree:
             "MKL_NUM_THREADS": "1",
             "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1",
         }
+        argv = [
+            executable,
+            "-m",
+            "ltspice_mcp.lib.parser_bootstrap",
+            "guardian" if sys.platform == "linux" else "worker",
+            str(control) if control is not None else "",
+            str(limits.memory_bytes),
+            str(limits.request_bytes),
+            str(limits.error_bytes),
+            str(lifetime_deadline),
+            str(limits.cleanup_grace_s),
+            module,
+            "0",
+        ]
+        # On macOS the worker's owner thread sleeps writing to a full pipe
+        # whose only read end this supervisor holds: once this process is
+        # gone, the write ends the worker with SIGPIPE.
+        self._owner_read: int | None = None
+        owner_write: int | None = None
+        if sys.platform == "darwin":
+            self._owner_read, owner_write = os.pipe()
+            argv.append(str(owner_write))
         try:
             self.process = subprocess.Popen(
-                [
-                    executable,
-                    "-m",
-                    "ltspice_mcp.lib.parser_bootstrap",
-                    "guardian" if sys.platform == "linux" else "worker",
-                    str(control) if control is not None else "",
-                    str(limits.memory_bytes),
-                    str(limits.request_bytes),
-                    str(limits.error_bytes),
-                    str(lifetime_deadline),
-                    str(limits.cleanup_grace_s),
-                    module,
-                    "0",
-                ],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
                 env=env,
-                start_new_session=sys.platform == "linux",
+                pass_fds=(owner_write,) if owner_write is not None else (),
+                start_new_session=os.name == "posix",
                 bufsize=0,
             )
         except Exception as exc:
+            self._close_owner_read()
             raise ParserProcessError(
                 "supervisor_error",
                 str(exc)[: limits.error_bytes],
                 reaped=_failed_spawn_reaped(exc),
             ) from exc
+        finally:
+            if owner_write is not None:
+                os.close(owner_write)
         _LIVE_TREES.add(self)
         try:
             if control is not None:
@@ -452,6 +466,14 @@ class ParserTree:
                     or type(message.get("pid")) is not int
                 ):
                     raise _CallFailed("supervisor_error", "Parser reply is invalid")
+                if message["status"] == "error" and message.get("code") == "ownership_failed":
+                    # The macOS worker could not contain itself and read no request.
+                    raise _CallFailed(
+                        "ownership_failed",
+                        str(message.get("message", "Parser ownership setup failed"))[
+                            : self.limits.error_bytes
+                        ],
+                    )
                 self.worker_pid = message["pid"]
                 self.calls += 1
                 return str(message["status"])
@@ -473,9 +495,17 @@ class ParserTree:
                     and _children(self.process.pid) == [worker]
                     and not _children(worker)
                 )
+            # On macOS the worker cannot start a process (RLIMIT_NPROC 0, proved
+            # before the gate), so it is the whole tree.
             return True
         except (OSError, ValueError):
             return False
+
+    def _close_owner_read(self) -> None:
+        if self._owner_read is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._owner_read)
+            self._owner_read = None
 
     def close(self) -> bool:
         """Kill and reap the whole tree; True only once that is confirmed."""
@@ -484,6 +514,8 @@ class ParserTree:
         _LIVE_TREES.discard(self)
         deadline = time.monotonic() + self.limits.cleanup_grace_s
         confirmed = True
+        # Closing the owner pipe's read end ends a macOS worker by SIGPIPE.
+        self._close_owner_read()
         if self.process.stdin is not None:
             with contextlib.suppress(OSError):
                 self.process.stdin.close()
@@ -523,6 +555,12 @@ class ParserTree:
             worker = self.worker_pid or (_worker_pid(self.control) if self.control else None)
             if worker:
                 kill_process_group(worker, child_start_marker(self.process, worker))
+        elif sys.platform == "darwin":
+            from ltspice_mcp.lib.proc_kill import child_start_marker, kill_process_group
+
+            # The worker leads its own session; the process object is not yet
+            # reaped, so its pid still names it.
+            kill_process_group(self.process.pid, child_start_marker(self.process))
         with contextlib.suppress(OSError):
             self.process.kill()
         with contextlib.suppress(subprocess.TimeoutExpired):
@@ -551,6 +589,7 @@ def _call_result(
                 "signals_not_found",
                 "window_refused",
                 "raw_holds_no_point",
+                "ownership_failed",
             }:
                 raise ValueError("Invalid parser error code")
             raise ParserProcessError(
