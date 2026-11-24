@@ -2674,7 +2674,7 @@ def test_a_save_of_a_node_the_circuit_lacks_is_said_before_and_after_the_run(
     observed = _saves_observation(
         rec.recorded(build, f"{case_id}.raw"), staged, producer, None, "c"
     )
-    assert observed is not None
+    assert observed is not None and "evidence" in observed
     assert observed["evidence"]["not_stored"] == [{"save": "V(nothere)", "reason": reason}]
 
 
