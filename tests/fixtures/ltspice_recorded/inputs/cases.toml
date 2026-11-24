@@ -506,7 +506,7 @@ extra = [
 
 [behaviour.element-grid]
 summary = "The cells of the element-node grid (at the end of this file) that no other recording fills: each element letter with a value, a model, a keyed value or nothing after its nodes where its syntax allows it; a BJT with four nodes and a MOSFET with three; a voltage- and a current-controlled switch with its state after its model; and PARAMS: in upper case on a subcircuit call. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/spice_lex_views.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/netlist_graph.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:ELEMENT_SPECS", "lib/spice_lex_views.py:read_instance", "lib/spice_validator.py:_TERMINAL_COUNTS"]
+model = ["lib/spice_lex_views.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/netlist_graph.py", "lib/netlist_diff.py", "tools/inspect_tools.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:ELEMENT_SPECS", "lib/spice_lex_views.py:read_instance", "lib/spice_validator.py:_TERMINAL_COUNTS"]
 # Every node name in a deck belongs to one element card, so a word of the card
 # that the .op raw holds as a node voltage is a node LTspice gave it, and a
 # word that is no node is not in the raw. Each card that a build might refuse
@@ -7694,7 +7694,7 @@ Ee = { letter = "E", nodes = ["e_op", "e_on", "e_ip", "e_in"] }
 Gg = { letter = "G", nodes = ["g_op", "g_on", "g_ip", "g_in"] }
 Ff = { letter = "F", nodes = ["f_a", "f_b"] }
 Hh = { letter = "H", nodes = ["h_a", "h_b"] }
-Kk = { letter = "K", nodes = [], differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit", "parse_netlist_graph", "inspect components", "api inspect components"], reason = "The view reads a K card's inductor names as its nodes (ElementSpec kind none), where both builds wire neither Lk1 nor Lk2 as a node." }, { build = "ltspice17", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit", "parse_netlist_graph", "inspect components", "api inspect components"], reason = "The view reads a K card's inductor names as its nodes (ElementSpec kind none), where both builds wire neither Lk1 nor Lk2 as a node." }] }
+Kk = { letter = "K", nodes = [] }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_keyed"]

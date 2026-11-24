@@ -1014,3 +1014,49 @@ def test_a_subcircuit_keeps_its_directives_however_many_files_were_read_first(
     graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert _bodies(graph.subckts["amp"].directives) == [".param g={g0}"]
     assert _bodies(graph.definition_includes) == [".include vendor.lib", ".include amp.lib"]
+
+
+# ---------------------------------------------------------------------------
+# Mutual inductance: a K card names inductors, and wires no node
+# ---------------------------------------------------------------------------
+
+COUPLED = "* t\nV1 p 0 1\nL1 p 0 1m\nL2 s 0 1m\nK1 L1 L2 {k}\nR1 s 0 1k\n.end\n"
+
+
+def test_the_nets_of_a_deck_with_a_k_card_hold_no_inductor_name() -> None:
+    # Neither LTspice build wires a K card's words as nodes
+    # (deck/element_grid_values): L1 and L2 name inductors, not nets.
+    graph = parse_netlist_graph(COUPLED.replace("{k}", "0.9"), reader=LTSPICE_READER)
+    assert flatten_graph(graph).nets == {"p", "s", "0"}
+    coupling = next(c for c in graph.components if c.ref == "K1")
+    assert coupling.nodes == ()
+    assert coupling.value == "L1 L2 0.9"
+
+
+def test_a_change_of_coupling_value_is_a_value_change() -> None:
+    from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
+
+    before, after = COUPLED.replace("{k}", "0.9"), COUPLED.replace("{k}", "0.95")
+    delta = structural_delta(read_deck(before), read_deck(after))
+    assert delta["components_changed"] == [
+        {"reference": "K1", "before": "L1 L2 0.9", "after": "L1 L2 0.95"}
+    ]
+    result = compare_graphs(before, after, anchors=["p", "s"], reader=LTSPICE_READER)
+    assert [(m.ref, m.reference_value, m.candidate_value) for m in result.value_mismatches] == [
+        ("K1", "L1 L2 0.9", "L1 L2 0.95")
+    ]
+    assert result.equivalent is False
+
+
+def test_a_k_card_coupling_three_inductors_has_no_nodes() -> None:
+    from ltspice_mcp.lib.spice_lex import lex_deck
+    from ltspice_mcp.lib.spice_lex_views import read_instance
+
+    deck = "* t\nL1 a 0 1m\nL2 b 0 1m\nL3 c 0 1m\nK1 L1 L2 L3 1\n.end\n"
+    card = next(c for c in lex_deck(deck).cards if c.name == "K1")
+    view = read_instance(card)
+    assert view is not None
+    assert (view.nodes, view.control, view.value) == ([], "L1 L2 L3", "1")
+    assert view.display_value() == "L1 L2 L3 1"
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
+    assert flatten_graph(graph).nets == {"a", "b", "c", "0"}

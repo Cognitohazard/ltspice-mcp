@@ -375,10 +375,15 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
     "G": ElementSpec(default_kind="value", min_nodes=4, kv_means_params_only=True),
     "F": ElementSpec(default_kind="value", min_nodes=2, kv_means_params_only=True),
     "H": ElementSpec(default_kind="value", min_nodes=2, kv_means_params_only=True),
-    # Mutual inductance: refs only.
-    "K": ElementSpec(default_kind="none", min_nodes=0),
+    # Mutual inductance: the inductors it couples, then its coupling value.
+    "K": ElementSpec(default_kind="coupling", min_nodes=0),
 }
 ```
+
+`Kxxx` lines have no nodes: `K1 L1 L2 0.9` has `nodes` `[]`, `control`
+`"L1 L2"` (the inductors it couples) and `value` `"0.9"`. Neither
+LTspice build wires a K card's inductor names as nodes
+(`deck/element_grid_values`).
 
 `Bxxx` lines, and `Exxx` / `Gxxx` / `Fxxx` / `Hxxx` lines with any
 `KEY_VALUE` token, give their value as a parameter like `V={expression}`,

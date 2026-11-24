@@ -460,7 +460,10 @@ class ParamCard:
 # - "params_only": no positional value slot — value carried as KEY=VALUE
 #   in params (B behavioural sources always; E/G when written with VALUE=
 #   or POLY/TABLE — controlled by ``kv_means_params_only``).
-# - "none": no value at all (K mutual-inductance carries refs as nodes).
+# - "coupling": no node at all; the words name the inductors the card
+#   couples, then the last is its coupling value (K: ``K1 L1 L2 0.9``,
+#   whose ``L1`` and ``L2`` neither LTspice build wires as a node,
+#   deck/element_grid_values).
 #
 # ``kv_means_params_only`` flips the kind to ``params_only`` when any
 # KEY_VALUE token is present. Real SPICE flexes E/G/F/H between
@@ -468,7 +471,7 @@ class ParamCard:
 # (``E1 out 0 VALUE={...}``); the same prefix carries both shapes.
 #
 # ``min_nodes`` is a sanity check only.
-ElementKind = Literal["model", "value", "params_only", "none"]
+ElementKind = Literal["model", "value", "params_only", "coupling"]
 
 
 # ---------------------------------------------------------------------------
@@ -700,8 +703,8 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
     "G": ElementSpec(default_kind="value", min_nodes=4, kv_means_params_only=True),
     "F": ElementSpec(default_kind="value", min_nodes=2, kv_means_params_only=True),
     "H": ElementSpec(default_kind="value", min_nodes=2, kv_means_params_only=True),
-    # Mutual inductance: refs only.
-    "K": ElementSpec(default_kind="none", min_nodes=0),
+    # Mutual inductance: the inductors it couples, then its coupling value.
+    "K": ElementSpec(default_kind="coupling", min_nodes=0),
 }
 
 _DEFAULT_ELEMENT_SPEC = ElementSpec(default_kind="model", min_nodes=0)
@@ -808,7 +811,7 @@ class InstanceLine:
     - ``O`` / ``U`` / ``D`` / ``S``: ``model`` carries the model name.
     - ``W``: ``model`` carries the switch model; the source whose current
       sets the switch, written between its two nodes and its model, is
-      neither a node nor the model.
+      neither a node nor the model: it is ``control``.
     - ``R`` / ``C`` / ``L``: ``value`` carries the passive value (e.g.
       ``"1k"``), ``model`` is None. A value carried by a keyword (``R=``, a
       capacitor's ``Q=``, an inductor's ``Flux=``) leaves every positional
@@ -826,8 +829,8 @@ class InstanceLine:
     - ``T`` / ``@``: both are None — every positional is a node and the
       rest are parameters.
     - ``F`` / ``H``: ``value`` carries the controlling source name and gain.
-    - ``K``: ``model`` carries the inductor pair or coupling
-      coefficient — depends on syntax.
+    - ``K``: no nodes; ``control`` carries the names of the inductors it
+      couples and ``value`` its coupling value (``K1 L1 L2 0.9``).
 
     ``nodes`` are positional tokens between the ref and the
     model/value token.
@@ -838,9 +841,10 @@ class InstanceLine:
     nodes: list[str]
     model: str | None
     value: str | None
-    # The words between a ``W`` switch's nodes and its model, which name the
-    # source whose current sets it; written back there when the card is
-    # re-rendered. None for every other element.
+    # The words that name what the card acts on, written after its nodes and
+    # ahead of its model or value: the source whose current sets a ``W``
+    # switch, the inductors a ``K`` card couples. Written back there when the
+    # card is re-rendered. None for every other element.
     control: str | None = None
     _model_token: Token | None = None
     _value_param_key: str | None = None
@@ -899,9 +903,14 @@ class InstanceLine:
             # Behavioural / VALUE= / POLY / TABLE form: every positional
             # is a node; the value lives in a KEY_VALUE token.
             nodes_tokens = positional
-        elif kind == "none":
-            # K mutual-inductance — positional tokens are refs, not nodes.
-            nodes_tokens = positional
+        elif kind == "coupling":
+            # A K card: the inductors it couples, then its coupling value.
+            # None of its words is a node (deck/element_grid_values).
+            nodes_tokens = []
+            model_token = positional[-1]
+            value = model_token.text.strip('"')
+            if len(positional) > 1:
+                control = _value_from_span(card, positional[:-1])
         elif kind == "value":
             # Value-bearing element. The value may be MULTI-token: a source
             # function spec like ``PULSE(0 5 ...)`` lexes as ``PULSE`` + ``(...)``,
@@ -1270,7 +1279,8 @@ class InstanceLine:
     def display_value(self) -> str:
         """Single-string projection for display: model name for M/Q/J/X,
         the controlling source and model for a W switch, value field for
-        R/C/L/E/F/G/H, a V or I source's value then its own words without
+        R/C/L/E/F/G/H, the coupled inductors and coupling value for K
+        (``L1 L2 0.9``), a V or I source's value then its own words without
         ``=`` (``1m load``), KV pair for B-sources, empty for malformed
         bodies."""
         if self.model is not None:
@@ -1281,7 +1291,7 @@ class InstanceLine:
             reading = self._source_reading()
             return "" if reading is None else reading.shown
         if self.value is not None:
-            return self.value
+            return self.value if self.control is None else f"{self.control} {self.value}"
         for key in ("V", "I", "v", "i"):
             if key in self.params:
                 return f"{key}={self.params[key]}"
