@@ -22,6 +22,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.component_value import apply_value_to_instance
+from ltspice_mcp.lib.connectivity import fold_case
 from ltspice_mcp.lib.deck_staging import (
     LibraryReader,
     relative_data_path_established,
@@ -88,6 +89,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
 )
+from ltspice_mcp.lib.trace_names import find_trace
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
@@ -2587,7 +2589,9 @@ def test_a_dotted_path_through_an_instance_is_no_name_to_ltspice(build: str, tmp
     entry is a warning and the ``.meas`` is refused, both established."""
     case_id = "deck/save_subckt_dotted"
     log = rec.recorded(build, f"{case_id}.log")
-    assert "Invalid .save" not in log.read_text(encoding="utf-8", errors="replace").replace("\0", "")
+    assert "Invalid .save" not in log.read_text(encoding="utf-8", errors="replace").replace(
+        "\0", ""
+    )
     values = [entry["values"] for entry in parse_measurements(log)["measurements"].values()]
     assert values in ([], [[]], [[None]])
     traces = rec.decode(build, case_id, tmp_path).raw.get_trace_names()
@@ -2601,6 +2605,79 @@ def test_a_dotted_path_through_an_instance_is_no_name_to_ltspice(build: str, tmp
             for f in findings
         ), options
         assert "save-meas-spelling-unestablished" not in {rule for rule, _ in rules}, options
+
+
+#: The two spellings of each pair in ``deck/node_name_nonascii_case``.
+NON_ASCII_CASE_PAIRS = (("Äb", "äb"), ("Maß", "MASS"))
+
+
+def _one_node_by_route(build: str, first: str, second: str, scratch: Path) -> dict[str, bool]:
+    """Whether each route that answers "are these two spellings one node"
+    reads ``first`` and ``second`` as one node, for ``build``'s run."""
+    deck = f"* pair\nI1 0 {first} 1m\nR1 {second} 0 1k\n.op\n.end\n"
+    nets = flatten_graph(parse_netlist_graph(deck, reader=LTSPICE_READER)).nets
+    stored = rec.decode(build, "deck/node_name_nonascii_case", scratch).raw.get_trace_names()
+    found = {
+        find_trace(stored, f"V({name})", xvii=build == "ltspice17", schematic=False)
+        for name in (first, second)
+    }
+    probe = scratch / "probe.cir"
+    probe.write_text(
+        f"* probe\nV1 {first} 0 PULSE(0 1 0 1u 1u 1 2)\nR1 {first} 0 1k\n.save V({first})\n"
+        f".tran 1m\n.meas tran x FIND V({second}) AT=0.5m\n.end\n",
+        encoding="utf-8",
+    )
+    findings = lint_deck(
+        probe.read_text(encoding="utf-8"), probe, "ltspice", "LTspice", reader=rec.producer(build)
+    )
+    return {
+        "deck nets (netlist_graph.canon_net)": len(nets - {"0"}) == 1,
+        "sheet nets (connectivity.fold_case)": fold_case(first) == fold_case(second),
+        "trace lookup (trace_names.find_trace)": len(found) == 1 and None not in found,
+        "lint (save-meas-coverage)": all(f["rule_id"] != "save-meas-coverage" for f in findings),
+    }
+
+
+#: How many routes read two node names that differ only in case beyond ASCII
+#: otherwise than the build's recording, per build. LTspice 26 joins them,
+#: ``ß`` with ``SS`` too; every route reads them apart through the one fold
+#: (``device_names.fold_name``), which folds ASCII case only. A count may only
+#: fall: a fix lowers it here in the same change.
+NON_ASCII_CASE_DIFFERENCES = {"ltspice26": 4, "ltspice17": 0}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_ltspice26_joins_names_differing_in_case_beyond_ascii_which_every_route_reads_apart(
+    build: str, tmp_path: Path
+):
+    """In ``deck/node_name_nonascii_case`` each current source drives one
+    spelling and a resistor sits on the other. LTspice 26 reads ``Äb`` with
+    ``äb`` and ``Maß`` with ``MASS`` as one node each (1 V across each
+    resistor, 1 mA through it); XVII reads each spelling as its own node
+    (each current source's node floats, no current flows in the resistors)."""
+    case_id = "deck/node_name_nonascii_case"
+    point = rec.operating_point(build, case_id, tmp_path / "op")
+    joined = build == "ltspice26"
+    if joined:
+        assert point["i(r1)"] == pytest.approx(1e-3) and point["i(r2)"] == pytest.approx(1e-3)
+        assert point["v(mass)"] == pytest.approx(1.0) and point["v(äb)"] == pytest.approx(1.0)
+    else:
+        assert point["i(r1)"] == pytest.approx(0, abs=1e-12) and point["i(r2)"] == pytest.approx(
+            0, abs=1e-12
+        )
+        log = (
+            rec.recorded(build, f"{case_id}.log")
+            .read_text(encoding="utf-8", errors="replace")
+            .replace("\0", "")
+        )
+        assert log.count("is floating and connected to current source") == 2
+    differing = {
+        route
+        for index, (first, second) in enumerate(NON_ASCII_CASE_PAIRS)
+        for route, one in _one_node_by_route(build, first, second, tmp_path / str(index)).items()
+        if one != joined
+    }
+    assert len(differing) == NON_ASCII_CASE_DIFFERENCES[build], sorted(differing)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

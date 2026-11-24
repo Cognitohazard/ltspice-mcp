@@ -319,7 +319,9 @@ async def test_the_recipe_names_a_device_inside_a_block_alike_on_both_builds(
 
 def test_one_fold_folds_ascii_letters_only():
     """``node-name-case`` and ``deck/case_insensitive`` establish that ASCII
-    case does not tell nodes apart, and nothing beyond it."""
+    case does not tell nodes apart. Beyond ASCII the fold keeps names apart,
+    as XVII does; LTspice 26 joins them, a difference pinned in
+    ``test_ltspice26_joins_names_differing_in_case_beyond_ascii_which_every_route_reads_apart``."""
     assert device_names.fold_name("OUT") == "out"
     assert device_names.fold_name("Maß") == "maß"
     assert device_names.fold_name("MASS") != device_names.fold_name("maß")

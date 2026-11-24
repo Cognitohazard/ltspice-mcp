@@ -51,9 +51,10 @@ def fold_name(name: str) -> str:
 
     Names that differ only in ASCII case are one name to both simulators
     (recorded: ``node-name-case``, ``deck/case_insensitive``), and that is all
-    it folds. What LTspice does with names that differ beyond ASCII case
-    (``Maß`` and ``MASS``, ``É`` and ``é``) is not recorded, so they compare
-    exactly. ngspice-42 replaces each non-ASCII byte of a node name with
+    it folds. Beyond ASCII the builds differ (``node-name-nonascii-case``):
+    XVII reads ``Äb`` and ``äb``, or ``Maß`` and ``MASS``, as two nodes, and
+    LTspice 26 as one. The fold keeps them apart, as XVII does, on every
+    build. ngspice-42 replaces each non-ASCII byte of a node name with
     ``_``, so two such names can be one node; that is reported by the lint
     (``node-non-ascii-ngspice``) and not modelled here.
     """

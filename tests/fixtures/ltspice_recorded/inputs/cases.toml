@@ -1578,9 +1578,11 @@ inputs = ["deck/save_subckt_dotted.cir"]
 
 [behaviour.node-name-nonascii-case]
 summary = "Whether two node names that differ only in case beyond ASCII (Äb and äb, Maß and MASS) are one node when a deck runs."
-model = ["lib/device_names.py", "lib/connectivity.py"]
+model = ["lib/device_names.py", "lib/connectivity.py", "lib/netlist_graph.py", "lib/trace_names.py", "lib/lint_rules.py"]
 # Each current source drives its own name and each resistor sits on the other
 # spelling: I(R1) and I(R2) are 1 mA only if the two spellings are one node.
+# Recorded: LTspice 26 joins both pairs (ß with SS too); XVII keeps each
+# spelling apart and reports the current sources' nodes floating.
 inputs = ["deck/node_name_nonascii_case.cir"]
 
 [behaviour.mos-charge-capacitances]
