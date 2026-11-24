@@ -525,7 +525,30 @@ async def test_stability_on_fra_results_with_no_printed_margin_says_it_did_not_c
     _, (observation,) = await _stability(read, state_no_sim, {"path": str(raw)}, "-gain_1")
     assert observation["code"] == "fra_margin_not_checked"
     assert observation["kind"] == "coverage"
-    assert "not established" in observation["detail"]
+    assert "no log" in observation["detail"]
+    assert "-gain_N" in observation["detail"]
+
+
+@pytest.mark.parametrize("signal", ["gain_1", "-gain_1", "1/gain_1", "-1/gain_1"])
+@ROUTES
+async def test_stability_on_a_reversed_fra_analyzer_says_ltspice_printed_no_finite_margin(
+    read: Reader, signal: str, state_no_sim: SessionState, work_dir: Path
+):
+    """With the analyzer's nodes swapped (``@1 b a``), LTspice prints the
+    crossover and phase margin as inf. The reply said the log printed no
+    margin for the analyzer and that the loop gain's form was not
+    established; the recording establishes it as ``-1/gain_1``, whose margin
+    is the one LTspice printed for raw/fra."""
+    job_id = _fra_job(state_no_sim, work_dir, "fra_reversed")
+    source = {"job_id": job_id, "other_raw": "fra_1"}
+    (value,), (observation,) = await _stability(read, state_no_sim, source, signal)
+    assert observation["code"] == "fra_margin_not_checked"
+    detail = observation["detail"]
+    assert "no finite margin printed for analyzer @1" in detail
+    assert "-1/gain_N" in detail
+    assert "not established" not in detail
+    if signal == "-1/gain_1":
+        assert value["phase_margin_worst_deg"] == pytest.approx(90.6, abs=0.05)
 
 
 async def test_stability_on_an_ac_sweep_compares_with_nothing(

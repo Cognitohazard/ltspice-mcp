@@ -2477,12 +2477,16 @@ async def printed_fra_margin(
     at ``step`` of a frequency response analysis, with the last printed digit
     of each (``log_parser.printed_fra_margins``), or None and why there is
     none. ``analyzer`` None takes the run's one analyzer, if it has only one.
+    A margin LTspice prints as inf (an analyzer facing away from the loop's
+    driving output) is not read, so it counts as none.
     """
     try:
         logs = await services.load_logs(source, state)
         printed = logs.value("fra_margins") or []
     except LTSpiceMCPError as e:
         return None, f"its log could not be read: {e}"
+    if "log" in logs.captured.absent:
+        return None, "there is no log beside the results"
     analyzers = {entry["analyzer"].lower() for entry in printed}
     if analyzer is None:
         if len(analyzers) != 1:
@@ -2495,7 +2499,7 @@ async def printed_fra_margin(
             return entry, ""
     if wanted in analyzers:
         return None, f"its log holds no finite margin printed for step {step}"
-    return None, f"its log holds no margin printed for analyzer {analyzer or wanted}"
+    return None, f"its log holds no finite margin printed for analyzer {analyzer or wanted}"
 
 
 def _agrees(stability: Mapping[str, Any], printed: Mapping[str, Any]) -> tuple[Any, Any, bool]:
@@ -2560,12 +2564,15 @@ async def _fra_margin_check(
 ) -> dict[str, Any] | None:
     """Whether ``stability`` read the quantity whose margin LTspice printed.
 
-    Which form of ``gain_N`` is the loop gain the recipe takes is recorded for
-    one way of placing the analyzer only (raw/fra: ``-gain_1``), so it is not
-    established from the results. LTspice prints its own crossover and phase
-    margin in the log; a recipe margin that differs from it beyond the printed
-    digits is of another quantity, and the observation says so, gives both and
-    names the forms whose margin agrees. None when the margins agree.
+    ``gain_N`` is the voltage at the analyzer's first node over the one at
+    its second (raw/fra and raw/fra_reversed), so which of its forms is the
+    loop gain the recipe takes depends on which way the analyzer faces:
+    ``-gain_N`` placed from the loop's driving output, ``-1/gain_N`` the other
+    way, where LTspice prints the margin as inf. LTspice prints its own
+    crossover and phase margin in the log; a recipe margin that differs from
+    it beyond the printed digits is of another quantity, and the observation
+    says so, gives both and names the forms whose margin agrees. None when the
+    margins agree.
     """
     analyzers = {
         f"@{match['analyzer']}"
@@ -2580,9 +2587,11 @@ async def _fra_margin_check(
             "kind": "coverage",
             "detail": (
                 f"Not checked against LTspice: {why}, so whether {expression.text} is "
-                "the quantity whose margin LTspice prints is not checked. Which form "
-                "of gain_N that is depends on how the analyzer is placed, which is not "
-                "established from the results."
+                "the quantity whose margin LTspice prints is not checked. gain_N is the "
+                "voltage at the analyzer's first node over the one at its second: placed "
+                "from the loop's driving output, -gain_N is the loop gain and LTspice "
+                "prints its margin; facing the other way, -1/gain_N is the loop gain and "
+                "LTspice prints the crossover and phase margin as inf."
             ),
         }
     crossover, margin, agrees = _agrees(data, printed)
@@ -2613,8 +2622,9 @@ async def _fra_margin_check(
         "detail": (
             f"stability on {expression.text} gives {got}, but {said}. They differ beyond "
             f"the printed digits, so {expression.text} is not the quantity whose margin "
-            f"LTspice printed. {try_next} Which form of gain_N is the loop gain is not "
-            "established from the results; this comparison is the check."
+            f"LTspice printed. {try_next} gain_N is the voltage at the analyzer's first "
+            "node over the one at its second, so placed from the loop's driving output "
+            "-gain_N is the loop gain whose margin LTspice prints."
         ),
         "evidence": {
             "found": {"crossover_hz": crossover, "phase_margin_deg": margin},
