@@ -205,7 +205,7 @@ class ExperimentExecution(StrictModel):
         default=False,
         strict=True,
         description=(
-            "Freeze validated inputs for jobs(action='resume'); unsupported inputs "
+            "Freeze validated inputs for jobs(action='resume', job_id=..., resume_request_id=...); unsupported inputs "
             "refuse before submission. Defaults to false; see spice://guide."
         ),
     )
@@ -254,7 +254,7 @@ class ExperimentExecution(StrictModel):
             raise ValueError(
                 "execution.results_beside_sheet cannot be combined with recoverable: a "
                 "resumed job's runs would finish without it. Copy a case's results "
-                "afterwards with jobs(action='place_beside_sheet')"
+                "afterwards with jobs(action='place_beside_sheet', job_id=...)"
             )
         return self
 
@@ -263,7 +263,7 @@ class ExperimentExecution(StrictModel):
         ge=0.0,
         description=(
             f"Dwell before returning, held to {SUBMISSION_DWELL_CAP_S:g}s; the job keeps "
-            "running. Continue with jobs(action='wait'); 0 returns immediately."
+            "running. Continue with jobs(action='wait', job_id=...); 0 returns immediately."
         ),
     )
 

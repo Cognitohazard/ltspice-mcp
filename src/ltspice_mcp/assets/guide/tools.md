@@ -18,7 +18,7 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | To … | Call |
 |-|-|
 | run a deck — once, swept, or perturbed | `run_experiments(circuits=[{"path": …}], variations=[…])` |
-| get the measurements without a second round trip | `run_experiments(analyze={"recipes": […]})` |
+| get the measurements without a second round trip | `run_experiments(circuits=[…], analyze={"recipes": […]})` |
 | follow, cancel, resume, or page a job's runs | `jobs(action="status"\|"wait"\|"cancel"\|"resume"\|"list"\|"runs")` |
 | measure a finished job | `analyze_results(sources=[{"job_id": …}], recipes=[…])` |
 | read `.meas` results | recipe `{"metric": "measurements"}` |
@@ -31,13 +31,13 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
 | amplitude and phase at one frequency | recipe `tone` (guide section 'signals') |
-| symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
-| nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
-| find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
-| what the user has open in LTspice, and which sheet is in front | `inspect(kind="open_in_ltspice")` |
-| measure a run the user made in LTspice | `inspect(kind="open_in_ltspice")` names the sheet in front, and LTspice wrote its results beside it as `<sheet>.raw`: `analyze_results(sources=[{"path": "<sheet>.raw"}], recipes=[…])` |
+| symbol geometry, a net, a component list, a model | `inspect(queries=[{"kind": "symbol", "name": ...}])`, `inspect(queries=[{"kind": "net", "path": ..., "at": ...}])`, `inspect(queries=[{"kind": "components", "path": ...}])`, `inspect(queries=[{"kind": "model", "mode": "search", "query": ...}])` |
+| nested devices, scoped ports, effective parameters | `inspect(queries=[{"kind": "hierarchy", "path": ..., "simulator": ...}])` |
+| find the recipe, op or check for a job, and its fields | `inspect(queries=[{"kind": "reference", "query": "phase margin"}])` |
+| what the user has open in LTspice, and which sheet is in front | `inspect(queries=[{"kind": "open_in_ltspice"}])` |
+| measure a run the user made in LTspice | `inspect(queries=[{"kind": "open_in_ltspice"}])` names the sheet in front, and LTspice wrote its results beside it as `<sheet>.raw`: `analyze_results(sources=[{"path": "<sheet>.raw"}], recipes=[…])` |
 | keep or drop the user's unsaved LTspice changes, once they choose | `edit_schematic(path=…, expected_sha256=…, ops=[], open_window="save"\|"discard")` (guide section 'schematics') |
-| LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(kind="simulator_docs")`, then `name=` one of them |
+| LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(queries=[{"kind": "simulator_docs"}])`, then again with `"name"` set to one of them |
 | create or mutate an `.asc` | `edit_schematic(path=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 | open a sheet in the user's own LTspice, when they ask to see it there | `verify_circuit(path=…, in_ltspice=true)` |
@@ -55,7 +55,7 @@ running is refused with `run_not_finished`, and `analyze_results` lists it in
 statistic over the runs read is not the job's result until that count is
 gone. A simulator writes in
 buffered blocks, so compare readings a few minutes apart. If `points` has not
-changed, the case is not advancing, and `jobs(action="cancel")` stops it. A
+changed, the case is not advancing, and `jobs(action="cancel", job_id=...)` stops it. A
 stopped case's raw is deleted unless the run set
 `execution.keep_partial_raw: true`. With that set, its results stay readable
 up to the point where the run stopped, and every read reports a `partial_raw`
@@ -63,7 +63,7 @@ observation.
 
 ## Finding a recipe, op or check and its fields
 
-`inspect(kind="reference")` finds a recipe, schematic op, variation kind,
+`inspect(queries=[{"kind": "reference"}])` finds a recipe, schematic op, variation kind,
 check or job action from plain words (`query="phase margin"`) and returns its
 fields, types, defaults and units; with no `query` it lists them all. Use it
 instead of guessing a name. Always use it when your tool schema has no

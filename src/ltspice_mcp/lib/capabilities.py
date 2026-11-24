@@ -12,7 +12,7 @@ Features ask this table rather than compare a family's name:
 ``simulator.family_refusal`` and ``simulator.asc_export_refusal`` read it,
 ``experiment_inputs.prepare_startup`` reads where a controlled startup holds,
 ``verify_circuit`` reads it to say when a deck was checked with the
-dialect-neutral rules only, ``inspect(kind="capabilities")`` shows the view
+dialect-neutral rules only, ``inspect``'s ``capabilities`` query shows the view
 for this session (``session_view``), and the ``spice://capabilities``
 resource serves the whole table with its evidence (``table_report``).
 
@@ -29,7 +29,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ltspice_mcp.lib.continuation import mcp_call
 from ltspice_mcp.lib.families import DISPLAY, FAMILIES, HOSTS
+
+#: The call that shows this session's view of the table.
+CAPABILITIES_CALL = mcp_call("inspect", {"queries": [{"kind": "capabilities"}]})
 
 Kind = Literal["baseline", "refinement"]
 Status = Literal["supported", "gap", "unverified"]
@@ -146,7 +150,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "hierarchy",
         "baseline",
         "Resolve nested instances, models and parameters as this simulator does, for "
-        "instance targeting and inspect(kind='hierarchy').",
+        "instance targeting and inspect(queries=[{'kind': 'hierarchy', 'path': ..., 'simulator': ...}]).",
         "ltspice_mcp.lib.hierarchy",
     ),
     Capability(

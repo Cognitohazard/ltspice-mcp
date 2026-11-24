@@ -71,7 +71,7 @@ takes four kinds of rule:
 
 The first three take `{target, tolerance, scale: "relative"|"absolute",
 distribution: "normal"|"uniform"}`; `model` adds `param`.
-`inspect(kind="reference", query="monte carlo")` returns the full field tables.
+`inspect(queries=[{"kind": "reference", "query": "monte carlo"}])` returns the full field tables.
 These coefficients are your own assumptions; for a PDK's own statistical
 models, see guide section 'sky130'.
 
@@ -166,7 +166,7 @@ applies to the model card's `VTO`/`KP`:
   BSIM3 or BSIM4 model. LTspice takes neither `mulu0` nor `delvto` on BSIM3, so
   there the device gets its own copy of its model card with `vth_param` and
   `k_param` changed, which needs a model with one definition (not binned).
-  List the physical MOS instances with `inspect(kind="hierarchy")` (guide
+  List the physical MOS instances with `inspect(queries=[{"kind": "hierarchy", "path": ..., "simulator": ...}])` (guide
   section 'hierarchy'). Sampling uses each device's final W/L, after any
   `assign` variation has set it.
 - On QSPICE and Xyce a rule whose `prefix` names an `X` instance, an

@@ -20,6 +20,7 @@ from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
 from ltspice_mcp.lib import atomic_write_bytes, presenter, response_budget, said_once
+from ltspice_mcp.lib.capabilities import CAPABILITIES_CALL
 from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
@@ -749,7 +750,8 @@ def difference_in_full(sheet: str = "this path", window: str = "the window's pro
     that reply gives the two.
     """
     return (
-        f"inspect(kind='open_in_ltspice') with path set to {sheet} and pid to {window} "
+        "inspect(queries=[{'kind': 'open_in_ltspice', 'path': ..., 'pid': ...}]) with path "
+        f"set to {sheet} and pid to {window} "
         "reads every entry where the window's copy differs from the file, paged."
     )
 
@@ -759,7 +761,10 @@ def sha256_from_open_in_ltspice(sheet: str) -> str:
     it: ``inspect``'s ``open_in_ltspice`` query given the sheet as ``path``,
     whose reply gives the file's ``sha256``. ``sheet`` says where the reply
     gives the sheet."""
-    return f"the sha256 that inspect(kind='open_in_ltspice') with path set to {sheet} gives"
+    return (
+        "the sha256 that inspect(queries=[{'kind': 'open_in_ltspice', 'path': ...}]) with "
+        f"path set to {sheet} gives"
+    )
 
 
 def open_window_call(
@@ -2072,7 +2077,7 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
                 f"Simulator '{requested}' is not available on this server (detected: "
                 f"{list(state.available_simulators)}, named: {sorted(state.named_simulators)}). "
                 f"Named executables are read from {_SIM_SECTION}.{_SIM_EXECUTABLES_KEY} at "
-                "startup; inspect(kind='capabilities') lists them, and its diagnostics say "
+                f"startup; {CAPABILITIES_CALL} lists them, and its diagnostics say "
                 "why a configured one was skipped.",
                 show_hint=False,
             )
@@ -2091,7 +2096,7 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
         role = "Simulator" if requested is not None else "The server's default simulator"
         raise SimulationError(
             f"{role} '{requested or family}' cannot run here: {refusal} Selectable here: "
-            f"{selectable}; inspect(kind='capabilities') says which simulators a "
+            f"{selectable}; {CAPABILITIES_CALL} says which simulators a "
             "run can select.",
             show_hint=False,
         )

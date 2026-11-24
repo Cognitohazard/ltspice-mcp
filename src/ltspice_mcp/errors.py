@@ -514,8 +514,8 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "simulator's own libraries, or add .lib/.include directives to the netlist."
     ),
     RecipeInvalidError: (
-        "Correct the recipe and send the call again; inspect(kind='reference', "
-        "query='<metric>') lists each recipe's fields."
+        "Correct the recipe and send the call again; inspect(queries=[{'kind': "
+        "'reference', 'query': '<metric>'}]) lists each recipe's fields."
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "

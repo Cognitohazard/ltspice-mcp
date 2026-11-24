@@ -4787,7 +4787,7 @@ _REQUEST_ECHO = frozenset({"sources", "recipes", "include", "group_by", "step", 
         "(propagation delay), periodic (duty cycle), transient_response (overshoot, settling, "
         "load step), time_steps (smallest time step, where), operating_point (bias point, gm/gds/vth), measurements "
         "(.meas), value (one trace at one axis point), summary, waveform "
-        "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
+        "(samples, CSV), plot (chart). inspect(queries=[{'kind': 'reference', 'query': ...}]) "
         "searches these by plain words and returns a recipe's fields. A signal is "
         "one trace or V(a,b), not an expression; other trace math is numpy "
         "(guide section 'signals')."

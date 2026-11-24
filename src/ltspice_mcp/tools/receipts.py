@@ -23,6 +23,7 @@ from typing import Any, Literal, get_args
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import not_shown, services
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.capabilities import CAPABILITIES_CALL
 from ltspice_mcp.lib.continuation import call_to_continue
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
@@ -107,7 +108,7 @@ SAID_BEFORE_SCHEMA: dict[str, Any] = {
     "minimum": 1,
     "description": (
         "Present in place of the note's text when this session was already sent it "
-        "in full: how many replies carried it before. jobs(action='status') sends "
+        "in full: how many replies carried it before. jobs(action='status', job_id=...) sends "
         "every note in full."
     ),
 }
@@ -205,7 +206,7 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
         "names the bound and whether it was the request's or the server default; "
         "the partial_progress observation says how far the run got. If it needs "
         "longer, resubmit with a larger execution.run_timeout_s (a server default comes "
-        'from [simulation] run_timeout, limits.run_timeout_s in inspect(kind="capabilities")). '
+        f"from [simulation] run_timeout, limits.run_timeout_s in {CAPABILITIES_CALL}). "
         "If it should have been quick, read evidence.log_excerpt for a collapsing timestep."
     ),
     "job_deadline": (

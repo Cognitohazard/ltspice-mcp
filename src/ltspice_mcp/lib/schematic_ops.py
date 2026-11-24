@@ -3715,7 +3715,8 @@ def _no_wire_text(editor: AscEditor, ends: set[tuple[int, int]]) -> str:
     if not there:
         return (
             f"No wire to remove: no wire has an end at {named}. To see the wires of a "
-            "net with their ends, call inspect(kind=\"net\", at=[x, y]) on a point of it."
+            "net with their ends, call inspect(queries=[{\"kind\": \"net\", \"path\": ..., "
+            "\"at\": [x, y]}]) on a point of it."
         )
     return (
         f"No wire to remove: the wires with an end at {named} are {_listed(there)}. "
@@ -3738,7 +3739,7 @@ def _no_label_text(editor: AscEditor, point: tuple[int, int]) -> str:
     at = f"({point[0]},{point[1]})"
     fix = (
         "To see the labels of a net with their points, call "
-        "inspect(kind=\"net\", at=[x, y]) on a point of it."
+        'inspect(queries=[{"kind": "net", "path": ..., "at": [x, y]}]) on a point of it.'
     )
     if not there:
         return f"No net label at {at}, and nothing else is there. {fix}"

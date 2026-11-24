@@ -168,7 +168,7 @@ TRANSIENT_FIELDS_BY_MODE: dict[str, frozenset[str]] = {
 # catalogue; and the guide. The helper owning it makes the pointer structural,
 # not a per-call-site convention.
 DORMANT_POINTER = (
-    " Full arguments: inspect(kind='reference', query='{metric}'), "
+    " Full arguments: inspect(queries=[{{'kind': 'reference', 'query': '{metric}'}}]), "
     "api.reference('analyze_results'), or guide section 'tools'."
 )
 

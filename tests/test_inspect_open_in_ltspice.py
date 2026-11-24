@@ -353,7 +353,7 @@ async def test_a_sheet_no_window_has_open_fails_and_says_where_to_look(
     item = await ask(asc_state, path=str(asc_file))
 
     assert item["error"]["code"] == "sheet_not_open"
-    assert "inspect(kind='open_in_ltspice') without a path" in item["error"]["message"]
+    assert "inspect(queries=[{'kind': 'open_in_ltspice'}]) lists what is open" in item["error"]["message"]
 
 
 @pytest.mark.parametrize(

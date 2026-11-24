@@ -188,7 +188,7 @@ STEPS_SCHEMA: dict[str, Any] = {
                 "stopped, stopped with its partial raw kept, or whose raw could not be "
                 "read then), or is not yet: its run's end-of-run checks are still being "
                 "made. A read of its results "
-                "gives their steps: inspect(kind='results', view='plots') or "
+                "gives their steps: inspect(queries=[{'kind': 'results', 'job_id': ..., 'view': 'plots'}]) or "
                 "plot_waveform with its case_id."
             ),
         },

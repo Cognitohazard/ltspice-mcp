@@ -240,7 +240,7 @@ class TestDormantBranchesKeepTheirDescription:
         pointers are a Python import and a resource read."""
         for name, body in self._exempt("full").items():
             metric = body["properties"]["metric"]["const"]
-            pointer = f"inspect(kind='reference', query='{metric}')"
+            pointer = f"inspect(queries=[{{'kind': 'reference', 'query': '{metric}'}}])"
             assert pointer in body["description"], name
             assert body["description"].index(pointer) < body["description"].index("api.reference(")
             assert "guide section 'tools'" in body["description"]

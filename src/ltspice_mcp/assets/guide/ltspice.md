@@ -10,7 +10,7 @@ description: >
 
 This section covers decks. For the LTspice program itself (a keyboard
 shortcut, a menu, the waveform viewer, the `.asc` file format), LTspice 26.1
-and later installs its own reference, which `inspect(kind="simulator_docs")`
+and later installs its own reference, which `inspect(queries=[{"kind": "simulator_docs"}])`
 lists and reads. Prefer it to memory for anything about using the LTspice
 window.
 
@@ -281,7 +281,7 @@ C1 out 0 {C}
   beside `other_raws.op`, the transient's operating point. `other_raw: "fra_1"`
   reads it by job and case in `analyze_results` (on a job source),
   `run_experiments`' attached `analyze` block, `plot_waveform`,
-  `inspect(kind="results")` and `api.load_raw`; its path reads it too. A
+  `inspect(queries=[{"kind": "results", "job_id": ...}])` and `api.load_raw`; its path reads it too. A
   stepped FRA run's results file holds each step's sweep in turn, and the
   server reads it one step at a time, as it reads a stepped `.ac`. Which
   way the analyzer faces decides whether `gain_N` is the loop gain the
@@ -309,7 +309,7 @@ C1 out 0 {C}
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)
   are LTspice's own, netlisted with prefix `A`. An A-device's description and
   the parameters it takes are attributes of its symbol, which
-  `inspect(kind="symbol")` lists.
+  `inspect(queries=[{"kind": "symbol", "name": ...}])` lists.
 - **`*!LTspice: <directive>`** is read as a directive, not a comment, despite
   the `*`.
 - **Area multipliers**: an undocumented `m=<value>` works on R, Q and J as well

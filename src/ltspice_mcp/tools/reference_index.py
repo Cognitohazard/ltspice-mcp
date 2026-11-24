@@ -580,7 +580,7 @@ def _sources() -> tuple[_Source, ...]:
             tool="run_experiments",
             family="random rule",
             call=(
-                'run_experiments(variations=[{{"kind": "random", "runs": 100, '
+                'run_experiments(circuits=[...], variations=[{{"kind": "random", "runs": 100, '
                 '"rules": [{{"rule": "{name}", ...}}]}}])'
             ),
             branches=_union_branches(RandomRule, "rule"),

@@ -430,7 +430,7 @@ class TestErrors:
         assert str(refused.value).startswith(
             "This plot has no sampled axis to chart: its op results are one table of values."
         )
-        assert "inspect(kind='results', view='table')" in str(refused.value)
+        assert "inspect(queries=[{'kind': 'results', 'job_id': ..., 'view': 'table'}])" in str(refused.value)
         assert "in_ltspice=true" in str(refused.value)
         assert refused.value.show_hint is False
 

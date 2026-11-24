@@ -24,6 +24,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
+from ltspice_mcp.lib.capabilities import CAPABILITIES_CALL
 from ltspice_mcp.lib.simulator import simulator_family
 from ltspice_mcp.lib.simulator_build import executable_path
 
@@ -154,7 +155,7 @@ def job_simulator(job: ExperimentJob, state: SessionState | None) -> JobSimulato
                 "detail": (
                     f"This session has no simulator named '{selector}', so "
                     f"execution.simulator='{selector}' is refused here; "
-                    "inspect(kind='capabilities') lists the selectors it offers."
+                    f"{CAPABILITIES_CALL} lists the selectors it offers."
                 ),
             },
         ),

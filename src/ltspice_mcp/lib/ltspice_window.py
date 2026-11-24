@@ -379,7 +379,7 @@ class OpenWindows:
 
     ``available`` is False where there is no bridge to ask, and every method
     then raises ``WindowsUnavailable``. ``unavailable`` says why, for
-    ``inspect(kind="capabilities")``. ``start`` starts LTspice where a person
+    ``inspect``'s ``capabilities`` query. ``start`` starts LTspice where a person
     can see it; without one, none is ever started.
     """
 

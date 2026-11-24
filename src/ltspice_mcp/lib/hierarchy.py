@@ -91,6 +91,9 @@ _SAFE_NODE = re.compile(r"[A-Za-z0-9_]+\Z")
 Family = Literal["ltspice", "ngspice"]
 SUPPORTED_FAMILIES: frozenset[str] = frozenset(get_args(Family))
 
+#: The call that reads a deck's hierarchy, for the messages that refer to it.
+HIERARCHY_CALL = "inspect(queries=[{'kind': 'hierarchy', 'path': ..., 'simulator': ...}])"
+
 ESTABLISHED_NGBEHAVIOR: frozenset[str] = frozenset({"", "hsa", "kiltpsa"})
 """The ngspice modes whose reading rules this module follows were checked
 against ngspice for (``tests/test_hierarchy.py``,
@@ -248,7 +251,7 @@ def unestablished_reason(profile: SemanticProfile, purpose: str) -> str | None:
         f"unsupported hierarchy ngbehavior {profile.ngbehavior!r} for {purpose}: the "
         f"hierarchy reader's rules are established for {established_modes()} only; set "
         "[simulator] ngbehavior to hsa or kiltpsa (unset, the server uses kiltpsa) and "
-        "restart the server. inspect(kind='hierarchy') still reads the deck in this "
+        f"restart the server. {HIERARCHY_CALL} still reads the deck in this "
         "mode where ngspice confirms its values."
     )
 

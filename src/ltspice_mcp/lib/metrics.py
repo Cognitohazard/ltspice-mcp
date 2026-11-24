@@ -306,7 +306,8 @@ def _no_axis_error(raw: DecodedRaw | DecodedPlot) -> NoAxisError:
         )
     else:
         hint = (
-            "Read its quantities through inspect(kind='results', view='table') "
+            "Read its quantities through inspect(queries=[{'kind': 'results', "
+            "'job_id': ..., 'view': 'table'}]) "
             "or api.load_raw(...).table()."
         )
     return NoAxisError(
@@ -2784,7 +2785,8 @@ async def operating_point(
     is_dc = is_dc_analysis(raw)
     if as_bias_point and not (is_operating_point(raw) or is_dc):
         hint = (
-            "Read native quantities with inspect(kind='results', view='table')."
+            "Read native quantities with inspect(queries=[{'kind': 'results', "
+            "'job_id': ..., 'view': 'table'}])."
             if raw.descriptor.axis is None
             else "Read sampled traces with the value recipe."
         )
