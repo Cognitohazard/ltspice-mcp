@@ -213,11 +213,6 @@ NGSPICE_DIFFERS: dict[str, str] = {
         )
         for letter in ("R", "C", "L")
     },
-    "deck/element_grid_values:Kk": (
-        "a K card couples two inductors and has no node, as both LTspice builds "
-        "wire it; ngspice was not run on this cell since the view stopped reading "
-        "the inductors' names as its nodes, so its agreement is not established"
-    ),
 }
 
 
