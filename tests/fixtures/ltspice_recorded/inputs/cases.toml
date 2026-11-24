@@ -912,14 +912,17 @@ keep = ["log", "raw", "fra_1.raw"]
 
 [behaviour.raw-fra-orientation]
 summary = "What a frequency response analysis's gain_N is when the analyzer faces the other way: whether it is the negative of the loop gain, as raw/fra records for one orientation, or its reciprocal or negative reciprocal, and the crossover and phase margin LTspice prints for it."
-model = ["lib/metrics.py", "assets/guide/ltspice.md"]
+model = ["lib/metrics.py", "lib/log_parser.py", "assets/guide/ltspice.md", "lib/metrics.py:stability", "lib/metrics.py:printed_fra_margin", "lib/metrics.py:_agreeing_forms", "lib/metrics.py:_fra_margin_check", "lib/log_parser.py:printed_fra_margins"]
 # raw/fra's loop with the analyzer's two nodes swapped (@1 b a), so it injects
-# from the pole's side toward the amplifier's output. The stability recipe's
-# margin check names the form of gain_1 whose margin agrees with the printed
-# one; this recording establishes which that is.
+# from the pole's side toward the amplifier's output. LTspice 26 records gain_1
+# as the exact reciprocal of raw/fra's at every frequency: gain_N is the
+# voltage at the analyzer's first node over the one at its second, so raw/fra's
+# gain_1 is the negative of the loop gain and this one its negative reciprocal,
+# and stability on -1/gain_1 gives raw/fra's crossover and phase margin. Facing
+# this way, LTspice prints the crossover and phase margin as inf. XVII 17.0.37
+# refuses the deck, as it refuses raw/fra.
 inputs = ["raw/fra_reversed.cir"]
 keep = ["log", "raw", "fra_1.raw"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.raw-ascii]
 summary = "A raw written as text (Values:): 8-bit with CRLF line ends, header included, where every other raw has a UTF-16 header."

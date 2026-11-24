@@ -2562,9 +2562,9 @@ def test_the_analyses_ltspice_does_not_have_are_refused(build: str):
 _FRA_RESULT = re.compile(r"F\(0dB\) = ([0-9.]+) kHz, Phase Margin = ([0-9.]+) degrees")
 
 
-def _fra_results(work_dir: Path, state: SessionState) -> services.AnalysisSource:
-    raw = work_dir / "fra.fra_1.raw"
-    raw.write_bytes(rec.recorded("ltspice26", "raw/fra.fra_1.raw").read_bytes())
+def _fra_results(work_dir: Path, state: SessionState, run: str = "fra") -> services.AnalysisSource:
+    raw = work_dir / f"{run}.fra_1.raw"
+    raw.write_bytes(rec.recorded("ltspice26", f"raw/{run}.fra_1.raw").read_bytes())
     return services.source_for_raw_path(raw, state)
 
 
@@ -2596,6 +2596,45 @@ async def test_the_stability_recipe_on_the_negated_fra_gain_gives_ltspices_margi
     source = _fra_results(work_dir, state_no_sim)
     result = await metrics.stability(
         source, StabilityRecipe(key="loop", metric="stability", signal="-gain_1"), 0, state_no_sim
+    )
+    (margin,) = result["phase_margins"]
+    assert margin["frequency_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
+    assert margin["margin_deg"] == pytest.approx(margin_deg, abs=0.5)
+
+
+async def test_swapping_the_fra_analyzers_nodes_turns_its_gain_into_the_reciprocal(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """raw/fra_reversed is raw/fra with the analyzer's two nodes swapped
+    (``@1 b a``). LTspice 26 records its ``gain_1`` as the reciprocal of
+    raw/fra's at every frequency: ``gain_N`` is the voltage at the analyzer's
+    first node over the one at its second."""
+    forward = await services.load_raw(_fra_results(work_dir, state_no_sim), state_no_sim)
+    reversed_ = await services.load_raw(
+        _fra_results(work_dir, state_no_sim, "fra_reversed"), state_no_sim
+    )
+    assert list(np.real(reversed_.get_axis())) == list(np.real(forward.get_axis()))
+    product = forward.get_wave("gain_1") * reversed_.get_wave("gain_1")
+    assert np.allclose(product, 1.0, rtol=1e-3)
+
+
+async def test_the_stability_recipe_on_a_reversed_fra_analyzer_reads_the_negative_reciprocal(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """Facing the other way, ``-1/gain_1`` is the loop gain: the recipe on it
+    gives the crossover and phase margin LTspice printed for raw/fra. LTspice's
+    own log for the reversed analyzer prints both as inf."""
+    said = _FRA_RESULT.search(read_spice_text(rec.recorded("ltspice26", "raw/fra.log")))
+    assert said is not None
+    crossover_khz, margin_deg = (float(value) for value in said.groups())
+    reversed_log = read_spice_text(rec.recorded("ltspice26", "raw/fra_reversed.log"))
+    assert "F(0dB) = inf Megahertz, Phase Margin = inf degrees" in reversed_log
+    source = _fra_results(work_dir, state_no_sim, "fra_reversed")
+    result = await metrics.stability(
+        source,
+        StabilityRecipe(key="loop", metric="stability", signal="-1/gain_1"),
+        0,
+        state_no_sim,
     )
     (margin,) = result["phase_margins"]
     assert margin["frequency_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
@@ -2844,14 +2883,16 @@ async def test_every_reader_of_a_path_refuses_other_raw_beside_it(
     assert said in str(analyze_error.value)
 
 
-def test_ltspice_xvii_refuses_a_frequency_response_analysis():
+@pytest.mark.parametrize("case_id", ["raw/fra", "raw/fra_reversed"])
+def test_ltspice_xvii_refuses_a_frequency_response_analysis(case_id: str):
     """The analysis came with LTspice 17.1: XVII 17.0 names the analyzer as a
-    device it does not know, writes no results, and the server reads that as
-    the run's error."""
-    log = rec.recorded("ltspice17", "raw/fra.log")
+    device it does not know, whichever way it faces, writes no results, and
+    the server reads that as the run's error."""
+    assert rec.entry("ltspice17", case_id)["exit_code"] == 1
+    log = rec.recorded("ltspice17", f"{case_id}.log")
     errors = extract_log_diagnostics(log)["errors"]
     assert any('Unknown SPICE device type "@"' in error for error in errors)
-    assert not rec.recorded("ltspice17", "raw/fra.fra_1.raw").exists()
+    assert not rec.recorded("ltspice17", f"{case_id}.fra_1.raw").exists()
 
 
 class TestCompareRuns:

@@ -283,17 +283,19 @@ C1 out 0 {C}
   `run_experiments`' attached `analyze` block, `plot_waveform`,
   `inspect(kind="results")` and `api.load_raw`; its path reads it too. A
   stepped FRA run's results file holds each step's sweep in turn, and the
-  server reads it one step at a time, as it reads a stepped `.ac`. Which
-  way the analyzer faces decides whether `gain_N` is the loop gain the
-  `stability` recipe takes, its negative, its reciprocal or its negative
-  reciprocal, and that is not established from the results; with the
-  analyzer facing as in the one recorded run, `stability` on `-gain_1` gives
-  the crossover and phase margin LTspice prints at the end of the log.
-  `stability` on these results compares its margin with that printed one: an
-  observation `fra_margin_differs` gives both and names the form whose margin
-  agrees, and `fra_margin_not_checked` says the log held none to compare.
-  Read that observation before trusting the margin. LTspice XVII 17.0 has no
-  FRA and refuses the analyzer.
+  server reads it one step at a time, as it reads a stepped `.ac`.
+  `gain_N` is the voltage at the analyzer's first node over the voltage at
+  its second, so swapping the two nodes turns it into its reciprocal. Placed
+  as `@1 a b` with `a` the output that drives the loop and `b` the rest of
+  the loop, `gain_1` is the negative of the loop gain the `stability` recipe
+  takes: read `stability` on `-gain_1`, which gives the crossover and phase
+  margin LTspice prints at the end of the log. Facing the other way
+  (`@1 b a`), the loop gain is `-1/gain_1`, and LTspice prints the crossover
+  and phase margin as `inf`. `stability` on these results compares its
+  margin with the printed one: an observation `fra_margin_differs` gives both
+  and names the form whose margin agrees, and `fra_margin_not_checked` says
+  the log held no finite one to compare. Read that observation before
+  trusting the margin. LTspice XVII 17.0 has no FRA and refuses the analyzer.
 
 ### `startup`, text of several lines, A-devices and multipliers
 
