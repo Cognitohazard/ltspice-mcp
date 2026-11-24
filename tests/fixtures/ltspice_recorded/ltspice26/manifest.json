@@ -3431,6 +3431,466 @@
         ".raw"
       ]
     },
+    "deck/expr_grid_arithmetic": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_arithmetic.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_arithmetic.cir": "2f0ae0f3e2043c0e114fa1a8ec09d3acbbac677fb75679a7538b331834c96c03"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_arithmetic.log": {
+          "bytes": 356,
+          "sha256": "fb773a2e5261e55c3a84f272f922952a2bab17fbd327d4f97630e17a83ebbcd9"
+        },
+        "deck/expr_grid_arithmetic.raw": {
+          "bytes": 6708,
+          "sha256": "2fd501e586b5045d77200c77bea54ab46d46d6906cea190278cd2e9c97531c37"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_bare": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_bare.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/expr_grid_bare.cir": "5bd13bf969c7d3bdefb50072ce9f243e25b51b636d43e47c8cddc4d4921640c7"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_bare.log": {
+          "bytes": 92,
+          "sha256": "b712169565b8cdfd5874c027ae27b97b0bece5cd98e4de249c51b13f94a60af1"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/expr_grid_divide_negative_by_zero": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_divide_negative_by_zero.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/expr_grid_divide_negative_by_zero.cir": "900b3122aa85af2de764df82b8d78b793374b7b734f7a8e97a3c80476a4a8632"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_divide_negative_by_zero.log": {
+          "bytes": 240,
+          "sha256": "e0088f207aff3c7b90d5e473afff3a7601640f97ee2ac593b6de9f0a6dee09f6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/expr_grid_divide_positive_by_zero": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_divide_positive_by_zero.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/expr_grid_divide_positive_by_zero.cir": "e20cdb1e5b526e4b3497acd4ee53e66752478138aba38d04c77a9a31e012e6bf"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_divide_positive_by_zero.log": {
+          "bytes": 240,
+          "sha256": "216e0b4fa2b8cac570d3fc2128ae29282156d1f1d92e94084e57a3e84663f2c1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/expr_grid_divide_zero_by_zero": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_divide_zero_by_zero.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/expr_grid_divide_zero_by_zero.cir": "e7434a5e03804e835358dffe62bc6d429fa1c151bb6109e0dc02c0b4912e20e0"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_divide_zero_by_zero.log": {
+          "bytes": 234,
+          "sha256": "b554d251cd75c87a1b6d4412d475f35cb367981ce50d354c824ec8a09613ff71"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/expr_grid_negated_power_star": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_negated_power_star.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_negated_power_star.cir": "cbd3e3b8c7ed61ba99bee7e0d622ad04a9f8ec817d19611ce5fa9f667211f0dd"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_negated_power_star.log": {
+          "bytes": 372,
+          "sha256": "22ea89643be019ab2de324d9da483ed78ad64b9e7090825c3049710efb468f5c"
+        },
+        "deck/expr_grid_negated_power_star.raw": {
+          "bytes": 624,
+          "sha256": "4bec530eebcc77cec5323975aab561ee362fe30a2bb52059a8ae4e194dc6e652"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_negative_to_a_fraction": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_negative_to_a_fraction.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_negative_to_a_fraction.cir": "f430c444bf0fdf6a10e8bed9b175e5d046849d00776f3bf509d8dde273a452dc"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_negative_to_a_fraction.log": {
+          "bytes": 380,
+          "sha256": "ad96c18129f5507e643abab6fda618538c0961cb547c176b22c5f4c533ce9535"
+        },
+        "deck/expr_grid_negative_to_a_fraction.raw": {
+          "bytes": 632,
+          "sha256": "b715e67f22ae5e6f35acad99cc76de2dfaa62374b8bdf16b8a9d0c8e251a05b0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_negative_to_negative_whole": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_negative_to_negative_whole.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_negative_to_negative_whole.cir": "de1a28712a41c1517ef6cb10230b26d70d6f65204d99050f731c0e02aaec986c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_negative_to_negative_whole.log": {
+          "bytes": 388,
+          "sha256": "b5a485363666bd30756d5e5ec4123968518ee96f4cd4dfbef936c7c7f5440d26"
+        },
+        "deck/expr_grid_negative_to_negative_whole.raw": {
+          "bytes": 640,
+          "sha256": "719f292c7c5def595fe04aa4a05a04424f9693c968bda2d64a4a505d4bce44fc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_negative_to_whole": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_negative_to_whole.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_negative_to_whole.cir": "ebafdf177f900dd0958fd4d4ddfe9a615b84e02b570122179ab63a6d2a9fb2a9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_negative_to_whole.log": {
+          "bytes": 370,
+          "sha256": "e64dacb4bc1767f11c9b1c4f5a578a30b937103574a5571d3b97a94e6de31cdc"
+        },
+        "deck/expr_grid_negative_to_whole.raw": {
+          "bytes": 622,
+          "sha256": "dafa7ae6b8c7290345beb030933a22608f3dd35e50e1f47d1a58ccd9435bd6a2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_negative_to_zero": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_negative_to_zero.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_negative_to_zero.cir": "300305b4cede326fed28796167d7eed64123df57de3088b6d2ee343032af51c0"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_negative_to_zero.log": {
+          "bytes": 368,
+          "sha256": "09e477fbf018589a05f6c98a74533018f9610ed46693a0fcbf258d36a9704a19"
+        },
+        "deck/expr_grid_negative_to_zero.raw": {
+          "bytes": 620,
+          "sha256": "487233ee978724e347aa7ab1a0d7e0f2ac82c06c2645653024afae021eeecf56"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_nested_braces": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_nested_braces.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_nested_braces.cir": "6e3cc16de39ef057aa4ea4c258d1336b945f97f0c50d0720f7c8ebd34498df75"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_nested_braces.log": {
+          "bytes": 362,
+          "sha256": "f481959467328eb4fd0c118742d4e514a350efa2d15901009b3379161fa1e2a9"
+        },
+        "deck/expr_grid_nested_braces.raw": {
+          "bytes": 614,
+          "sha256": "c946b0deda1a97b8e41ab9239d64978b8248b471894313a9df4961019098f841"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_power_negated_name": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_power_negated_name.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_power_negated_name.cir": "b43466759d81031a93f63072ebfa5f20a94cd2ffd1dca7565669a1b79793a0f0"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_power_negated_name.log": {
+          "bytes": 372,
+          "sha256": "36532732268a1d1c70d0d87972e7dc59c1ba100840f2ba9c82d8e13f58961a0d"
+        },
+        "deck/expr_grid_power_negated_name.raw": {
+          "bytes": 624,
+          "sha256": "06bca539f1e5c7e0c88d7f6ef8177bf236912c5181c56ba35b0c7b073acbb983"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_quotes": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_quotes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_quotes.cir": "fe883f9ead5273c79d055c0fbd103cf9cc8436493c99600bf195dfb1fad0901d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_quotes.log": {
+          "bytes": 348,
+          "sha256": "da3702976b2476b54b4ccfcd23bf4a12c1e982e11cf62b3ac1dc612afd8cca08"
+        },
+        "deck/expr_grid_quotes.raw": {
+          "bytes": 600,
+          "sha256": "1c9b7db0fe8436a29954e50e72660831159b32c8533c712b633541e85aa73baf"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_zero_to_a_negative_power": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_zero_to_a_negative_power.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_zero_to_a_negative_power.cir": "c72896709a6b9d751e79f50f53e762465351238f85d446631050482fe89d0c76"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_zero_to_a_negative_power.log": {
+          "bytes": 384,
+          "sha256": "fb8ac5f9561699aa9246817a107ebf2e5f499c82785b26387801f50d51708ff3"
+        },
+        "deck/expr_grid_zero_to_a_negative_power.raw": {
+          "bytes": 636,
+          "sha256": "55dbe59de92fd2835207fd06a5aae178863d9117936b911d3aef3b04dd8bfeaa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/expr_grid_zero_to_zero": {
+      "behaviour": "expression-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/expr_grid_zero_to_zero.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/expr_grid_zero_to_zero.cir": "30b627428791a4628d666e503089afcf0b3901c71eac91d3b0c380276b3ebd99"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/expr_grid_zero_to_zero.log": {
+          "bytes": 360,
+          "sha256": "51c050168874464b74afec1661849b4cc27cd0262d671865133d1d33671617f2"
+        },
+        "deck/expr_grid_zero_to_zero.raw": {
+          "bytes": 612,
+          "sha256": "6bb7c4fead9e0e7798152f5a6451d53950d6da6950c1b13e3a1059edc33e7ba8"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/global_in_body": {
       "behaviour": "global-inside-body",
       "command": [
@@ -4516,6 +4976,948 @@
         "deck/no_end.raw": {
           "bytes": 628,
           "sha256": "fc04aab13d4a72e3f944544e8853d2ee760615e69f1d9df75a56f8ce11d75ff5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces.cir": "44482a11aaec832366c2e5a26eb465d63980fe4e7a8d0d4472e3f6f48044b4d9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces.log": {
+          "bytes": 352,
+          "sha256": "5361533defe466844b27309cbe7c4bfc6160c7b5323a57503e771f28c8c802bc"
+        },
+        "deck/number_grid_braces.raw": {
+          "bytes": 3220,
+          "sha256": "fd2502063151fb02949103ab760bcd0be52bfde3f06a44e89a985ab2dca8b792"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_greek_mu": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_greek_mu.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_greek_mu.cir": "07b2e760c0cf51e9d8c10cb656e2b4bad5efc98724b31dbfb077ddfcd01b3e3d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_greek_mu.log": {
+          "bytes": 370,
+          "sha256": "68d699d2ff86606edb8294df5acb82e43d9aa1a0e4ba7dc3720624e2152828fa"
+        },
+        "deck/number_grid_braces_greek_mu.raw": {
+          "bytes": 622,
+          "sha256": "63205ed1debb3da2d489c56a763af461c3b4be72aeb0265020353804394da25b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_inf": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_inf.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_braces_inf.cir": "c522e82b7e32ffba99743676253b4522b810fbcff95a12b434e9943ed9a7f9da"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_inf.log": {
+          "bytes": 213,
+          "sha256": "17486b5ac649347e1915f4e9cc5e3bd2bd0268fb9501b8cbbbb5e92d03ad809f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_braces_letter_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_letter_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_letter_digits.cir": "5576d53be8f95bdd7a0e778ad2d1c86a5ba517f1cf0846b4c3479fe68ff4c1bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_letter_digits.log": {
+          "bytes": 380,
+          "sha256": "ceccec3d432aa552c8ec3169314f36faabdeb06e13ba2a788391b5230093701e"
+        },
+        "deck/number_grid_braces_letter_digits.raw": {
+          "bytes": 632,
+          "sha256": "54201843163ddea08dfe582743c088811f9744dbd308220700f7c803ad259330"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_letters": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_letters.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_letters.cir": "de9f207fcb911f493fb81cd90d2528c5d61d23aef5ca801976690282ecc5f98e"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_letters.log": {
+          "bytes": 368,
+          "sha256": "27bb306185ac8c32f28492f1ab43837fbfab34a625b4f8208487e7354503cf29"
+        },
+        "deck/number_grid_braces_letters.raw": {
+          "bytes": 620,
+          "sha256": "62a2f9f1071046651a71f0e862a1ddd49dc1d829c7f1e1612a7ed1970813d167"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_micro_sign": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_micro_sign.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_micro_sign.cir": "2d124e8b6095e89803e0821d8e134ad4197bf2b17a25169b195436365826ea43"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_micro_sign.log": {
+          "bytes": 374,
+          "sha256": "807eca9e1a69144ec9f619601940ed009ee0baad2af4b283779addb441d1cdb7"
+        },
+        "deck/number_grid_braces_micro_sign.raw": {
+          "bytes": 626,
+          "sha256": "3fdf484a754a4c02f41c8383cd855f29d9d09e7dfa081b2143ae594b020d5f6e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_mil": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_mil.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_mil.cir": "9e6d239174dead51efea82063cf7ec695ee36bcc99fc4f9fb16adf74c47b4986"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_mil.log": {
+          "bytes": 360,
+          "sha256": "29d9110964f292b4b0d1b83f17c2519f371d46d4a75f84f6e3a33b2119835088"
+        },
+        "deck/number_grid_braces_mil.raw": {
+          "bytes": 796,
+          "sha256": "e3cd32eae4b39c773154a7cd3f9e9009a6731af1c19165142f3ddec264f444ba"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_nan": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_nan.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_braces_nan.cir": "cf76ea51841c141ab67876f2455c54247e966375234d3b9b05d76c98b4347b49"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_nan.log": {
+          "bytes": 213,
+          "sha256": "ac461ddc598918de30060c914a87f424f6b652a2368a82940ba25bfc4572a428"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_braces_nonascii_digit": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_nonascii_digit.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_braces_nonascii_digit.cir": "a549808b5db7b9418eaf0be79cbe2a33c030c72b1fe7eda4e25be8d6cfaaa7f4"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_nonascii_digit.log": {
+          "bytes": 208,
+          "sha256": "52ae8bab772ec90d71ff8ca77cb735d99c7b1db87a8f42e5833dd9da32d65285"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_braces_ohm_sign": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_ohm_sign.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_ohm_sign.cir": "2e14d3e14e0551dcdaaaa551f27e9352377a9eaab1540845c489822693fd38a2"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_ohm_sign.log": {
+          "bytes": 370,
+          "sha256": "c53c72399db986bd5a2db9b994ad1442d334abb66b448429c7c413dbe22816a3"
+        },
+        "deck/number_grid_braces_ohm_sign.raw": {
+          "bytes": 622,
+          "sha256": "753b9889000fd9e84f4ec3c5de8387a93031b272869dfedf92556744f6a6ae66"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_overflow": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_overflow.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_overflow.cir": "08c14a93b48831e1d1601d008420610a73dbf686af220b9444675c59e3507e42"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_overflow.log": {
+          "bytes": 370,
+          "sha256": "514681d0c95ca66f027ada280ffd3ef4ad4f609348b3af84e2ecb1834120073a"
+        },
+        "deck/number_grid_braces_overflow.raw": {
+          "bytes": 622,
+          "sha256": "47c873c56b0b08d4c9b5e7c0168a05d4ad6a492f7063a24999517dd91c5a0e9a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_r": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_r.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_r.cir": "41559a16e30a01e859a5f0f26fa0606a7dd85e0862d6b1534ba45ac5716e03af"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_r.log": {
+          "bytes": 356,
+          "sha256": "a3f92671a4b1d073cf2a7be9080d87aca41dbc63a0498229d15c53ce34c01013"
+        },
+        "deck/number_grid_braces_r.raw": {
+          "bytes": 700,
+          "sha256": "228377e2259b87933f16ada3d99377cd7906ac92fd4a6735459d074ada901e13"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_r_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_r_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_r_digits.cir": "618f41aac982c7c7545cc926c335059c4dc22576bfe46799589fcab6bffb1e66"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_r_digits.log": {
+          "bytes": 370,
+          "sha256": "9ce043e6ee993b1e090de7df2e50a385a17421bee8241f54ce5a3c269b9264c5"
+        },
+        "deck/number_grid_braces_r_digits.raw": {
+          "bytes": 622,
+          "sha256": "5c51b2839c0a0513d50a1917dbb561ee3598072d44b370691c9e01a5b7c12124"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_suffix_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_suffix_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_suffix_digits.cir": "c7489f744fbf78a48f0a453ba398e29a56f6c0a08dbd57acfa79e1b778b62f1a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_suffix_digits.log": {
+          "bytes": 380,
+          "sha256": "d1b744eb6012fb181ed2311ce5439ca0b1e68f49b0d616253d27f68716629c1d"
+        },
+        "deck/number_grid_braces_suffix_digits.raw": {
+          "bytes": 632,
+          "sha256": "adbccef8410b914c630d76479a17a006e04567fba5f57e1af38327a81b901583"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_braces_underscore": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_braces_underscore.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_braces_underscore.cir": "d5f6f1962c3e042463c781ff54105d49d96d69cbcf317cf58d8693798a2708f7"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_braces_underscore.log": {
+          "bytes": 374,
+          "sha256": "3307f771b1f170c7a917bd583034c965fcd4719d1f73f13acbf1bbd08ead765a"
+        },
+        "deck/number_grid_braces_underscore.raw": {
+          "bytes": 626,
+          "sha256": "6a97f536f279ab28409a4a0a1c3d2360a83bd900946889182893ebe11f5dc64c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_cp1253": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_cp1253.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_cp1253.cir": "81606ff2b359d0b372ccf3fb5ff82e282aed9d0167523d4576d08f943602484a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_cp1253.log": {
+          "bytes": 352,
+          "sha256": "2ae815d7de089a1e742de1843c4bb0cc1b42a5c07e074061e5a78a7091c84328"
+        },
+        "deck/number_grid_cp1253.raw": {
+          "bytes": 788,
+          "sha256": "168c660ddc992242e8b6eddb4059b695ca363805a1efc18cdf4bb2927e6fdf5f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_inf": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_inf.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_inf.cir": "f9fc6eb934e5a27ce73e4e6a4304f394ee349035d27921fa2a8ddeff1ddd490e"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_inf.log": {
+          "bytes": 81,
+          "sha256": "c5b117fa9f1e6d80683b6de5ff0bde147b2cdb934eef3c8597ae2ae85896e9e8"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_mantissa": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_mantissa.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_mantissa.cir": "52cdaa2e362f5c9ae3fa8e62b59560e1cf1b5d7f7558ed99cc2aceeb4bb49453"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_mantissa.log": {
+          "bytes": 356,
+          "sha256": "ec699a3c7f263809cd3d8b580eda1991f4d6994cf68ef4c3effb852fbe9bb76f"
+        },
+        "deck/number_grid_mantissa.raw": {
+          "bytes": 1754,
+          "sha256": "4f49f67e85d216773929fe35804d10c629d3c46f302ee33332f3b875afbae8ce"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_mantissa_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_mantissa_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_mantissa_digits.cir": "fb68ff94bec0ee882ed920478679b7bec9f4653bbf89db2ee5bca72f0289e906"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_mantissa_digits.log": {
+          "bytes": 370,
+          "sha256": "2d722801a30304080440da31850d357762d7e1bb76b04b51a00ce4bae1fb2da5"
+        },
+        "deck/number_grid_mantissa_digits.raw": {
+          "bytes": 1670,
+          "sha256": "88edc8fac55c79813b60a6062aef4603ca91e7e020fe2dc818db5aad02514475"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_nan": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_nan.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_nan.cir": "5f8819da8f57e8818b10f3555e4f533816639a3535e58e43eb8a964c3f1b7d19"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_nan.log": {
+          "bytes": 81,
+          "sha256": "f7e46d678d1ccbae65fabe924abee379f92ae709aa6780b0fc403f80d9b81fb3"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_nonascii_digit_letter_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_nonascii_digit_letter_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_nonascii_digit_letter_digits.cir": "2ef7a26689827b9346ef9de079c8d76ff73d0a97a93f72b310dc3fcd99f1bdf1"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_nonascii_digit_letter_digits.log": {
+          "bytes": 107,
+          "sha256": "b1a8f39144687b850aaa10a8e55eaafbfd3e4dd10d205b46bf35be1b50d90580"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_nonascii_digit_nothing": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_nonascii_digit_nothing.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_nonascii_digit_nothing.cir": "0d5f1638854c18c229430581fa80c08f04104ff45965f16aecbb37eb7ddab2e8"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_nonascii_digit_nothing.log": {
+          "bytes": 97,
+          "sha256": "f15be4c0eb6c04df5cdc197f8866b470251400039ed7fb0911587ea2009fb300"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_nonascii_digit_r_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_nonascii_digit_r_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_nonascii_digit_r_digits.cir": "c2cd141c82714bddf8516fca39afa2f94d01cba9bdb94e1f834283edf3d6290b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_nonascii_digit_r_digits.log": {
+          "bytes": 102,
+          "sha256": "a0b222b5fbe74a2700487e86eae224c7686829e66395fe35d63192d098501fb2"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_nonascii_digit_suffix": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_nonascii_digit_suffix.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_nonascii_digit_suffix.cir": "b57fa213f8f37c335a0a6ee1f87f4a85b44cf4d081b3dd44e9024fcca7701057"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_nonascii_digit_suffix.log": {
+          "bytes": 98,
+          "sha256": "791e48b269b7d181b0d400e0bd58622b293f7836e9425fd72afcb16e40e06a35"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_nonascii_digit_suffix_digits": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_nonascii_digit_suffix_digits.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/number_grid_nonascii_digit_suffix_digits.cir": "9790748906b8f7ed77f0796053f438853735f866f3a82f70ae0137a1204e85ea"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_nonascii_digit_suffix_digits.log": {
+          "bytes": 107,
+          "sha256": "f3ea7d308435b6a8e2eb29edc91d30f0368cdd7a6aee7faba7aa9af9cc9e2deb"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/number_grid_overflow": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_overflow.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_overflow.cir": "70a8f92758a0452df73f61432b40476675d4ffc55eaf918d3e4a1bb4c96e50aa"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_overflow.log": {
+          "bytes": 356,
+          "sha256": "c55b98ba2e1f56f195d6d31fa66c7f56a6a6918ce2b4db74536ac47d8176d8b1"
+        },
+        "deck/number_grid_overflow.raw": {
+          "bytes": 608,
+          "sha256": "36d8d979eb0c9e7e5a0cf70e8f9728482498507b111991d28bd54d24c1132492"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_signed": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_signed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_signed.cir": "370eccef3428af5d390a1a83a10385da88f529129e5f86830733681bdfd40ca5"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_signed.log": {
+          "bytes": 352,
+          "sha256": "c011cb81f5d513777ea2c43d44b5f3ad0f720f6a3fff3a36f0c0c1ecdbd54648"
+        },
+        "deck/number_grid_signed.raw": {
+          "bytes": 1456,
+          "sha256": "c9b8b72852578abffb73a5386a34f29ff961b7e28101b00931f9946b28e1ee12"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_suffixes": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_suffixes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_suffixes.cir": "11fa4ccebeb83067e4cb5aeec0da64da0e4f2cc1ab47cc1d8983e162648e0d13"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_suffixes.log": {
+          "bytes": 356,
+          "sha256": "3eb318401fe3c377835c842dbfb694fad1dc45c81579488b40137b4ffb646293"
+        },
+        "deck/number_grid_suffixes.raw": {
+          "bytes": 5282,
+          "sha256": "277823c6ee82b8d697d96328b843690df768597d9b1b8f08362ec4e50a6e16bd"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_underscore": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_underscore.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_underscore.cir": "e8f41c3e586988d44b7469f5089d1d3b99b51f6fcf6c3668509f576292660f64"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_underscore.log": {
+          "bytes": 360,
+          "sha256": "04b42c337fae28bc35dd234471e5b1f9934eb8a818d58fc1c8c3cdd42a33ac16"
+        },
+        "deck/number_grid_underscore.raw": {
+          "bytes": 612,
+          "sha256": "73ee05c1ed57cf30489c291c56806c8f7e11d0ebef4c7861e1d91c27323ae50f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_utf16le": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_utf16le.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_utf16le.cir": "adf6b0fd7ab123de76208d27804a1735e6dd5f7e77a0b5c4700cad17055a00d0"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_utf16le.log": {
+          "bytes": 354,
+          "sha256": "c3337f8afee41fba76480d7ecddc8158b2e533fa9be670b5a2a7df9173cecd17"
+        },
+        "deck/number_grid_utf16le.raw": {
+          "bytes": 698,
+          "sha256": "1ac9427cfc1d4b42c423d596c57ad892063edffdef7b49e48ef543e0f7416d48"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/number_grid_utf8_bom": {
+      "behaviour": "number-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/number_grid_utf8_bom.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/number_grid_utf8_bom.cir": "ae493510209a77738dbd9d40760cebf6fe455b1426430812122a35145a169dcd"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/number_grid_utf8_bom.log": {
+          "bytes": 356,
+          "sha256": "9106d54fb80332c12f2cec72fb607ddd5d935ecd8ebbb909d457c9e05cbed9ca"
+        },
+        "deck/number_grid_utf8_bom.raw": {
+          "bytes": 700,
+          "sha256": "3164cedff1811d98bc850520449027735b99d97f2999a840a5a70b702d2168b6"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\number_grid_braces_nan.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\number_grid_braces_nan.cir(2): No such parameter defined.
+V1 n01 0 {nan}
+          ^^^

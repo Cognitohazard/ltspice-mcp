@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\expr_grid_divide_negative_by_zero.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\expr_grid_divide_negative_by_zero.cir(3): Division by zero.
+V1 e01 0 {lneg/rzero}
+               ^^^^^

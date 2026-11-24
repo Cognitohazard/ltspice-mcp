@@ -1,0 +1,6 @@
+C:\recording\number_grid_braces_nonascii_digit.cir(2): Expected expression here.
+V1 n01 0 {٣}
+          ^^
+C:\recording\number_grid_braces_nonascii_digit.cir(2): Unknown parameter
+V1 n01 0 {٣}
+         ^^^

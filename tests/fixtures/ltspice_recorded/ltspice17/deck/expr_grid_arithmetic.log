@@ -1,0 +1,82 @@
+Circuit: * the expression grid: each source's value is what LTspice computed, as the voltage of its node
+
+WARNING: Less than two connections to node E01.  This node is used by V1.
+WARNING: Less than two connections to node E02.  This node is used by V2.
+WARNING: Less than two connections to node E03.  This node is used by V3.
+WARNING: Less than two connections to node E04.  This node is used by V4.
+WARNING: Less than two connections to node E05.  This node is used by V5.
+WARNING: Less than two connections to node E06.  This node is used by V6.
+WARNING: Less than two connections to node E07.  This node is used by V7.
+WARNING: Less than two connections to node E08.  This node is used by V8.
+WARNING: Less than two connections to node E09.  This node is used by V9.
+WARNING: Less than two connections to node E10.  This node is used by V10.
+WARNING: Less than two connections to node E11.  This node is used by V11.
+WARNING: Less than two connections to node E12.  This node is used by V12.
+WARNING: Less than two connections to node E13.  This node is used by V13.
+WARNING: Less than two connections to node E14.  This node is used by V14.
+WARNING: Less than two connections to node E15.  This node is used by V15.
+WARNING: Less than two connections to node E16.  This node is used by V16.
+WARNING: Less than two connections to node E17.  This node is used by V17.
+WARNING: Less than two connections to node E18.  This node is used by V18.
+WARNING: Less than two connections to node E19.  This node is used by V19.
+WARNING: Less than two connections to node E20.  This node is used by V20.
+WARNING: Less than two connections to node E21.  This node is used by V21.
+WARNING: Less than two connections to node E22.  This node is used by V22.
+WARNING: Less than two connections to node E23.  This node is used by V23.
+WARNING: Less than two connections to node E24.  This node is used by V24.
+WARNING: Less than two connections to node E25.  This node is used by V25.
+WARNING: Less than two connections to node E26.  This node is used by V26.
+WARNING: Less than two connections to node E27.  This node is used by V27.
+WARNING: Less than two connections to node E28.  This node is used by V28.
+WARNING: Less than two connections to node E29.  This node is used by V29.
+WARNING: Less than two connections to node E30.  This node is used by V30.
+WARNING: Less than two connections to node E31.  This node is used by V31.
+WARNING: Less than two connections to node E32.  This node is used by V32.
+WARNING: Less than two connections to node E33.  This node is used by V33.
+WARNING: Less than two connections to node E34.  This node is used by V34.
+WARNING: Less than two connections to node E35.  This node is used by V35.
+WARNING: Less than two connections to node E36.  This node is used by V36.
+WARNING: Less than two connections to node E37.  This node is used by V37.
+WARNING: Less than two connections to node E38.  This node is used by V38.
+WARNING: Less than two connections to node E39.  This node is used by V39.
+WARNING: Less than two connections to node E40.  This node is used by V40.
+WARNING: Less than two connections to node E41.  This node is used by V41.
+WARNING: Less than two connections to node E42.  This node is used by V42.
+WARNING: Less than two connections to node E43.  This node is used by V43.
+WARNING: Less than two connections to node E44.  This node is used by V44.
+WARNING: Less than two connections to node E45.  This node is used by V45.
+WARNING: Less than two connections to node E46.  This node is used by V46.
+WARNING: Less than two connections to node E47.  This node is used by V47.
+WARNING: Less than two connections to node E48.  This node is used by V48.
+WARNING: Less than two connections to node E49.  This node is used by V49.
+WARNING: Less than two connections to node E50.  This node is used by V50.
+WARNING: Less than two connections to node E51.  This node is used by V51.
+WARNING: Less than two connections to node E52.  This node is used by V52.
+WARNING: Less than two connections to node E53.  This node is used by V53.
+WARNING: Less than two connections to node E54.  This node is used by V54.
+WARNING: Less than two connections to node E55.  This node is used by V55.
+WARNING: Less than two connections to node E56.  This node is used by V56.
+WARNING: Less than two connections to node E57.  This node is used by V57.
+WARNING: Less than two connections to node E58.  This node is used by V58.
+WARNING: Less than two connections to node E59.  This node is used by V59.
+WARNING: Less than two connections to node E60.  This node is used by V60.
+WARNING: Less than two connections to node E61.  This node is used by V61.
+WARNING: Less than two connections to node E62.  This node is used by V62.
+WARNING: Less than two connections to node E63.  This node is used by V63.
+Direct Newton iteration for .op point succeeded.
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 3
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 126
+fillins = 0
+solver = Normal
+

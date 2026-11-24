@@ -1,0 +1,68 @@
+Circuit: * the number grid: each source's value is the number LTspice read, as the voltage of its node
+
+WARNING: Less than two connections to node N01.  This node is used by V1.
+WARNING: Less than two connections to node N02.  This node is used by V2.
+WARNING: Less than two connections to node N03.  This node is used by V3.
+WARNING: Less than two connections to node N04.  This node is used by V4.
+WARNING: Less than two connections to node N05.  This node is used by V5.
+WARNING: Less than two connections to node N06.  This node is used by V6.
+WARNING: Less than two connections to node N07.  This node is used by V7.
+WARNING: Less than two connections to node N08.  This node is used by V8.
+WARNING: Less than two connections to node N09.  This node is used by V9.
+WARNING: Less than two connections to node N10.  This node is used by V10.
+WARNING: Less than two connections to node N11.  This node is used by V11.
+WARNING: Less than two connections to node N12.  This node is used by V12.
+WARNING: Less than two connections to node N13.  This node is used by V13.
+WARNING: Less than two connections to node N14.  This node is used by V14.
+WARNING: Less than two connections to node N15.  This node is used by V15.
+WARNING: Less than two connections to node N16.  This node is used by V16.
+WARNING: Less than two connections to node N17.  This node is used by V17.
+WARNING: Less than two connections to node N18.  This node is used by V18.
+WARNING: Less than two connections to node N19.  This node is used by V19.
+WARNING: Less than two connections to node N20.  This node is used by V20.
+WARNING: Less than two connections to node N21.  This node is used by V21.
+WARNING: Less than two connections to node N22.  This node is used by V22.
+WARNING: Less than two connections to node N23.  This node is used by V23.
+WARNING: Less than two connections to node N24.  This node is used by V24.
+WARNING: Less than two connections to node N25.  This node is used by V25.
+WARNING: Less than two connections to node N26.  This node is used by V26.
+WARNING: Less than two connections to node N27.  This node is used by V27.
+WARNING: Less than two connections to node N28.  This node is used by V28.
+WARNING: Less than two connections to node N29.  This node is used by V29.
+WARNING: Less than two connections to node N30.  This node is used by V30.
+WARNING: Less than two connections to node N31.  This node is used by V31.
+WARNING: Less than two connections to node N32.  This node is used by V32.
+WARNING: Less than two connections to node N33.  This node is used by V33.
+WARNING: Less than two connections to node N34.  This node is used by V34.
+WARNING: Less than two connections to node N35.  This node is used by V35.
+WARNING: Less than two connections to node N36.  This node is used by V36.
+WARNING: Less than two connections to node N37.  This node is used by V37.
+WARNING: Less than two connections to node N38.  This node is used by V38.
+WARNING: Less than two connections to node N39.  This node is used by V39.
+WARNING: Less than two connections to node N40.  This node is used by V40.
+WARNING: Less than two connections to node N41.  This node is used by V41.
+WARNING: Less than two connections to node N42.  This node is used by V42.
+WARNING: Less than two connections to node N43.  This node is used by V43.
+WARNING: Less than two connections to node N44.  This node is used by V44.
+WARNING: Less than two connections to node N45.  This node is used by V45.
+WARNING: Less than two connections to node N46.  This node is used by V46.
+WARNING: Less than two connections to node N47.  This node is used by V47.
+WARNING: Less than two connections to node N48.  This node is used by V48.
+WARNING: Less than two connections to node N49.  This node is used by V49.
+Direct Newton iteration for .op point succeeded.
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 3
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 98
+fillins = 0
+solver = Normal
+
