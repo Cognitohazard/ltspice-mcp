@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\layout_grid_dc_one_param.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\layout_grid_dc_one_param.cir(7): This sweep spec results in only one point.
+.dc V1 3 3 1
+    ^^^^^^^^

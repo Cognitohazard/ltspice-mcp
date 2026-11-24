@@ -1,0 +1,21 @@
+Circuit: * an RC charge with a sharp corner at 2 ms, saved with the default waveform compression
+
+.OP point found by inspection.
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2122
+traniter = 2122
+tranpoints = 1062
+accept = 1062
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

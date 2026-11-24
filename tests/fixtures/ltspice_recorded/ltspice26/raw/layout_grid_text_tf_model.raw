@@ -1,0 +1,22 @@
+Title: C:\recording\layout_grid_text_tf_model.cir
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Transfer Function
+Flags: real stepped
+No. Variables: 4
+No. Points:            2
+Offset:    0.0000000000000000e+00
+Command: Linear Technology Corporation LTspice
+Variables:
+	0	is	d
+	1	transfer_function	transfer
+	2	V1#input_impedance	impedance
+	3	output_impedance_at_v(out)	impedance
+Values:
+0		1.000000000000000e-14
+	6.524560441334351e-02
+	1.069799729984040e+03
+	6.524560441334351e+01
+1		1.000000000000000e-13
+	5.717975177994881e-02
+	1.060647564461941e+03
+	5.717975177994881e+01

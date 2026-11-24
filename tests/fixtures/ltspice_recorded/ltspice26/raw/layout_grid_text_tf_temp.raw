@@ -1,0 +1,26 @@
+Title: C:\recording\layout_grid_text_tf_temp.cir
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Transfer Function
+Flags: real stepped
+No. Variables: 4
+No. Points:            3
+Offset:    0.0000000000000000e+00
+Command: Linear Technology Corporation LTspice
+Variables:
+	0	temperature	temperature
+	1	transfer_function	transfer
+	2	V1#input_impedance	impedance
+	3	output_impedance_at_v(out)	impedance
+Values:
+0		-4.000000000000000e+01
+	9.237875288683601e-01
+	4.329999999999988e+03
+	3.048498845265588e+02
+1		2.700000000000000e+01
+	8.000000000000000e-01
+	5.000000000000000e+03
+	8.000000000000000e+02
+2		1.250000000000000e+02
+	6.688963210702341e-01
+	5.979999999999999e+03
+	1.324414715719063e+03

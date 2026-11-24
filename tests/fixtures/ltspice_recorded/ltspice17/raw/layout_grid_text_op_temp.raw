@@ -1,0 +1,26 @@
+Title: * operating point of a resistor with a temperature coefficient over three temperatures
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Operating Point
+Flags: real stepped
+No. Variables: 4
+No. Points:            3
+Offset:   0.0000000000000000e+000
+Command: Linear Technology Corporation LTspice XVII
+Variables:
+	0	temperature	temperature
+	1	V(a)	voltage
+	2	I(I1)	device_current
+	3	I(R1)	device_current
+Values:
+0		-4.000000000000000e+001
+	3.300000000000000e-001
+	1.000000000000000e-003
+	1.000000000000000e-003
+1		2.700000000000000e+001
+	1.000000000000000e+000
+	1.000000000000000e-003
+	1.000000000000000e-003
+2		1.250000000000000e+002
+	1.980000000000000e+000
+	1.000000000000000e-003
+	1.000000000000000e-003

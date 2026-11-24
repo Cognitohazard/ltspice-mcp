@@ -14847,6 +14847,72 @@
         ".raw"
       ]
     },
+    "raw/compress_small_step": {
+      "behaviour": "raw-compression-small-step",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_small_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/compress_small_step.cir": "5ee3a4127749792273173bc596b12c11dcbe74665d1ee686da9c465220ae9c63"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_small_step.log": {
+          "bytes": 357,
+          "sha256": "a2359539d1328f7e0ae1286c3995febcb176c1ad0cf81dbf8ceb9df832d77655"
+        },
+        "raw/compress_small_step.raw": {
+          "bytes": 30508,
+          "sha256": "bef9b4b4bbf8d9e05d6968e6c23555c86a3f8f2ee06cf09f2193c330e5cd2800"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_small_step_off": {
+      "behaviour": "raw-compression-small-step",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_small_step_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/compress_small_step_off.cir": "276836a87c5a14391365c79ffe9787ceab470078b1b72d8709280999731ec2a1"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_small_step_off.log": {
+          "bytes": 387,
+          "sha256": "5ca8ec6b5e8f3032943b94c85c4b201b0f0020896f116db7652223bc122c39bf"
+        },
+        "raw/compress_small_step_off.raw": {
+          "bytes": 30544,
+          "sha256": "ce5652e0ae489a2d0198170748ff95a3467b86d2f6ffee5860c9063ad6a76e85"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/dc": {
       "behaviour": "raw-dc",
       "command": [
@@ -14959,6 +15025,45 @@
         ".raw"
       ]
     },
+    "raw/fra_reversed": {
+      "behaviour": "raw-fra-orientation",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/fra_reversed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/fra_reversed.cir": "41fc93c52f1da1331c3934dab8e019ff3fb5ace5313b326d10c3c6c20286f1b3"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/fra_reversed.fra_1.raw": {
+          "bytes": 838,
+          "sha256": "b014f2ef37f59f7a562a7d72b1f36dbda55df480b92530509a850ba24beb5860"
+        },
+        "raw/fra_reversed.log": {
+          "bytes": 832,
+          "sha256": "b22f74c7aae90d9c5b31f8e82834c9f83d27263fa17d6531a3b607052c76f4d6"
+        },
+        "raw/fra_reversed.raw": {
+          "bytes": 55126,
+          "sha256": "f89fe04c29a0e08446d6bb47f88d6aa7c17153db695b1b6a1f5e3681d10e0cbf"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/fra_step": {
       "behaviour": "raw-fra",
       "command": [
@@ -14997,6 +15102,2427 @@
         ".log.raw",
         ".op.raw",
         ".raw"
+      ]
+    },
+    "raw/layout_grid_ac_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_ac_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_model.cir": "93db069e15964126d4a89b60ba2c17f7d692930f4488bc991859890d1f25e3e3"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_ac_model.log": {
+          "bytes": 458,
+          "sha256": "17d3a00af014492cf0947740888ff8738e3e05742fa80bafa82527ccfc3023d4"
+        },
+        "raw/layout_grid_ac_model.raw": {
+          "bytes": 4842,
+          "sha256": "62967c630e6c9d42e5c1d6cf518791bb50c72497be9a28ab6f46d203f48ca76d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_ac_one_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_ac_one_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_one_model.cir": "6d9389c6d63173b5baa57b3a7ffe4351bba63a5feb5676991ac5e3e2f7f177fa"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_ac_one_model.log": {
+          "bytes": 426,
+          "sha256": "cf7c366a427dc90b53c880d4eb70c180d10ea64c357531d6ae9c3eec1ee97f7f"
+        },
+        "raw/layout_grid_ac_one_model.raw": {
+          "bytes": 986,
+          "sha256": "931bedb7a1fdef5bd897e0e3599cabd2f740c271d019c56ea5cc53a9cdfabbb6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_ac_one_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_ac_one_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_one_source.cir": "0adb1a09a3ae3f4be0fd298c6535612286afbd1080f232168c082039bc3ea8a5"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_ac_one_source.log": {
+          "bytes": 490,
+          "sha256": "6e820313caf5677393ff8382284c1b7cb5dfd14325b7f6166d1bb7fccf62f8d9"
+        },
+        "raw/layout_grid_ac_one_source.raw": {
+          "bytes": 1096,
+          "sha256": "576761aaa9e714788c3a9221b9240a636bcd6581e0a5ed4099b4b099ef177fce"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_ac_one_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_ac_one_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_one_temp.cir": "6f28927aa27430210926617cc0b412ee592a60fe1317b7e47bf45ae92ff51c7f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_ac_one_temp.log": {
+          "bytes": 487,
+          "sha256": "c45fad5dda3b02e8eebefbd2fd6765d633f7df89c067f8d63aba5b333fc33c9b"
+        },
+        "raw/layout_grid_ac_one_temp.raw": {
+          "bytes": 1118,
+          "sha256": "654d4b3a34f118bd1ab86e54bdd1ab8dec34c8043af6176f7d0f0339378b8ff0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_ac_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_ac_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_source.cir": "39a774df955a7a8e3a5cebff6cb6b1f99abfaee70983756650ae76ddcdd78c42"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_ac_source.log": {
+          "bytes": 518,
+          "sha256": "7a8b0b4267fd620b3fb9a61851cb4dc0ad6dde96b7f04dae45dbcf1e7bbdca4e"
+        },
+        "raw/layout_grid_ac_source.raw": {
+          "bytes": 6860,
+          "sha256": "40849c91c6e18a7a6b911b4adf6d914442690530e0f428f14f00594cf3983b19"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_ac_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_ac_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_temp.cir": "b4a0d7f22807382bb2bbca48411ab2898a99ee8cf2cfdf6b4cbc0472e47cce5e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_ac_temp.log": {
+          "bytes": 532,
+          "sha256": "c32f7fca76a7a5be10b00f2ade0eee83f5fc3bae1cbbb78b1227581226e9cbc9"
+        },
+        "raw/layout_grid_ac_temp.raw": {
+          "bytes": 6856,
+          "sha256": "28ee2fbf60ce9685cce4c9c265f38d323e6b1fc75ab6db54819adcb999d9e731"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_dc_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_model.cir": "b30369dc91eb2d0e5d485f0c91a7a244e62810544edf3b7bfa86b79ee1a50b87"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_model.log": {
+          "bytes": 364,
+          "sha256": "ac516e9cc4b30f6d58c3867c0da80656c5f1c40008bd8dcd77ea8bf6a8efaaeb"
+        },
+        "raw/layout_grid_dc_model.raw": {
+          "bytes": 1102,
+          "sha256": "8e336b2c0f0c5ea1fbe60fdc40602806e546459c676625c2d9529229e38aa35a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_dc_numdgt7": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_numdgt7.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_numdgt7.cir": "b87ebd793a13161ba329e424489e9bee5426ef18b616c4c948be43ff02c12fd3"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_numdgt7.log": {
+          "bytes": 347,
+          "sha256": "5689ee3a9ab5feba9f97f89c93b35e8135aae36bebb2b5ab1b510b9322243ba5"
+        },
+        "raw/layout_grid_dc_numdgt7.raw": {
+          "bytes": 1112,
+          "sha256": "36b69b10e0a51fca0dc30ec85ca5d89a1aa5c784cf869ca379741aee5695e210"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_dc_one": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_one.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_dc_one.cir": "572aecedb75400db47f71b08feccb279e0c6052f494d1ce7be50cc752c3b2f56"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_one.log": {
+          "bytes": 218,
+          "sha256": "77b3a651a88b48be20d71395700afb667b55b468b0d0be734910b97ab725f883"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "raw/layout_grid_dc_one_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_one_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_dc_one_model.cir": "0ecf3edd097beb0271a1ace41bba07e9042da825961b12b0caad80502d75ed06"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_one_model.log": {
+          "bytes": 230,
+          "sha256": "6c5f6d5a4645f6250cc3ac14532306ea488ffffaa737efd02fe3adc9c6c891a3"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "raw/layout_grid_dc_one_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_one_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_dc_one_param.cir": "a758b92de5fa8cb11c721b970335dcb55d8b7d680352e7c2b5323d3513e93aa2"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_one_param.log": {
+          "bytes": 230,
+          "sha256": "c19a9923a93adca74b7b3f7746f5ba6a5df9e83c7a6b8b6953e80580a17d9b96"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "raw/layout_grid_dc_one_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_one_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_dc_one_source.cir": "53fee974c314fc9159105c3bc1d79a389402415f109c41cfc815b176877559ea"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_one_source.log": {
+          "bytes": 232,
+          "sha256": "29b64c3c96a9cb018ca7294b9f327e4efb1fc886ea25c3c65f45484e2cec5140"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "raw/layout_grid_dc_one_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_one_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_dc_one_temp.cir": "73eb67f22573a59cb5cd4a43b5d974b1b8e2302d254819217e9c89b6dbb58832"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_one_temp.log": {
+          "bytes": 228,
+          "sha256": "4e3a915843aca61e69828fad18b2c7a66b93d70d27dc1d4ac95c618e33d80e23"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "raw/layout_grid_dc_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_source.cir": "35a9b34fadaee987d4e563395aaa82360609c0cb135ade1be5200720d854b77f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_source.log": {
+          "bytes": 319,
+          "sha256": "c54fe1bfdbe3ff0e7957f28100816684f39bfe30fdb192f6115ff9e74b9ec8e6"
+        },
+        "raw/layout_grid_dc_source.raw": {
+          "bytes": 1270,
+          "sha256": "5bf96213eeea96fca0905155dbc1c8b0e3c335f0bb4a5717006dfac44bec555b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_dc_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_dc_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_temp.cir": "a593c5864e961ffcec329ccd29a3ef53932ecafa7995aced2cc81f5b7c57249d"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_dc_temp.log": {
+          "bytes": 375,
+          "sha256": "e7e2044e9f2e2831eb5f27933680b77ae27abc244ef7454d49d743c44dfd8eaf"
+        },
+        "raw/layout_grid_dc_temp.raw": {
+          "bytes": 1324,
+          "sha256": "33c19b204b5a52b40d0cfdb78fdfb9b875a387e8c9c2fef970b1cc11f6bd1f99"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fastaccess_ac": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fastaccess_ac.cir",
+        "-ini",
+        "<settings>",
+        "&&",
+        "LTspice.exe",
+        "-FastAccess",
+        "<dir>/layout_grid_fastaccess_ac.raw",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/ac.cir": "aa735e9c0ce59b44dd9e2ffa03779224a7d4c924ac1ff424858585c1be179d94"
+      },
+      "kind": "fastaccess",
+      "outputs": {
+        "raw/layout_grid_fastaccess_ac.raw": {
+          "bytes": 2820,
+          "sha256": "c2dc85c6b64c1e516b4388fb477c06097efc10aafd475e2b08014a83449a645a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fastaccess_dc": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fastaccess_dc.cir",
+        "-ini",
+        "<settings>",
+        "&&",
+        "LTspice.exe",
+        "-FastAccess",
+        "<dir>/layout_grid_fastaccess_dc.raw",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/dc.cir": "337cffb13d10f32b97ce3e9b563bf86fb02767c431ba6a15a5e021b1b06a5679"
+      },
+      "kind": "fastaccess",
+      "outputs": {
+        "raw/layout_grid_fastaccess_dc.raw": {
+          "bytes": 986,
+          "sha256": "57ce0e0172094a361161abf0ee5d6c2a72aa6a3012080a21d8ce8e0cdd3901e6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fastaccess_noise": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fastaccess_noise.cir",
+        "-ini",
+        "<settings>",
+        "&&",
+        "LTspice.exe",
+        "-FastAccess",
+        "<dir>/layout_grid_fastaccess_noise.raw",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/noise.cir": "ccda032ccb79636fd9714c67352b944d5a725ee1f858b57f2c40d6dd97b6056f"
+      },
+      "kind": "fastaccess",
+      "outputs": {
+        "raw/layout_grid_fastaccess_noise.raw": {
+          "bytes": 1300,
+          "sha256": "6b7618180f1fce3f1967659807d2332eea9b639108cfc5bc2439d788af5cc1de"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fastaccess_op": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fastaccess_op.cir",
+        "-ini",
+        "<settings>",
+        "&&",
+        "LTspice.exe",
+        "-FastAccess",
+        "<dir>/layout_grid_fastaccess_op.raw",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/op.cir": "5f35a25a99c25a439de3bde3429e27bbc8f78e39f40aa4ad1b534944b542d08a"
+      },
+      "kind": "fastaccess",
+      "outputs": {
+        "raw/layout_grid_fastaccess_op.raw": {
+          "bytes": 760,
+          "sha256": "942ef89540d9de3d89a70a81d0e3a6af4a6be945da790625f6fc246d955248b8"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fastaccess_tf": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fastaccess_tf.cir",
+        "-ini",
+        "<settings>",
+        "&&",
+        "LTspice.exe",
+        "-FastAccess",
+        "<dir>/layout_grid_fastaccess_tf.raw",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/tf.cir": "b6337ef74aae749afa89b8fb3701222823036b9e7e1ce771334d4b0787830165"
+      },
+      "kind": "fastaccess",
+      "outputs": {
+        "raw/layout_grid_fastaccess_tf.raw": {
+          "bytes": 746,
+          "sha256": "9f619e797fcd2c93a286505038a28ec9bf48fc2d91fd06be53d7e3b0d476b416"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fra_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fra_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_fra_model.cir": "54caa8806d39729bf89398fb4b2268c07d8af09cdbc02bfcf43313f4eb5f4207"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_fra_model.fra_1.raw": {
+          "bytes": 1064,
+          "sha256": "23a4996a65475ba1dc0adbf88b88084c8c96f3d1e79a3e0119200616b9ea3fcb"
+        },
+        "raw/layout_grid_fra_model.log": {
+          "bytes": 1367,
+          "sha256": "f3c327e72290df58008a276b64900e7dadc5e8b28cf4fea86ec866fea4c57faa"
+        },
+        "raw/layout_grid_fra_model.raw": {
+          "bytes": 119274,
+          "sha256": "93cb3f7ab90dbd4631752a037881dbde084e7cc856570c9aa73bf09df7edd0d2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fra_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fra_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_fra_source.cir": "ccd4640ff71ef5451a8cbd187aef034f3fd4915b6ffd827d0f2f3be0aa418d44"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_fra_source.fra_1.raw": {
+          "bytes": 1066,
+          "sha256": "9d9d501af42e4f76c9faf5cf6f81f079c5da7a71045901bed030a904aa34940f"
+        },
+        "raw/layout_grid_fra_source.log": {
+          "bytes": 1369,
+          "sha256": "9ed42a1164de31c69550f73cd2322850e4e408fc06e3e423f91f692f0fdff987"
+        },
+        "raw/layout_grid_fra_source.raw": {
+          "bytes": 109370,
+          "sha256": "0c49552b5fbd5e81a626f90ee28d993ece1cc4c3ba853cf60d167fb81d090449"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_fra_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_fra_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_fra_temp.cir": "d6ee83a2ef4e69aae0d1d6bd653ca88c4d6839a99e41dd0121691354d9df0c58"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_fra_temp.fra_1.raw": {
+          "bytes": 1062,
+          "sha256": "bf98a3ba8dbd848e33ad70468c661331fcd85cdd1b7188c5f431812fcfa84244"
+        },
+        "raw/layout_grid_fra_temp.log": {
+          "bytes": 1370,
+          "sha256": "cda34367e7a4f68893bdcf34fd5265047426259b1e153d454a444e7b39e0f297"
+        },
+        "raw/layout_grid_fra_temp.raw": {
+          "bytes": 109366,
+          "sha256": "4383ccdee6d0f6ad5897b6986850540ee78c88e75c22e2d46c811981b3e15be9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_model.cir": "4720424fd9519f2736c6bd25201ebd6df897e2130df524d8759f2fdf2b940001"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_model.log": {
+          "bytes": 464,
+          "sha256": "d0215c4101e4142d3757ae9669137dba11a04283e932267cece3130a06a67ae7"
+        },
+        "raw/layout_grid_noise_model.raw": {
+          "bytes": 2662,
+          "sha256": "57d4ba9a8c31989fd54ad1c5e21a8e53f88c9c5e2482bce5fd636846c60ef589"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_numdgt7": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_numdgt7.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_numdgt7.cir": "58b9101e3c7f64e0dcc1b4ea673d5d7d58c4660ac10674df18c2cb85a06e10d0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_numdgt7.log": {
+          "bytes": 383,
+          "sha256": "b96f5faa17f2b12e727bd4730f8fdc2bebc21c73d3a3024b8548fe8c720090c4"
+        },
+        "raw/layout_grid_noise_numdgt7.raw": {
+          "bytes": 1666,
+          "sha256": "f0638e403d87f19baeafb1c51eb846b1fc71b569cb8dba339647e91fc849ec31"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_one_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_one_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_one_model.cir": "a0b552addb55df64ff910fe464f76f45e01245b4f931c72d880e76222304e518"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_one_model.log": {
+          "bytes": 432,
+          "sha256": "73dfd36167e3533fdd8daf2dc5881ec5980a77d6ad222c9c383e07db9a9d7080"
+        },
+        "raw/layout_grid_noise_one_model.raw": {
+          "bytes": 1046,
+          "sha256": "2fd77799681cad4ed0c7475bbf19aaa35a4332bf7e013ea4644dc8130bd6b66a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_one_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_one_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_one_source.cir": "bfff627de105d2b39dde1b442c14046d1a91430ca8f44b88cfef3fd8105092dd"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_one_source.log": {
+          "bytes": 496,
+          "sha256": "12c129d1c8ff0529ca32286a2020d2ab8c98d8b605392f2803f34ef84b282976"
+        },
+        "raw/layout_grid_noise_one_source.raw": {
+          "bytes": 1100,
+          "sha256": "fe50ac4da9c37fc762dd593e6b5e96d33dd2cbb8326c24d02f691e2fe96c1277"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_one_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_one_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_one_temp.cir": "82cfa46fbfd811ffdbecd437e6fe4ee52c44ba3a397d2d3d381a5563530f6176"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_one_temp.log": {
+          "bytes": 493,
+          "sha256": "e2cf8e0161b797fb650943ff61215e0cf25a538cec3a15fb974395ea162e9984"
+        },
+        "raw/layout_grid_noise_one_temp.raw": {
+          "bytes": 916,
+          "sha256": "2d444313e92ab40ce116f4bf1f60845dfa5c0e0ff70cc497bed85a920ee5983c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_source.cir": "8c077d47440b4e381c6309917ccd78059b2ef3b78848b37f64136201f70bd5a9"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_source.log": {
+          "bytes": 524,
+          "sha256": "0b20da73170ad8ad53331cbbd7c50b6c5ab5f1bc7e0059a6a965e5f7cb7c65b5"
+        },
+        "raw/layout_grid_noise_source.raw": {
+          "bytes": 3504,
+          "sha256": "fc7985277c30aba92133773684bf81c9ca37c5d8b31c3d27aabf81a68aa247de"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_noise_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_noise_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_temp.cir": "6f75656877b2e27e5ecad68d491f7f42cd182b72ca71f4eab52885151b846650"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_noise_temp.log": {
+          "bytes": 538,
+          "sha256": "c930561c01e45092db465f088353c46744cd4a894601796c99db96f8e21eccf2"
+        },
+        "raw/layout_grid_noise_temp.raw": {
+          "bytes": 2334,
+          "sha256": "42a3ca9624fcbf2b2d11d337ad8614ab443d85b441c3e01a97c5bb7eb8af579a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_op_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_op_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_op_model.cir": "687bebbae69c7d5c6254339fe23b3f088e6e03040a9fa28cf46a60a82b165afd"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_op_model.log": {
+          "bytes": 418,
+          "sha256": "d16b5aada098a0fc5fe23a27b94efe110fc8015206637b0aa5d89588ef67a461"
+        },
+        "raw/layout_grid_op_model.raw": {
+          "bytes": 814,
+          "sha256": "618ebfb59406c8b8478b1134b9b5a6d3b0816c1b0f096ffbb73e50f6dc9f8352"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_op_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_op_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_op_source.cir": "2f7d6a46509d9dda3090401820a55cba6a5baa1501089829f413e2c27be398d1"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_op_source.log": {
+          "bytes": 482,
+          "sha256": "f4fdeb9828d88db2ffa781b483a88154cd7b917b2842079f48213422356efa30"
+        },
+        "raw/layout_grid_op_source.raw": {
+          "bytes": 856,
+          "sha256": "2db2f876c54fa7418de00095a43ab64c01cc3ce1075450379a914bf41ebe1e95"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_step_temp_op_raw": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_step_temp_op_raw.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_temp.cir": "f334e45a106089cea981856abb508df10ae72ba9a17987a9cbafea96c2859bcb"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_step_temp_op_raw.op.raw": {
+          "bytes": 688,
+          "sha256": "a309cf085a963357d26297f6882434c0fb1e630182d144359ed79976d3a14bc9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_ac_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_ac_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_model.cir": "93db069e15964126d4a89b60ba2c17f7d692930f4488bc991859890d1f25e3e3"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_ac_model.log": {
+          "bytes": 536,
+          "sha256": "cf745b8fe37246454c5acdd775eef05c54fa0f4c36da6f42b8018a4bbccab196"
+        },
+        "raw/layout_grid_text_ac_model.raw": {
+          "bytes": 12176,
+          "sha256": "0064febbeb9db158bb5367744c74c8db33d71204a25a7b114b17d136ff34404e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_ac_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_ac_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_ac.cir": "3b16d07502d504f9582dcabfbdac06afabcf0cf65fc6b036db80c1828baf939c"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_ac_param.log": {
+          "bytes": 716,
+          "sha256": "f0bc7ee5c0b97ee009867afcaf8dd75b6ea9aeffa9b45d4c964918f5a24ec0e7"
+        },
+        "raw/layout_grid_text_ac_param.raw": {
+          "bytes": 18182,
+          "sha256": "fe982aafa016af19dcac026e039fccf85e3fa927e591fe19b6ccde882da25c5d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_ac_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_ac_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_source.cir": "39a774df955a7a8e3a5cebff6cb6b1f99abfaee70983756650ae76ddcdd78c42"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_ac_source.log": {
+          "bytes": 596,
+          "sha256": "df18383c30a07e8221dbe29222dce1cc4556fd8763c7a0be7901767b8475ae6c"
+        },
+        "raw/layout_grid_text_ac_source.raw": {
+          "bytes": 18057,
+          "sha256": "aedea1f5bab48977d0d5539407eaecfc24f6d6747fbb583e2f9aa103f75dfac5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_ac_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_ac_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_ac_temp.cir": "b4a0d7f22807382bb2bbca48411ab2898a99ee8cf2cfdf6b4cbc0472e47cce5e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_ac_temp.log": {
+          "bytes": 610,
+          "sha256": "c41193ec391c14280e50fd0bfdbf0650fa617adc9b7d0cd29f62335f51d727f7"
+        },
+        "raw/layout_grid_text_ac_temp.raw": {
+          "bytes": 18181,
+          "sha256": "a4d269180f9558a683c864ade888057a9def774b9cf206a001ad82efcea11ab9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_dc_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_dc_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_model.cir": "b30369dc91eb2d0e5d485f0c91a7a244e62810544edf3b7bfa86b79ee1a50b87"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_dc_model.log": {
+          "bytes": 442,
+          "sha256": "fa63090791bd0f20d19a63304bb63f3b88b6bd05ff0cc93550ce93f2ef049d77"
+        },
+        "raw/layout_grid_text_dc_model.raw": {
+          "bytes": 1900,
+          "sha256": "13f3ed07c50ae44a2c62238337f6ccf41bc24635fdb3346659d091939183233b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_dc_no": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_dc_no.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/dc.cir": "337cffb13d10f32b97ce3e9b563bf86fb02767c431ba6a15a5e021b1b06a5679"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_dc_no.log": {
+          "bytes": 421,
+          "sha256": "77f373acda2058eff57c83d22ff7fa9e25317387ed79ffd20682f8614e092019"
+        },
+        "raw/layout_grid_text_dc_no.raw": {
+          "bytes": 1302,
+          "sha256": "bf0355e35cccd24002f6219193ab9762f9744edee0d188f8dcba0395b43f292f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_dc_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_dc_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_dc.cir": "82a72d2771bf56e23e4873e5e499da25d4d508ab183c310facaf77fbf8e38e01"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_dc_param.log": {
+          "bytes": 429,
+          "sha256": "15f59287fc6b636528a3fcb064317a5f6d54ef76f61a10605c500361d4efe83a"
+        },
+        "raw/layout_grid_text_dc_param.raw": {
+          "bytes": 1900,
+          "sha256": "9ae4df4722c1cf1d323f7312f7470e8fd4cd400cef0bd442cb24ab2a7af59e61"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_dc_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_dc_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_source.cir": "35a9b34fadaee987d4e563395aaa82360609c0cb135ade1be5200720d854b77f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_dc_source.log": {
+          "bytes": 397,
+          "sha256": "8807e8601c27489b04f64b085e8457d78dac1981f28d76b952e3e2c23235921d"
+        },
+        "raw/layout_grid_text_dc_source.raw": {
+          "bytes": 2432,
+          "sha256": "481c96d623081d50f938a0fdf7fb378d011d50efec5c336bfcdc428699078479"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_dc_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_dc_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_dc_temp.cir": "a593c5864e961ffcec329ccd29a3ef53932ecafa7995aced2cc81f5b7c57249d"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_dc_temp.log": {
+          "bytes": 453,
+          "sha256": "03e1bdd0d8326570d3a5c1834f837bb18d0b083bd336716c5fc9fb6d1d65c526"
+        },
+        "raw/layout_grid_text_dc_temp.raw": {
+          "bytes": 3082,
+          "sha256": "dd950ff267de95e2e91f8df75b1c50d61cc1884ba77d3eab1afce92b07d2b12f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_fra_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_fra_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_fra_model.cir": "54caa8806d39729bf89398fb4b2268c07d8af09cdbc02bfcf43313f4eb5f4207"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_fra_model.fra_1.raw": {
+          "bytes": 1486,
+          "sha256": "ce3e04a1bbc44fd66adc22ca5a1fe9aa5d6f5094764a4df7af56da9631cf629c"
+        },
+        "raw/layout_grid_text_fra_model.log": {
+          "bytes": 1445,
+          "sha256": "357d19b66467ef7d6c7436cde84350fe57b2df1624bab53886992de849199de9"
+        },
+        "raw/layout_grid_text_fra_model.raw": {
+          "bytes": 665903,
+          "sha256": "50e867830466d928c70ae38475ad61d9fb4198d863726d2c0600b50f02924d78"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_fra_no": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_fra_no.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/fra.cir": "af7391fc98a349792f2d0ef84f10eda0c43700ef3f4c7f2e8f920e88420d9533"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_fra_no.fra_1.raw": {
+          "bytes": 911,
+          "sha256": "7e1d11de308f1c4ee6cd28211a836b799c304389f3ab37da6539bd455ba77c63"
+        },
+        "raw/layout_grid_text_fra_no.log": {
+          "bytes": 920,
+          "sha256": "c935e5e0409b70d3c9b71e0871840ad179c7c9dee6f43f77ad8eb7be3bf0435e"
+        },
+        "raw/layout_grid_text_fra_no.raw": {
+          "bytes": 303665,
+          "sha256": "014516eff0817365b67d2ea62d1c40e36a90f85b6fa030505aca78d29b541296"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_fra_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_fra_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/fra_step.cir": "93980be6c010372d515023ab986baf9092b6b573e5afebef92b43c20a64d2ef0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_fra_param.fra_1.raw": {
+          "bytes": 1486,
+          "sha256": "b9ffb16fef67e5a413d6de6539012df4c8d628de2f608d3645d7fd324fab5bd7"
+        },
+        "raw/layout_grid_text_fra_param.log": {
+          "bytes": 1448,
+          "sha256": "02cdeed60ccad50a6e9fe165ca61e4c129a4a5e463aeecfd3d0e7509a9b3647b"
+        },
+        "raw/layout_grid_text_fra_param.raw": {
+          "bytes": 607976,
+          "sha256": "7f0dafecae3011895f11f8cde101feee770cda0c305713616b86a01da5bead59"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_fra_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_fra_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_fra_source.cir": "ccd4640ff71ef5451a8cbd187aef034f3fd4915b6ffd827d0f2f3be0aa418d44"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_fra_source.fra_1.raw": {
+          "bytes": 1487,
+          "sha256": "2e9a108950f20b2797327b4b0080dde1c5436b4ab8957458a5c6071196df47c0"
+        },
+        "raw/layout_grid_text_fra_source.log": {
+          "bytes": 1445,
+          "sha256": "f02dbfdc3b12914d30af51aebd0ae858b6231626a4c0c3fba789a8b2ff335a09"
+        },
+        "raw/layout_grid_text_fra_source.raw": {
+          "bytes": 607960,
+          "sha256": "4ad67264aa22fe64e1b67292fb9a6a9fde38c37764790d091a8d2f0fa8f2d32c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_fra_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_fra_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_fra_temp.cir": "d6ee83a2ef4e69aae0d1d6bd653ca88c4d6839a99e41dd0121691354d9df0c58"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_fra_temp.fra_1.raw": {
+          "bytes": 1485,
+          "sha256": "2aa8f89b65e431bbd0ce918670c4413109c12c55f917e75eba51b1fe70cf4e2a"
+        },
+        "raw/layout_grid_text_fra_temp.log": {
+          "bytes": 1448,
+          "sha256": "4738ecacc93cf58470954c4fa2b1eacc15895a0aff09ee4989fcb05b46ca096b"
+        },
+        "raw/layout_grid_text_fra_temp.raw": {
+          "bytes": 607960,
+          "sha256": "927786bf5e3573812ca3b0007ea7fe1377d69f75d525a48618402a2eab3bb718"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".fra_1.raw",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_noise_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_noise_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_model.cir": "4720424fd9519f2736c6bd25201ebd6df897e2130df524d8759f2fdf2b940001"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_noise_model.log": {
+          "bytes": 542,
+          "sha256": "85cbf55100c2b9b8abaea422815793caea1d246ea52c825cc4c57b41f0bcfcf3"
+        },
+        "raw/layout_grid_text_noise_model.raw": {
+          "bytes": 9691,
+          "sha256": "0b0b1abbfc2b1dceeb9ad202cb55043ce5f43bd589e4d5fc7ce50f4297fced52"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_noise_no": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_noise_no.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/noise.cir": "ccda032ccb79636fd9714c67352b944d5a725ee1f858b57f2c40d6dd97b6056f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_noise_no.log": {
+          "bytes": 434,
+          "sha256": "dfba400951ac252dbd14cb61e25c9885ce4633437cb7d5dfeb1711c332e78664"
+        },
+        "raw/layout_grid_text_noise_no.raw": {
+          "bytes": 2982,
+          "sha256": "d73b96daeace3e43251bbeeeef505303a91e8e768a43eb0c8f6eb0ab50994bee"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_noise_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_noise_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_noise.cir": "5401a45166a15d8e44055e6a98854f16842f54c4a73692f284f44822862ab417"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_noise_param.log": {
+          "bytes": 606,
+          "sha256": "adf0ba3ebd777b6be42108bb4fae2de78ab834dcdce0747421a98dd145ae54e2"
+        },
+        "raw/layout_grid_text_noise_param.raw": {
+          "bytes": 8159,
+          "sha256": "9ff5c194eab114d9177838b6590cb1583ec382fdc2160c57d7b9d2da410e4584"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_noise_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_noise_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_source.cir": "8c077d47440b4e381c6309917ccd78059b2ef3b78848b37f64136201f70bd5a9"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_noise_source.log": {
+          "bytes": 602,
+          "sha256": "06c7b63c4bd071d403e8168087d1c7a88e2e13a51afdb2a1eca29f880110d1c0"
+        },
+        "raw/layout_grid_text_noise_source.raw": {
+          "bytes": 14291,
+          "sha256": "68d40d8fa7bbedb9713a1e83a1f311e7ca983936b6cbff45e47b408f59456246"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_noise_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_noise_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_noise_temp.cir": "6f75656877b2e27e5ecad68d491f7f42cd182b72ca71f4eab52885151b846650"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_noise_temp.log": {
+          "bytes": 616,
+          "sha256": "0dfd9ed91b7591b375329d921adadd924d6337c387fd43b8249cdd61a7a5f544"
+        },
+        "raw/layout_grid_text_noise_temp.raw": {
+          "bytes": 8158,
+          "sha256": "0434fe64d6aa62ef803b3b14840f12c1620545a4c9327a34967b9c7a66e8b299"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_op_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_op_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_op_model.cir": "687bebbae69c7d5c6254339fe23b3f088e6e03040a9fa28cf46a60a82b165afd"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_op_model.log": {
+          "bytes": 496,
+          "sha256": "fa4e50aa0fa170f558432b4498698aecb96e79d741707628e9a5c25bf9b2dde8"
+        },
+        "raw/layout_grid_text_op_model.raw": {
+          "bytes": 694,
+          "sha256": "0d18ce184bf4643c0bdd1b133f8dd39cf388495842abe5819e2386ac8386c462"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_op_no": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_op_no.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/op.cir": "5f35a25a99c25a439de3bde3429e27bbc8f78e39f40aa4ad1b534944b542d08a"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_op_no.log": {
+          "bytes": 428,
+          "sha256": "2decc87c3bbc3a93b8ff5adcf556cd97d0f3f2d995f36c02b21d1f911f0bed01"
+        },
+        "raw/layout_grid_text_op_no.raw": {
+          "bytes": 503,
+          "sha256": "cdeb4f82aabb5758a60d0baa9234a99bc88c00ef4c692ac296bd158b5109e056"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_op_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_op_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_op.cir": "4db52914af9d92e245a0f07378f9e0b2b9cae6fe614d4e1378d84116ea99bb76"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_op_param.log": {
+          "bytes": 558,
+          "sha256": "586c6a425710f6aaf51ba3af304df844b0ad9526432db2a215ff30ecef956bb3"
+        },
+        "raw/layout_grid_text_op_param.raw": {
+          "bytes": 844,
+          "sha256": "b6af9c1bbceb6729a4ca64b3d009ffb6ecc5f4e6a959c02eaedb8079c9c8bb5a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_op_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_op_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_op_source.cir": "2f7d6a46509d9dda3090401820a55cba6a5baa1501089829f413e2c27be398d1"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_op_source.log": {
+          "bytes": 560,
+          "sha256": "9ecbba93f08d543b0e14212196e0b4cc7fca62751cd98641baeade00ac758c9a"
+        },
+        "raw/layout_grid_text_op_source.raw": {
+          "bytes": 848,
+          "sha256": "dcc8c5c973653a4349668ae9c3b50b1938b6c9b2150b0d3f5be62050fc5b31b1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_op_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_op_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_temp_op.cir": "4ca7beb07ba8eb5f231ca7cda3367a9012a4007fd6324c02c521c7ffc7a24fa8"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_op_temp.log": {
+          "bytes": 557,
+          "sha256": "4e7d9b3179328ef767b3362bdad48e51d2fc91d36cb3dddb08e964a00ba3c132"
+        },
+        "raw/layout_grid_text_op_temp.raw": {
+          "bytes": 668,
+          "sha256": "acd107fba1b4e3b102be96c20cfaa3f88f227e5bf9f48cfe044e571a09b4ab19"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tf_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tf_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_model.cir": "9f92496ba381011394360fe61914c9301a300d046d31aaff8568559e54d83622"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tf_model.log": {
+          "bytes": 496,
+          "sha256": "17a7c30c24e3cf996057eed8595288060636ac1c33374227a78560e1ddd24283"
+        },
+        "raw/layout_grid_text_tf_model.raw": {
+          "bytes": 591,
+          "sha256": "f7f000c2f62860e850d1d27cbc994f7f3d1a4de402daefc607b6470873ff8bb3"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tf_no": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tf_no.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/tf.cir": "b6337ef74aae749afa89b8fb3701222823036b9e7e1ce771334d4b0787830165"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tf_no.log": {
+          "bytes": 428,
+          "sha256": "5ea3d8ab4cfa277989ee12204b4f5a24a502ec4fa456b784468b744c7fd91760"
+        },
+        "raw/layout_grid_text_tf_no.raw": {
+          "bytes": 449,
+          "sha256": "bf54242085d7bff9a10f9dd601d065b4b2447497ca2c7c8e35f3b4990c60fc14"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tf_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tf_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/tf_step.cir": "424ac3e94b65fc68ac92b6d6d6e7e941fe63432ebf9de93a397474ffeb4c4c3c"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tf_param.log": {
+          "bytes": 558,
+          "sha256": "238a60cede0c2af9e4f03ba5ee7f438dcf959a35e86cadc499d732ea4dbad570"
+        },
+        "raw/layout_grid_text_tf_param.raw": {
+          "bytes": 692,
+          "sha256": "7ee99cad694c44254d2675db9ef1690d16856a739406c6474e85a1a123d0cedb"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tf_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tf_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_source.cir": "6ab4f28897e1a823ce07306c7740f9b406f8b6332bfaaa51c9025ceda3e1c3e0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tf_source.log": {
+          "bytes": 560,
+          "sha256": "17fc86dcb97866be7e3364e11966bf74888a7d910a34cb3b6595ae64d1298a71"
+        },
+        "raw/layout_grid_text_tf_source.raw": {
+          "bytes": 696,
+          "sha256": "5cec1a610f242bc8e83a9afa3b3885b2a9664ff5252323a5fdb9d58d970c33e1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tf_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tf_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_temp.cir": "de90006af7766c333a1da539d92b2a7b18aa238506bc853cf3605c92ca31a929"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tf_temp.log": {
+          "bytes": 557,
+          "sha256": "9992ee64b44d2c9a48d7a3478c9570625402e1eee63a3ee60d2f80af2a063409"
+        },
+        "raw/layout_grid_text_tf_temp.raw": {
+          "bytes": 708,
+          "sha256": "77ac6dc422feb928f9d1a041639f13c76e3af044f35b1dde48c332a3df93f1c2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tran_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tran_model.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tran_model.cir": "a2b40b12f69229d87ed031a2bd3e9ebb91ec853d6c9e9cd27d0a1be6fdd1440b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tran_model.log": {
+          "bytes": 541,
+          "sha256": "1c04166c111d81820e6d0e6474559ae9b6f9c9d76c50a7117e279d59f813c9c2"
+        },
+        "raw/layout_grid_text_tran_model.raw": {
+          "bytes": 11447,
+          "sha256": "82f7bff5d9df50b4cec9defbf400faafdb713ddf2daa13214b16f654584b1d30"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tran_param": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tran_param.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_tran.cir": "4e264bbd2e4bcd1e7141146cc40d2ba8328906cbe473919d95486f9b5eaf2cd7"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tran_param.log": {
+          "bytes": 737,
+          "sha256": "8b8adc500d50bef3e9f6566896c6e02b0c51edd3676bffcc437728280aa853c2"
+        },
+        "raw/layout_grid_text_tran_param.raw": {
+          "bytes": 32489,
+          "sha256": "c6d3546eef6c1251df4d9f47d9226245aca56a445986a9f7e06068217835e21d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_text_tran_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tran_source.cir",
+        "-ascii"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_tran_source.cir": "c2e7e6eb6441e3eab43cafcfd4190a3669c99b74f822ed96a56b9d9d4237ed09"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tran_source.log": {
+          "bytes": 214,
+          "sha256": "9f273017cf6b93fc4b30bad012d3ee6313412889623565be513624714da49cf6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log"
+      ]
+    },
+    "raw/layout_grid_text_tran_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_text_tran_temp.cir",
+        "-ascii"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_temp.cir": "f334e45a106089cea981856abb508df10ae72ba9a17987a9cbafea96c2859bcb"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_text_tran_temp.log": {
+          "bytes": 615,
+          "sha256": "c7a8a776616b857851eb33a7da88229967c34b38d200a62f54264aea046a29d3"
+        },
+        "raw/layout_grid_text_tran_temp.raw": {
+          "bytes": 8762,
+          "sha256": "6f0021894a975912fed2b4a3f9f045f58b0666e02f70dfe67c65930a7530982a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": "the recording user's own",
+      "stopped": false,
+      "volatile": true,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_tf_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_tf_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_model.cir": "9f92496ba381011394360fe61914c9301a300d046d31aaff8568559e54d83622"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_tf_model.log": {
+          "bytes": 418,
+          "sha256": "9c67f74244de45af67b57bda9e7e47ee21074e9dc2fea9a98cb15731b6e0ed97"
+        },
+        "raw/layout_grid_tf_model.raw": {
+          "bytes": 792,
+          "sha256": "58ca134e30ee001eaaa2f574a24009d4979d659a45990fa7f7ea4e3ef99995ff"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_tf_numdgt7": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_tf_numdgt7.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_numdgt7.cir": "73eed7dd2ea8f3d70314c6ce1d8e19859dddf2e993fce5888a66232da481c43f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_tf_numdgt7.log": {
+          "bytes": 377,
+          "sha256": "3a0df61618bc26680426e3122d970de711e832df39db37db074fa455a5abc8e1"
+        },
+        "raw/layout_grid_tf_numdgt7.raw": {
+          "bytes": 762,
+          "sha256": "e3bb86f4017f8d1f5301a4943caecdec05d5230879a99a9745c049482f658d05"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_tf_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_tf_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_source.cir": "6ab4f28897e1a823ce07306c7740f9b406f8b6332bfaaa51c9025ceda3e1c3e0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_tf_source.log": {
+          "bytes": 482,
+          "sha256": "ea83543e4a09c4f00543bd65fa77a6c06cd5e5c4790160639a06a853c0288cde"
+        },
+        "raw/layout_grid_tf_source.raw": {
+          "bytes": 826,
+          "sha256": "aba07b6271eef1e98cca183c882bdd8b4ff0de03901c36971240aca6e67fb6f5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_tf_temp": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_tf_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tf_temp.cir": "de90006af7766c333a1da539d92b2a7b18aa238506bc853cf3605c92ca31a929"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_tf_temp.log": {
+          "bytes": 479,
+          "sha256": "dad0af2ce2cc0347a5e51e22033c9b3ad44ade92c713f334c9f0769ec5df5de4"
+        },
+        "raw/layout_grid_tf_temp.raw": {
+          "bytes": 848,
+          "sha256": "73fdeb3be3615686037ded1a94015faa6809da4e73d452e86879c8306010d55f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_tran_model": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_tran_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/layout_grid_tran_model.cir": "a2b40b12f69229d87ed031a2bd3e9ebb91ec853d6c9e9cd27d0a1be6fdd1440b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_tran_model.log": {
+          "bytes": 463,
+          "sha256": "8244f93a52d536a2e411b498f4c32e1936ec6a09961b223986d2e1f537fa8326"
+        },
+        "raw/layout_grid_tran_model.op.raw": {
+          "bytes": 822,
+          "sha256": "e87e3dad48a4215814eb66e79f7ec29e0093f59134121442fda73b88077dca8d"
+        },
+        "raw/layout_grid_tran_model.raw": {
+          "bytes": 2826,
+          "sha256": "f4c2ce3b101438f8d9c1158263a5667796350c6fbdbdf182a3909c61ca4e26b6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/layout_grid_tran_source": {
+      "behaviour": "results-layout-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/layout_grid_tran_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/layout_grid_tran_source.cir": "c2e7e6eb6441e3eab43cafcfd4190a3669c99b74f822ed96a56b9d9d4237ed09"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/layout_grid_tran_source.log": {
+          "bytes": 204,
+          "sha256": "d24d19078afbd4d0fecb8b03594fd25d73be65fa55f58389eef59a245cb47c4a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
       ]
     },
     "raw/mos_multiplier": {
@@ -16968,6 +19494,287 @@
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_ac": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_ac.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_ac.cir": "4c5218260a9d44931c2285eb4f83d4442420625f078ed3b84cecfae19bbabd20"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_ac.log": {
+          "bytes": 712,
+          "sha256": "159983e9a78a4aa855e5d3dc995c6d0e3b8ccc89426f44dd453446d695785748"
+        },
+        "raw/trace_grid_ac.raw": {
+          "bytes": 4300,
+          "sha256": "3beffafaa721779a6fe488bc87b36c5b7123b13c91297ba3b2c9ad16f1fd68f6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_dc": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_dc.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_dc.cir": "cb9ae96dee9ea607698d4ea6b558ba779f9fd642228170f7390b280f056d2d5a"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_dc.log": {
+          "bytes": 651,
+          "sha256": "872c0a7288bdeea3973f1461934147a0d4596531944fdcbe81367a40cc0eb748"
+        },
+        "raw/trace_grid_dc.raw": {
+          "bytes": 2488,
+          "sha256": "75fd9c6825b7ac309ca7cc4b5aafb7ac687afe8495831878f3f89fac93ac1c45"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_noise": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_noise.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_noise.cir": "bdc02e93f6610adbae3b712e680685e4eabbf14094d67abc35cbebe289a2e8bf"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_noise.log": {
+          "bytes": 348,
+          "sha256": "75f70cd8ee8edf5b06c83a80806777616df83a8f83414b84ea2e873491cf34a9"
+        },
+        "raw/trace_grid_noise.raw": {
+          "bytes": 1280,
+          "sha256": "4a04ed132b2abc83b66a13513bffff035d3ab389d341987ad1f924dc89dca9d2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_op": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_op.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_op.cir": "b97903e7eefef26a0a51d8de3f02fc574a24d1154c212958babaec47a4126104"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_op.log": {
+          "bytes": 712,
+          "sha256": "8978cdc951536ce90c5043d321fa33c95558fdca7bec36f81f2cb016c75f3f5d"
+        },
+        "raw/trace_grid_op.raw": {
+          "bytes": 2178,
+          "sha256": "fd87233ff4e60d4dae3b591a736e9e3f42d6c1797513a3fea56c896e14d424b7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_section_ac": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_section_ac.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_section_ac.cir": "5eb0f2ec36156125aa095396b79cd088ffc69f080c3a26077e213911eb6ff80f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_section_ac.log": {
+          "bytes": 358,
+          "sha256": "b5b1fd2bf533a31b4fe9226e18f3aea3fcfdc918025ba453674c3b5c32362af6"
+        },
+        "raw/trace_grid_section_ac.raw": {
+          "bytes": 1162,
+          "sha256": "2e6aae3e512fd24185e7dcb6cc950647bf21db8ee058e8b035b179f032963b40"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_section_dc": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_section_dc.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_section_dc.cir": "a27257a4447bdcf95327509c3e58cd90870c0c9f9d89445106d3b32ef0aa12b5"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_section_dc.log": {
+          "bytes": 296,
+          "sha256": "f0d562b8cb230b819d8024319ed8e420351006599471c9ccd1979c3bb216ba06"
+        },
+        "raw/trace_grid_section_dc.raw": {
+          "bytes": 786,
+          "sha256": "92135400a31c9ae866c1bb3698b657e9e579dcb822c45bae067f24d3a71e223c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_section_noise": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_section_noise.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_section_noise.cir": "35fbd771c6bcdee16fe5d475131a58d8549b2a3b34862222c97585f5ccedcf1e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_section_noise.log": {
+          "bytes": 364,
+          "sha256": "2da9d842d8f9055ee2b118d5d9a083a5ad44b84ceb04a709cdf74826b44c85a3"
+        },
+        "raw/trace_grid_section_noise.raw": {
+          "bytes": 1096,
+          "sha256": "bd0e6debc8b773b313345b29a555f9d9a022ec2cebe7b198b8773ed570c178c5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/trace_grid_tran": {
+      "behaviour": "trace-name-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/trace_grid_tran.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/trace_grid_tran.cir": "a8f44625f837ce41dd4410c17395c81911f788f4488848f6b3f4a75cbe4517cb"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/trace_grid_tran.log": {
+          "bytes": 719,
+          "sha256": "c6cae2dd8fbac89540b776bbc3df0c4c39e3235bd8ff65bfa006d5e93edc2f71"
+        },
+        "raw/trace_grid_tran.raw": {
+          "bytes": 118828,
+          "sha256": "3ac9b132ecd677a06f4a2548acfffd46d158af22c347ff6d86ce1d1d1371dae1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
       "stopped": false,
       "written": [
         ".log",

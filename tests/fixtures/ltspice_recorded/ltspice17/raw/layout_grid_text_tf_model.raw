@@ -1,0 +1,22 @@
+Title: * transfer function of a diode load over two saturation currents, a model parameter stepped
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Transfer Function
+Flags: real stepped
+No. Variables: 4
+No. Points:            2
+Offset:   0.0000000000000000e+000
+Command: Linear Technology Corporation LTspice XVII
+Variables:
+	0	is	d
+	1	Transfer_function	transfer
+	2	v1#Input_impedance	impedance
+	3	output_impedance_at_V(out)	impedance
+Values:
+0		1.000000000000000e-014
+	6.524560441334351e-002
+	1.069799729984040e+003
+	6.524560441334351e+001
+1		1.000000000000000e-013
+	5.717975177994919e-002
+	1.060647564461941e+003
+	5.717975177994919e+001

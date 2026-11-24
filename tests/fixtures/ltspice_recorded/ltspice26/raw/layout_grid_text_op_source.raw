@@ -1,0 +1,34 @@
+Title: C:\recording\layout_grid_text_op_source.cir
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Operating Point
+Flags: real stepped
+No. Variables: 6
+No. Points:            3
+Offset:    0.0000000000000000e+00
+Command: Linear Technology Corporation LTspice
+Variables:
+	0	v1	voltage
+	1	V(in)	voltage
+	2	V(out)	voltage
+	3	I(R1)	device_current
+	4	I(R2)	device_current
+	5	I(V1)	device_current
+Values:
+0		1.000000000000000e+00
+	1.000000000000000e+00
+	8.000000000000000e-01
+	2.000000000000000e-04
+	2.000000000000000e-04
+	-2.000000000000000e-04
+1		2.000000000000000e+00
+	2.000000000000000e+00
+	1.600000000000000e+00
+	3.999999999999999e-04
+	4.000000000000000e-04
+	-4.000000000000000e-04
+2		3.000000000000000e+00
+	3.000000000000000e+00
+	2.400000000000000e+00
+	6.000000000000001e-04
+	5.999999999999999e-04
+	-6.000000000000001e-04

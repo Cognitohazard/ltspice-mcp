@@ -1,0 +1,26 @@
+Title: C:\recording\layout_grid_text_op_temp.cir
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Operating Point
+Flags: real stepped
+No. Variables: 4
+No. Points:            3
+Offset:    0.0000000000000000e+00
+Command: Linear Technology Corporation LTspice
+Variables:
+	0	temperature	temperature
+	1	V(a)	voltage
+	2	I(I1)	device_current
+	3	I(R1)	device_current
+Values:
+0		-4.000000000000000e+01
+	3.300000000000000e-01
+	1.000000000000000e-03
+	1.000000000000000e-03
+1		2.700000000000000e+01
+	1.000000000000000e+00
+	1.000000000000000e-03
+	1.000000000000000e-03
+2		1.250000000000000e+02
+	1.980000000000000e+00
+	1.000000000000000e-03
+	1.000000000000000e-03

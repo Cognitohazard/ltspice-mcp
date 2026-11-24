@@ -1,0 +1,28 @@
+Title: * operating point of a diode load over two saturation currents, a model parameter stepped
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Operating Point
+Flags: real stepped
+No. Variables: 6
+No. Points:            2
+Offset:   0.0000000000000000e+000
+Command: Linear Technology Corporation LTspice XVII
+Variables:
+	0	is	d
+	1	V(in)	voltage
+	2	V(out)	voltage
+	3	I(D1)	device_current
+	4	I(R1)	device_current
+	5	I(V1)	device_current
+Values:
+0		1.000000000000000e-014
+	1.000000000000000e+000
+	6.294415992923043e-001
+	3.705594987894016e-004
+	3.705584007076958e-004
+	-3.705584007076958e-004
+1		1.000000000000000e-013
+	1.000000000000000e+000
+	5.735206805819366e-001
+	4.264796644961807e-004
+	4.264793194180634e-004
+	-4.264793194180634e-004

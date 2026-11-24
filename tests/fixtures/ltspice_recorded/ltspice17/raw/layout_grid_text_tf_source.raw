@@ -1,0 +1,26 @@
+Title: * transfer function of a diode stage over three bias currents, stepped by the bias source's own name
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Transfer Function
+Flags: real stepped
+No. Variables: 4
+No. Points:            3
+Offset:   0.0000000000000000e+000
+Command: Linear Technology Corporation LTspice XVII
+Variables:
+	0	i1	current
+	1	Transfer_function	transfer
+	2	v1#Input_impedance	impedance
+	3	output_impedance_at_V(out)	impedance
+Values:
+0		1.000000000000000e-003
+	1.897332091723234e-002
+	1.019340270067856e+003
+	1.897332091723234e+001
+1		2.000000000000000e-003
+	1.101117120856866e-002
+	1.011133767023460e+003
+	1.101117120856866e+001
+2		3.000000000000000e-003
+	7.744559529667456e-003
+	1.007805005862197e+003
+	7.744559529667455e+000

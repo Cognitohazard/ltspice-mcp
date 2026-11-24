@@ -1,0 +1,20 @@
+Title: * divider operating point
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Operating Point
+Flags: real
+No. Variables: 5
+No. Points:            1
+Offset:   0.0000000000000000e+000
+Command: Linear Technology Corporation LTspice XVII
+Variables:
+	0	V(in)	voltage
+	1	V(out)	voltage
+	2	I(R2)	device_current
+	3	I(R1)	device_current
+	4	I(V1)	device_current
+Values:
+0		5.000000000000000e+000
+	4.000000000000000e+000
+	1.000000000000000e-003
+	1.000000000000000e-003
+	-1.000000000000000e-003

@@ -1,0 +1,26 @@
+Title: * divider transfer function over three resistances
+Date: Thu Jan 15 00:00:00 2026
+Plotname: Transfer Function
+Flags: real stepped
+No. Variables: 4
+No. Points:            3
+Offset:   0.0000000000000000e+000
+Command: Linear Technology Corporation LTspice XVII
+Variables:
+	0	r	param
+	1	Transfer_function	transfer
+	2	v1#Input_impedance	impedance
+	3	output_impedance_at_V(out)	impedance
+Values:
+0		1.000000000000000e+003
+	8.000000000000000e-001
+	5.000000000000000e+003
+	8.000000000000000e+002
+1		2.000000000000000e+003
+	6.666666666666666e-001
+	5.999999999999999e+003
+	1.333333333333333e+003
+2		4.000000000000000e+003
+	5.000000000000000e-001
+	8.000000000000000e+003
+	2.000000000000000e+003

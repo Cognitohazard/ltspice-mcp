@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\layout_grid_tran_source.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\layout_grid_tran_source.cir(5): Can't sweep that.
+.step V1 list 1 2
+      ^^
