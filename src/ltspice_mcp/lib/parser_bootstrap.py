@@ -40,6 +40,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,33 @@ _OWNER_EXIT = 70
 
 _OWNER_PROOF_S = 2.0
 """How long the macOS worker waits to see its owner thread asleep in ``write``."""
+
+DARWIN_ALLOCATOR = {
+    # libmalloc keeps a small-object pool per CPU or cluster, each growing the
+    # address space where the worker happens to run; one pool keeps that growth
+    # to what the decoder allocates.
+    "MallocMaxMagazines": "1",
+    # On Apple silicon the medium pool (blocks of about 32 KiB to 8 MiB)
+    # reserves 128 MiB of address space at its first allocation on each CPU
+    # cluster. Without this setting the arm64 macOS CI job failed a decode
+    # well under a 256 MiB budget (the test
+    # test_a_decode_under_the_budget_less_the_allowance_succeeds); with it the
+    # same job passes. Medium blocks are then mapped one at a time, at their
+    # own size.
+    "MallocMediumZone": "0",
+    # The nano pool for blocks of 256 bytes or less keeps its own per-CPU
+    # blocks, which MallocMaxMagazines does not limit; without it those
+    # blocks go to the one small-object pool.
+    "MallocNanoZone": "0",
+}
+"""The macOS parser worker's allocator settings, which libmalloc reads only at
+start. The supervisor sets them in the worker's environment and the worker
+refuses to run without them (``_prove_allocator``), because its address-space
+budget assumes them. Nothing else runs with them."""
+_ALLOCATOR_POOLS = {11: "nano", 12: "medium"}
+"""The Mach region tags (``VM_MEMORY_MALLOC_NANO``, ``VM_MEMORY_MALLOC_MEDIUM``)
+of the pools ``DARWIN_ALLOCATOR`` turns off."""
+
 
 _OWNER_POLL_S = 0.01
 
@@ -199,6 +227,81 @@ def _set_limit(name: str, which: int, value: int, base: int) -> None:
             f"{name} limit is at least {value}, for example from a shell "
             f"without a lower `ulimit`"
         ) from error
+
+
+def _prove_allocator(environ: Mapping[str, str]) -> None:
+    """The worker started with ``DARWIN_ALLOCATOR``, and the pools it turns off are off.
+
+    The settings are read from the environment the worker started with, which
+    is what libmalloc read. Then a nano-sized and a medium-sized block are
+    allocated, and no region of the address space may carry either pool's tag.
+    """
+    wrong = {
+        name: environ.get(name)
+        for name, value in DARWIN_ALLOCATOR.items()
+        if environ.get(name) != value
+    }
+    if wrong:
+        raise ContainmentFailed(
+            f"allocator: the worker started without the allocator settings its "
+            f"memory budget assumes ({', '.join(f'{k}={v}' for k, v in sorted(wrong.items()))}, "
+            f"expected {DARWIN_ALLOCATOR}); start it through the server's parser supervisor"
+        )
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.malloc.argtypes = [ctypes.c_size_t]
+    libc.malloc.restype = ctypes.c_void_p
+    libc.free.argtypes = [ctypes.c_void_p]
+    libc.free.restype = None
+    # A block for each pool's size range, so a pool that is on has its region.
+    blocks = [libc.malloc(size) for size in (16, 256 * 1024)]
+    try:
+        if not all(blocks):
+            raise ContainmentFailed("allocator: a probe allocation failed")
+        found = sorted({_ALLOCATOR_POOLS[tag] for tag in _darwin_region_tags(libc)
+                        if tag in _ALLOCATOR_POOLS})
+    finally:
+        for block in blocks:
+            libc.free(block)
+    if found:
+        raise ContainmentFailed(
+            f"allocator: the {' and '.join(found)} "
+            f"{'pools are' if len(found) > 1 else 'pool is'} in use although the "
+            f"worker started with {DARWIN_ALLOCATOR}, so the system did not honour "
+            f"the allocator settings the memory budget assumes"
+        )
+
+
+def _darwin_region_tags(libc: ctypes.CDLL) -> set[int]:
+    """The user tags of every top-level region of this task's address space."""
+    task = ctypes.c_uint.in_dll(libc, "mach_task_self_")
+    region = libc.mach_vm_region
+    region.argtypes = [
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint),
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    region.restype = ctypes.c_int
+    tags: set[int] = set()
+    address = ctypes.c_uint64(0)
+    while True:
+        size = ctypes.c_uint64(0)
+        info = (ctypes.c_uint * 9)()  # vm_region_extended_info
+        count = ctypes.c_uint(9)  # VM_REGION_EXTENDED_INFO_COUNT
+        port = ctypes.c_uint(0)
+        status = region(
+            task, ctypes.byref(address), ctypes.byref(size), 13,  # VM_REGION_EXTENDED_INFO
+            info, ctypes.byref(count), ctypes.byref(port),
+        )
+        if status == 1:  # KERN_INVALID_ADDRESS: past the last region
+            return tags
+        if status != 0:
+            raise ContainmentFailed(f"allocator: mach_vm_region failed with kern_return_t {status}")
+        tags.add(info[1])  # user_tag
+        address.value += size.value
 
 
 def _darwin_limits(memory: int) -> int:
@@ -393,12 +496,14 @@ def _darwin_owner_proof(thread: threading.Thread, deadline: float) -> None:
 def _darwin_containment(memory: int, owner_fd: int) -> None:
     """Contain this worker on macOS before any decoder is imported.
 
-    Limits first, proved while the worker has one thread; then the owner pipe
-    and its thread, proved asleep in ``write``. Any failure raises
-    ``ContainmentFailed`` naming the step.
+    The allocator settings first, then the limits, proved while the worker has
+    one thread; then the owner pipe and its thread, proved asleep in
+    ``write``. Any failure raises ``ContainmentFailed`` naming the step.
     """
     import resource
 
+    with _step("allocator"):
+        _prove_allocator(os.environ)
     with _step("limits"):
         limit = _darwin_limits(memory)
     with _step("limit proof"):

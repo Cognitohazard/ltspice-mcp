@@ -104,7 +104,13 @@ holds, and starts a thread that ends the parser when the server's end of a
 pipe closes, before it reads its first request or imports any decoding code.
 It refuses to run as root, which the process limit does not bind, and any
 other platform. There the memory limit is headroom over the address space the worker
-has mapped when it starts, and the worker can start no process. `test_parser_darwin_containment.py` checks each step: the
+has mapped when it starts, and the worker can start no process. Before the
+limits it checks that it started with its allocator settings
+(`DARWIN_ALLOCATOR`) and that the nano and medium pools are off;
+`MallocMaxMagazines` is checked only for being set, not for its effect.
+`test_parser_darwin_containment.py` checks each step: a missing allocator
+setting is refused on any host, settings the system did not apply are refused
+on Apple-silicon macOS only, the
 pipe, the thread and the limit proofs run on any POSIX host, and the cases
 that need the macOS kernel (a refused owner pipe, an inherited lower address
 space limit, a decode just under and one over the budget, a run as root) run

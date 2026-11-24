@@ -46,6 +46,13 @@ in a parser process with a hard memory limit and cleans up that process and
 any it started (`lib/parser_process.py`). On macOS the parser applies and
 proves its own limits before it reads a request, and refuses to run as root
 (`lib/parser_bootstrap.py`); [docs/TESTING.md](TESTING.md) says what is tested.
+The macOS parser starts with `MallocMaxMagazines=1`, `MallocMediumZone=0` and
+`MallocNanoZone=0` (`parser_bootstrap.DARWIN_ALLOCATOR`), and nothing else
+does. By default the allocator keeps a pool per CPU, and on Apple silicon its
+medium pool reserves 128 MiB of address space at its first allocation, which a
+small memory limit cannot absorb. The memory limit assumes these settings, so
+the parser refuses to start when one is missing from its environment or when
+the system leaves the medium or nano pool on.
 
 A schematic (`.asc`) runs through the netlist LTspice exports from it, which
 is in LTspice's own dialect. The server prepares that netlist for ngspice

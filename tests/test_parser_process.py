@@ -21,7 +21,7 @@ from typing import IO, Any
 import psutil
 import pytest
 
-from ltspice_mcp.lib import parser_process, windows_job
+from ltspice_mcp.lib import parser_bootstrap, parser_process, windows_job
 from ltspice_mcp.lib.parser_process import (
     JsonValue,
     ParserProcessError,
@@ -820,7 +820,7 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
     # owner pipe and the allocator settings the supervisor passes.
     owner = os.pipe() if sys.platform == "darwin" else None
     if owner:
-        env = {**(env if env is not None else os.environ), **parser_process._DARWIN_ALLOCATOR}
+        env = {**(env if env is not None else os.environ), **parser_bootstrap.DARWIN_ALLOCATOR}
     process = subprocess.Popen(
         [
             executable,

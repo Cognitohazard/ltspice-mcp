@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import platform
 import select
 import shutil
 import subprocess
@@ -273,6 +274,33 @@ def test_a_trial_fork_that_succeeds_is_refused():
         """
     )
     assert code == 1 and "trial fork succeeded" in err
+
+
+@pytest.mark.parametrize("missing", sorted(parser_bootstrap.DARWIN_ALLOCATOR))
+def test_a_worker_started_without_an_allocator_setting_is_refused(missing):
+    environ = {k: v for k, v in parser_bootstrap.DARWIN_ALLOCATOR.items() if k != missing}
+    with pytest.raises(parser_bootstrap.ContainmentFailed, match=f"allocator: .*{missing}=None"):
+        parser_bootstrap._prove_allocator(environ)
+
+
+@macos
+@pytest.mark.skipif(
+    platform.machine() != "arm64", reason="The medium pool is on by default only on Apple silicon"
+)
+def test_allocator_settings_the_system_did_not_apply_are_refused():
+    # This process started without the settings, so its medium and nano pools
+    # are on whatever environment the proof is handed. Every worker test on
+    # macOS shows the other side: a worker started with them passes.
+    code, _, err = _run(
+        """
+        from ltspice_mcp.lib import parser_bootstrap
+        try:
+            parser_bootstrap._prove_allocator(parser_bootstrap.DARWIN_ALLOCATOR)
+        except parser_bootstrap.ContainmentFailed as error:
+            raise SystemExit(str(error))
+        """
+    )
+    assert code == 1 and "did not honour the allocator settings" in err, err
 
 
 @posix
