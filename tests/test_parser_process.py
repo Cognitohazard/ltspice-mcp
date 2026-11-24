@@ -816,8 +816,10 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
     directory = call_dir()
     executable, env = python_launch()
     # The macOS worker contains itself before the gate, which needs the
-    # owner pipe the supervisor passes.
+    # owner pipe and the allocator settings the supervisor passes.
     owner = os.pipe() if sys.platform == "darwin" else None
+    if owner:
+        env = {**(env if env is not None else os.environ), **parser_process._DARWIN_ALLOCATOR}
     process = subprocess.Popen(
         [
             executable,
