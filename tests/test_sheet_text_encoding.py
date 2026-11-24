@@ -75,7 +75,7 @@ async def _edit(state: SessionState, path: Path, ops: list[dict], **kw: Any) -> 
     request = EditSchematicInput.model_validate(
         {
             "path": str(path),
-            "expected_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "expected_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),  # noqa: ASYNC240
             "ops": ops,
         }
         | kw
@@ -128,7 +128,7 @@ async def _edit_r2_keeps_every_other_byte(
     state: SessionState, path: Path, newline: bytes = b"\n"
 ) -> dict[str, Any]:
     """Set R2's value and check that only its value line changed."""
-    before = path.read_bytes()
+    before = path.read_bytes()  # noqa: ASYNC240
     data = await _edit(
         state, path, [{"op": "set_component_value", "reference": "R2", "value": "2k"}]
     )
@@ -136,8 +136,8 @@ async def _edit_r2_keeps_every_other_byte(
     assert data["commit_state"] == "committed", data
     old, new = b"SYMATTR Value 1k" + newline, b"SYMATTR Value 2k" + newline
     assert before.count(old) == 1
-    assert path.read_bytes() == before.replace(old, new)
-    assert data["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert path.read_bytes() == before.replace(old, new)  # noqa: ASYNC240
+    assert data["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()  # noqa: ASYNC240
     return data
 
 
@@ -189,6 +189,37 @@ class TestEightBitSheet:
         path.write_bytes(_sheet("IN", "10", comment="@@").encode("ascii").replace(b"@@", comment))
         await _edit_r2_keeps_every_other_byte(asc_state, path)
         assert comment in path.read_bytes()
+
+    async def test_a_character_the_sheets_encoding_lacks_is_refused_naming_it(
+        self, asc_state, work_dir
+    ):
+        path = work_dir / "omega.asc"
+        original = _cp1252(_sheet("à", "1µ"))
+        path.write_bytes(original)
+        data = await _edit(
+            asc_state, path, [{"op": "set_component_value", "reference": "R2", "value": "1Ω"}]
+        )
+        assert data["commit_state"] == "not_committed", data
+        assert "Windows-1252, which has no 'Ω'" in data["error"]["message"]
+        assert path.read_bytes() == original
+
+    async def test_a_symbol_read_in_the_codec_the_sheet_is_read_in(self, asc_state, work_dir):
+        # A symbol holding 0x8D and 0x81, each before a line end, which
+        # spicelib's detection refused, no longer stops an edit of a sheet placing it.
+        (work_dir / "part.asy").write_bytes(
+            b"Version 4\nSymbolType CELL\nRECTANGLE Normal 0 0 32 64\n"
+            b"SYMATTR Description x\x8d\n"
+            b"SYMATTR SpiceLine y\x81\n"
+            b"PIN 16 0 NONE 0\nPINATTR PinName A\nPINATTR SpiceOrder 1\n"
+            b"PIN 16 64 NONE 0\nPINATTR PinName B\nPINATTR SpiceOrder 2\n"
+        )
+        path = work_dir / "placed.asc"
+        path.write_bytes(
+            _sheet("IN", "10").replace("SYMBOL res 160 0", "SYMBOL part 160 0").encode("ascii")
+        )
+        data = await _edit(asc_state, path, [{"op": "add_net_label", "net": "P", "pin": "R2.2"}])
+        assert data["commit_state"] == "committed", data
+        assert b"FLAG 176 64 P" in path.read_bytes()
 
     async def test_crlf_line_ends_stay_crlf(self, asc_state, work_dir):
         path = work_dir / "crlf.asc"

@@ -4840,9 +4840,10 @@ can go once `run` takes `env`.
 **Status:** draft for upstream.
 **Affected version:** spicelib 1.5.1 (`spicelib/utils/detect_encoding.py`,
 `detect_encoding`; `spicelib/editor/asc_editor.py`, `AscEditor.__init__`,
-`reset_netlist` and `save_netlist`).
-**Our workaround:** `src/ltspice_mcp/lib/schematic_ops.py`, `_AscEditor.__init__`,
-passes spicelib the codec `lib/encoding.py` decides (`sheet_codec`), which for
+`reset_netlist` and `save_netlist`; `spicelib/editor/asy_reader.py`,
+`AsyReader.__init__`).
+**Our workaround:** `src/ltspice_mcp/lib/schematic_ops.py`, `_AscEditor.__init__`
+and `_PlacedSymbol.__init__` (each part's `.asy` symbol), pass spicelib the codec `lib/encoding.py` decides (`sheet_codec`), which for
 8-bit text is a registered whole-byte Windows-1252 table
 (`encoding.WHOLE_BYTE_CP1252`); `tools/schematic_edit.py` writes the edited
 sheet with the line ending the sheet had (`_SheetEncoding`).
@@ -4862,6 +4863,11 @@ that holds any of them fails both cp1252 tries:
 
 A sheet in a double-byte code page (cp936, cp932) is read the same way, so
 whatever codec matches, its comments are other characters.
+
+`AsyReader` detects a symbol file's encoding the same way, and `AscEditor`
+reads the symbol of every part a sheet places when it opens the sheet, so a
+symbol holding 0x81 or 0x8D before a line end stops every sheet that places it
+from opening.
 
 Separately, `reset_netlist` opens the sheet with universal newlines and
 `save_netlist` writes `"\n"`, so a CRLF sheet is saved with LF line ends:
@@ -4920,7 +4926,8 @@ it, and assert that the saved file has CRLF line ends.
 ### Cross-reference
 
 `tests/test_sheet_text_encoding.py` edits and inspects sheets in cp1252 with
-bytes 0x8D and 0x81, in cp936, in UTF-8 and UTF-16, and with CRLF line ends,
+bytes 0x8D and 0x81, in cp936, in UTF-8 and UTF-16, with CRLF line ends, and
+one placing a symbol that holds bytes 0x8D and 0x81,
 and checks that `inspect` and `edit_schematic` read the same text and that an
 edit changes only the line it was asked to. The workaround can go once
 `AscEditor` reads 8-bit sheets as above and keeps the line ending.

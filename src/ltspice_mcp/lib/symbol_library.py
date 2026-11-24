@@ -87,18 +87,6 @@ class AmbiguousName(FileNotFoundError):
         super().__init__(f"{said} {self.problem}")
 
 
-def _alike(folder: Path, name: str, want_dir: bool) -> list[Path]:
-    """The entries of ``folder`` named ``name`` without regard to letter case,
-    folders or files as ``want_dir`` says."""
-    key = name.casefold()
-    try:
-        names = os.listdir(folder)
-    except OSError:
-        return []
-    found = [folder / entry for entry in names if entry.casefold() == key]
-    return [path for path in found if (path.is_dir() if want_dir else path.is_file())]
-
-
 def _entry(folder: Path, name: str, want_dir: bool, said: str) -> Path | None:
     """The entry of ``folder`` that ``name`` means, as a file system that
     ignores letter case finds it, the way Windows, where LTspice runs, does.
@@ -107,11 +95,22 @@ def _entry(folder: Path, name: str, want_dir: bool, said: str) -> Path | None:
     Several spelled otherwise make the name ambiguous (``AmbiguousName``,
     reported for ``said``, what was looked for): a file system that
     keeps them apart holds no answer to which one LTspice would read.
+    The path returned is spelled as the folder lists the entry, so two
+    lookups of one file compare equal on a file system that ignores case.
     """
-    exact = folder / name
-    if exact.is_dir() if want_dir else exact.is_file():
-        return exact
-    found = _alike(folder, name, want_dir)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return None
+    key = name.casefold()
+    found = [
+        path
+        for path in (folder / entry for entry in names if entry.casefold() == key)
+        if (path.is_dir() if want_dir else path.is_file())
+    ]
+    exact = [path for path in found if path.name == name]
+    if exact:
+        return exact[0]
     if len(found) > 1:
         raise AmbiguousName(said, found)
     return found[0] if found else None

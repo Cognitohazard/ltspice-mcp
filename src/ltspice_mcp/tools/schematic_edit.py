@@ -684,7 +684,17 @@ class _SheetEncoding(NamedTuple):
     def encode(self, text: str) -> bytes:
         if self.newline != "\n":
             text = text.replace("\n", self.newline)
-        return text.encode(self.codec)
+        try:
+            return text.encode(self.codec)
+        except UnicodeEncodeError as exc:
+            shown = "Windows-1252" if self.codec == WHOLE_BYTE_CP1252 else self.codec
+            raise NetlistError(
+                f"The sheet is written in {shown}, which has no {exc.object[exc.start]!r} "
+                "(an edit keeps a sheet's encoding, so every other line keeps its "
+                "bytes). Use characters it has, or save the sheet as UTF-16 LE "
+                "in LTspice first.",
+                show_hint=False,
+            ) from exc
 
 
 def _stage_asc(text: str, target: Path, build_id: str, encoding: _SheetEncoding) -> Path:

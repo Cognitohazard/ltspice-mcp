@@ -1141,8 +1141,18 @@ class _PlacedSymbol(AsyReader):
     """A part's symbol as the editor read it, with the name the sheet gives it."""
 
     def __init__(self, path: Path, placed_as: str) -> None:
+        # Read in the codec ``lib/encoding.py`` decides, as a sheet is
+        # (docs/spicelib_bugs.md, Bug 46).
+        codec = sheet_codec(path.read_bytes())
+        if codec is None:
+            raise NetlistError(
+                f"Cannot read the symbol {path}: it does not start with a Version line "
+                "in any encoding the schematic editor reads. Save it as UTF-8 or "
+                "8-bit text with no byte order mark.",
+                show_hint=False,
+            )
         try:
-            super().__init__(path)
+            super().__init__(path, codec)
         except ValueError as exc:
             short = _short_window_in(path)
             if short is None:

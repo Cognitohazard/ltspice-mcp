@@ -31,6 +31,10 @@ from __future__ import annotations
 
 import codecs
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from _typeshed import ReadableBuffer
 
 # Order matters: UTF-32 BOMs start with the same two bytes as UTF-16,
 # so check the longer ones first.
@@ -102,6 +106,7 @@ _WINDOWS_1252 = "".join(
     for byte in range(256)
 )
 _WINDOWS_1252_BYTES = codecs.charmap_build(_WINDOWS_1252)
+_WINDOWS_1252_CHARS = {byte: ord(char) for byte, char in enumerate(_WINDOWS_1252)}
 #: The same table as the characters that differ from Latin-1, which is how a
 #: byte string is turned into text without a codec of its own.
 _WINDOWS_1252_OVER_LATIN_1 = {
@@ -123,15 +128,15 @@ def _whole_byte_cp1252(name: str) -> codecs.CodecInfo | None:
     def encode(text: str, errors: str = "strict") -> tuple[bytes, int]:
         return codecs.charmap_encode(text, errors, _WINDOWS_1252_BYTES)
 
-    def decode(data: bytes, errors: str = "strict") -> tuple[str, int]:
-        return codecs.charmap_decode(data, errors, _WINDOWS_1252)
+    def decode(data: ReadableBuffer, errors: str = "strict") -> tuple[str, int]:
+        return codecs.charmap_decode(data, errors, _WINDOWS_1252_CHARS)
 
     class IncrementalEncoder(codecs.IncrementalEncoder):
         def encode(self, input: str, final: bool = False) -> bytes:
             return encode(input, self.errors)[0]
 
     class IncrementalDecoder(codecs.IncrementalDecoder):
-        def decode(self, input: bytes, final: bool = False) -> str:
+        def decode(self, input: ReadableBuffer, final: bool = False) -> str:
             return decode(input, self.errors)[0]
 
     class StreamWriter(codecs.StreamWriter):
@@ -139,7 +144,7 @@ def _whole_byte_cp1252(name: str) -> codecs.CodecInfo | None:
             return encode(input, errors)
 
     class StreamReader(codecs.StreamReader):
-        def decode(self, input: bytes, errors: str = "strict") -> tuple[str, int]:
+        def decode(self, input: ReadableBuffer, errors: str = "strict") -> tuple[str, int]:
             return decode(input, errors)
 
     return codecs.CodecInfo(
