@@ -1544,11 +1544,14 @@ extra = ["deck/spaced folder/load.lib"]
 
 [behaviour.lib-whole-sectioned]
 summary = "What a build reads of a file that declares sections, named by a .lib with no section: every card, the cards outside every section, or none."
-model = ["lib/deck_staging.py"]
+model = ["lib/deck_staging.py", "lib/lint_rules.py"]
 # sections.lib sets rout outside every section, rtt in section tt and rff in
 # section ff. Each deck reads one of them through 1 A: v(a) is its value if
 # that card is read, and there is no raw if it is not (or the line is
-# refused). The server reads every card (``deck_staging.library_read``).
+# refused). Neither build runs any of the decks: each reads the file's own
+# .lib tt as a library file tt that does not exist (26: "File not found.",
+# XVII: "Could not open library file"). The server reads none of the file's
+# cards and the lint refuses the deck (``deck_staging.library_read``).
 inputs = [
     "deck/lib_whole_sectioned_rout.cir",
     "deck/lib_whole_sectioned_rtt.cir",
