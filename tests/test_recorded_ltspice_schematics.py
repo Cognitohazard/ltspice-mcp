@@ -58,7 +58,11 @@ from tests.ltspice_recorder import INPUTS
 from tests.test_verify_circuit import _run as run_verify_circuit
 
 ORIENTATION = rec.cases_of("symbol-orientation") + rec.cases_of("stock-symbol-orientation")
-CONNECTIVITY = rec.cases_of("wire-connectivity") + rec.cases_of("net-naming")
+CONNECTIVITY = (
+    rec.cases_of("wire-connectivity")
+    + rec.cases_of("net-naming")
+    + rec.cases_of("export-label-on-nothing")
+)
 SAME_INSTANCE = rec.cases_of("same-instance-wire")
 SHARED_POINT = rec.cases_of("pins-of-one-part-on-one-point")
 SHARED_REFERENCE = rec.cases_of("shared-reference")
@@ -2721,3 +2725,29 @@ def test_an_a_device_pin_on_nothing_is_exported_as_ground(build: str, tmp_path: 
     assert {pin for group in modelled if len(group) == 1 for pin in group} >= (
         OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY
     )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_label_on_nothing_is_left_out_of_the_netlist_and_the_finding_says_so(
+    build: str, tmp_path: Path
+):
+    """``export/label_on_nothing``: a label named loose on no wire and no pin.
+    Both builds export the sheet as they export it without the label
+    (``export/label_on_nothing_absent``), with no node loose; both readers of
+    the sheet's findings say so."""
+    case_id = "export/label_on_nothing"
+    with_label = [card.body for card in rec.export_cards(build, case_id)]
+    without = [card.body for card in rec.export_cards(build, f"{case_id}_absent")]
+    assert with_label == without
+    assert not any("loose" in body.lower() for body in with_label)
+
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    said = {
+        "edit": [f.detail for f in sheet_findings(_editor(sheet)) if f.rule == "dangling_label"],
+        "verify": [f.detail for f in findings(sheet_view(scene), ["dangling_label"])],
+    }
+    for sentences in said.values():
+        (sentence,) = sentences
+        assert "'loose'" in sentence
+        assert sentence.endswith("which LTspice leaves out of the netlist")

@@ -361,7 +361,7 @@ class TestWhatTheCleanupKeeps:
         assert reply["rules_run"]["dangling_label"] == 1
         assert reply["warnings"] == [
             "Wire end at (96,196) meets no pin, net label, or other wire",
-            "Dangling label 'b' at (96,292)",
+            "Dangling label 'b' at (96,292), which LTspice leaves out of the netlist",
         ]
         assert _records(sheet, "WIRE") == ["WIRE 96 196 96 100"]
         assert _records(sheet, "FLAG") == ["FLAG 96 100 a", "FLAG 96 292 b"]

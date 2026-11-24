@@ -104,7 +104,7 @@
  },
  "078875ffcb92330e": {
   "answer": {
-   "reply": "b764808779f76a17",
+   "reply": "69e1de718055c9fd",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -195,7 +195,7 @@
  },
  "0cc4c501bd638db6": {
   "answer": {
-   "reply": "a9200289b9bee52b",
+   "reply": "e570013eef90abcc",
    "sheet": null
   },
   "tests": [
@@ -231,7 +231,7 @@
  },
  "0e53ca84db0fdce8": {
   "answer": {
-   "reply": "6d205231c6893336",
+   "reply": "59512b3e03489bae",
    "sheet": null
   },
   "tests": [
@@ -294,7 +294,7 @@
  },
  "101a2fdf17cefced": {
   "answer": {
-   "reply": "97940dc3f137f9fc",
+   "reply": "12c8b209a04d5665",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -394,7 +394,7 @@
  },
  "14ca579372a1b055": {
   "answer": {
-   "reply": "a9200289b9bee52b",
+   "reply": "e570013eef90abcc",
    "sheet": null
   },
   "tests": [
@@ -450,7 +450,7 @@
  },
  "18b23b518df9c53d": {
   "answer": {
-   "reply": "94376787beaf3c20",
+   "reply": "7602b3c809f85be7",
    "sheet": null
   },
   "tests": [
@@ -496,7 +496,7 @@
  },
  "1a4efb86961e26c8": {
   "answer": {
-   "reply": "33278813a01927b9",
+   "reply": "0eadd960c2017a05",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -752,7 +752,7 @@
  },
  "2565802724470ac1": {
   "answer": {
-   "reply": "ecb1a0fbd90763d2",
+   "reply": "2f7196743f86b43d",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -1505,6 +1505,16 @@
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-set_component_value]"
   ]
  },
+ "53874ea3417ceacf": {
+  "answer": {
+   "reply": "c9a30590eed47f26",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-export/label_on_nothing_absent]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-export/label_on_nothing_absent]"
+  ]
+ },
  "539e8d540060bbd6": {
   "answer": {
    "reply": "aa90cae52880a70f",
@@ -1516,7 +1526,7 @@
  },
  "54229bbe7ba1256e": {
   "answer": {
-   "reply": "7e062ef030f564c2",
+   "reply": "f313dc686c089b8e",
    "sheet": "994a45ddc5a1930c"
   },
   "tests": [
@@ -1582,7 +1592,7 @@
  },
  "584820d522b4ca65": {
   "answer": {
-   "reply": "595ccd66c8b80ef2",
+   "reply": "657006ecb1605055",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -1593,7 +1603,7 @@
  },
  "5b21f1fa29c4c835": {
   "answer": {
-   "reply": "c181c2d4ea2a7e2d",
+   "reply": "a799afa86fa322ef",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -2194,9 +2204,19 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[diff_pair_labelled]"
   ]
  },
+ "78cb84d282fe49e4": {
+  "answer": {
+   "reply": "f5f6994119fa09fb",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-export/label_on_nothing]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-export/label_on_nothing]"
+  ]
+ },
  "79089fe7b2c96ab9": {
   "answer": {
-   "reply": "7581826b327da5f3",
+   "reply": "a368202e4d81f7a0",
    "sheet": "1986dcae4e2adb90"
   },
   "tests": [
@@ -2636,7 +2656,7 @@
  },
  "8e7c8122ead4c544": {
   "answer": {
-   "reply": "e38ef66af9a5da0c",
+   "reply": "344bd57d20c830b8",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -2719,7 +2739,7 @@
  },
  "94ade902cdb7e4eb": {
   "answer": {
-   "reply": "a9200289b9bee52b",
+   "reply": "e570013eef90abcc",
    "sheet": null
   },
   "tests": [
@@ -2728,7 +2748,7 @@
  },
  "95022b6a00dfcccb": {
   "answer": {
-   "reply": "a130d0c96113d55d",
+   "reply": "718aab449aaf089e",
    "sheet": "b3a2468022b86f34"
   },
   "tests": [
@@ -2830,7 +2850,7 @@
  },
  "9af827f92b71ce6b": {
   "answer": {
-   "reply": "d49594c2af6158fc",
+   "reply": "96bd38a0cf760594",
    "sheet": "189e647fb79514c1"
   },
   "tests": [
@@ -3049,7 +3069,7 @@
  },
  "a4b46d14152a12f6": {
   "answer": {
-   "reply": "45862b8f449209ee",
+   "reply": "fa2f5ca797e77ac3",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [
@@ -3058,7 +3078,7 @@
  },
  "a4c9744ed53f8472": {
   "answer": {
-   "reply": "84d663cb71c9c8a5",
+   "reply": "d4228b076127d5bb",
    "sheet": "5dbf7601bad3bc6f"
   },
   "tests": [
@@ -3384,7 +3404,7 @@
  },
  "b5b801afd9431e30": {
   "answer": {
-   "reply": "946c17f4d9668822",
+   "reply": "9c6944466c68681f",
    "sheet": null
   },
   "tests": [
@@ -3599,7 +3619,7 @@
  },
  "c1981f3e0e08514d": {
   "answer": {
-   "reply": "a9200289b9bee52b",
+   "reply": "e570013eef90abcc",
    "sheet": null
   },
   "tests": [
@@ -3761,7 +3781,7 @@
  },
  "ca293dd3ca824b89": {
   "answer": {
-   "reply": "4802474997a03b97",
+   "reply": "534fe504df886436",
    "sheet": null
   },
   "tests": [
@@ -4401,7 +4421,7 @@
  },
  "f4eac36ed22c9fce": {
   "answer": {
-   "reply": "fd9bb8763edca796",
+   "reply": "b903fcaf632ed605",
    "sheet": "d70da2388e3f4613"
   },
   "tests": [

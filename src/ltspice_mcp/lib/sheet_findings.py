@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import itertools
 import re
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -808,10 +809,16 @@ def _dangling_wire_ends(ix: _Index) -> list[Finding]:
 
 @_finds("dangling_label")
 def _dangling_labels(ix: _Index) -> list[Finding]:
+    names = Counter(text.casefold() for _x, _y, text in ix.view.labels)
     return [
         Finding(
             "dangling_label",
-            f"Dangling label '{text}' at {_at((x, y))}",
+            f"Dangling label '{text}' at {_at((x, y))}"
+            # Both builds export a sheet with a lone label as they export it
+            # without one: no node of its name (recorded:
+            # export/label_on_nothing). A label whose name another label
+            # shares is not recorded, so nothing is claimed for it.
+            + (", which LTspice leaves out of the netlist" if names[text.casefold()] == 1 else ""),
             points=((x, y),),
             facts={"label": text},
         )

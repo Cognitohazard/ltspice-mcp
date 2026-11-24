@@ -1,0 +1,1 @@
+The dangling-label finding of `edit_schematic` and `verify_circuit` now says when LTspice leaves the label out of the netlist: a label on no wire and no pin, alone under its name, names no net in LTspice 26's or XVII's export.

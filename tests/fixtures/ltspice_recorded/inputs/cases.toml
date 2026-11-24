@@ -1654,7 +1654,7 @@ unrecordable = "A recording would start each build with an old or missing update
 
 [behaviour.export-label-on-nothing]
 summary = "Whether a net label that touches no wire and no pin changes what a sheet exports."
-model = ["lib/connectivity.py", "lib/export_nets.py"]
+model = ["lib/connectivity.py", "lib/export_nets.py", "lib/nets.py", "lib/sheet_findings.py"]
 # label_on_nothing holds V1 and R1 and a label named loose at a point no wire
 # or pin reaches; label_on_nothing_absent is the same sheet without the label.
 inputs = ["export/label_on_nothing.asc", "export/label_on_nothing_absent.asc"]

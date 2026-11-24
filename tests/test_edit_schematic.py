@@ -1198,7 +1198,7 @@ async def test_a_fact_of_the_finished_sheet_is_said_once(asc_state):
 
     assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
     assert [w for w in data["warnings"] if not w.startswith("Floating pin")] == [
-        "Dangling label 'loose' at (900,900)",
+        "Dangling label 'loose' at (900,900), which LTspice leaves out of the netlist",
         _OVERLAP,
         _THROUGH_R4,
     ]

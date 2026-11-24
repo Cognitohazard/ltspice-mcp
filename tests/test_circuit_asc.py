@@ -2771,7 +2771,7 @@ class TestAddNetLabelOpValidation:
         assert op["ok"] is True
         assert "warnings" not in op
         assert [row["message"] for row in res["validation_warnings"]] == [
-            "Dangling label 'x' at (500,500)"
+            "Dangling label 'x' at (500,500), which LTspice leaves out of the netlist"
         ]
 
     async def test_duplicate_label_warning_via_batch(self, asc_state: SessionState):
@@ -3002,7 +3002,7 @@ class TestTJunctionGroundTruth:
             row["message"]
             for row in placed["validation_warnings"]
             if row["kind"] == "dangling_label"
-        ] == ["Dangling label 'stray' at (192,112)"]
+        ] == ["Dangling label 'stray' at (192,112), which LTspice leaves out of the netlist"]
 
     @pytest.mark.parametrize(
         ("stem", "at", "wire", "exported_pin"),
