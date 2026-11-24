@@ -6,4 +6,4 @@ stored file, the call with `findings_cursor`, and the Python call. Reading on
 with `findings_cursor` slices the stored answer and runs no check, so it no
 longer fails as stale after the file changed: the page carries the snapshot
 the answer was computed from. `findings_omitted` keeps its shape, filled from
-the cut, until the next breaking release.
+the cut, until a later breaking release.
