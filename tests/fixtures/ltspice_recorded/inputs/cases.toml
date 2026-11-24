@@ -1346,7 +1346,7 @@ inputs = ["log/meas_name_dot.cir", "log/meas_name_dash.cir"]
 keep = ["log"]
 
 [behaviour.log-condition-grid]
-summary = "The cells of the log-condition grid (at the end of this file) that no other recording fills: an unknown model parameter in a run with no .step; a .dc sweep whose first point, and one whose later points, need more than Newton iteration; and each fault of a deck, of a measurement and of a solve that another recording shows unstepped, in a run with a .step. A fault a build may refuse has a deck of its own, since a refusal stops the run; the faults neither build refuses (a MOSFET with no drain area, a lossy line, a resistor whose pins are one node, a node with one connection) share one. What a cell declares where no recording shows its form is a prediction, which the recording settles"
+summary = "The cells of the log-condition grid (at the end of this file) that no other recording fills: an unknown model parameter in a run with no .step; a .dc sweep whose first point, and one whose later points, need more than Newton iteration; and each fault of a deck, of a measurement and of a solve that another recording shows unstepped, in a run with a .step. A fault a build may refuse has a deck of its own, since a refusal stops the run; the faults neither build refuses (a MOSFET with no drain area, a lossy line, a resistor whose pins are one node, a node with one connection) share one. Each cell is what the recording of each build shows."
 model = ["lib/log_conditions.py", "lib/log_parser.py", "lib/log_conditions.py:_RULES", "lib/log_conditions.py:log_lines", "lib/log_conditions.py:classify", "lib/log_conditions.py:rules_for", "lib/log_conditions.py:run_diagnostics", "lib/log_conditions.py:decoded_run_diagnostics", "lib/log_parser.py:classify_line"]
 inputs = [
     "log/cond_grid_dc_fallback_first.cir",
@@ -1368,10 +1368,9 @@ inputs = [
     "log/cond_grid_unknown_model_param.cir",
 ]
 keep = ["log", "raw"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.step-value-grid]
-summary = "The cells of the step-value grid (at the end of this file) that no other recording fills: a .step of each sweep (list, linear, decade, octave) over each thing a deck steps (a parameter, the temperature, a model parameter, a source), alone, two nested and three nested, with the names spelled in each case; and a negative value, zero and a value of more than six digits, in a run that keeps its step values in its log and in one that keeps them in its raw. What a cell declares where no recording shows its form is a prediction, which the recording settles"
+summary = "The cells of the step-value grid (at the end of this file) that no other recording fills: a .step of each sweep (list, linear, decade, octave) over each thing a deck steps (a parameter, the temperature, a model parameter, a source), alone, two nested and three nested, with the names spelled in each case; and a negative value, zero and a value of more than six digits, in a run that keeps its step values in its log and in one that keeps them in its raw. Each cell is what the recording of each build shows."
 model = ["lib/log_parser.py", "lib/raw_decode.py", "lib/step_values.py", "lib/recipes.py", "lib/log_parser.py:read_step_line", "lib/log_parser.py:parse_step_iterations", "lib/raw_decode.py:_step_facts", "lib/step_values.py:step_axis_key", "lib/step_values.py:same_step_value", "lib/step_values.py:steps_with", "lib/step_values.py:step_with", "lib/recipes.py:StepSelector"]
 inputs = [
     "raw/step_grid_decade_model.cir",
@@ -4872,9 +4871,9 @@ cases = ["deck/element_o"]
 [grid.log-condition.cell.items]
 lossy = { form = "simulator_note", phase = "deck", states = "simulator_note", text = { ltspice26 = "lossy: using linear interpolation", ltspice17 = "lossy: using linear interpolation" }, on = { ltspice26 = { rule = "simulator_note.lt" }, ltspice17 = { rule = "simulator_note.lt" } } }
 
-# Cells waiting for their recording (behaviour log-condition-grid). Each
-# declares what its form gives on each build where a recording of the same
-# fault unstepped shows it; not_established where none does.
+# The cells of behaviour log-condition-grid: each form in a .dc sweep or a
+# stepped run, and a model card given a word for a value, as each build's
+# recording shows them.
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_unknown_model_param"]
@@ -4884,86 +4883,92 @@ bogus = { form = "unknown_model_parameter", phase = "deck", states = "unknown_mo
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_dc_fallback_first"]
 [grid.log-condition.cell.items]
-newton = { form = "operating_point_fallback", phase = "sweep_start", states = "operating_point_fallback", text = { ltspice26 = "Direct Newton iteration failed to find operating point.", ltspice17 = "Direct Newton iteration failed to find .op point." }, on = { ltspice26 = { rule = "operating_point_fallback.lt26" }, ltspice17 = { rule = "operating_point_fallback.xvii" } }, not_established = "No recording shows a .dc sweep's first point needing more than Newton iteration, or what a build writes of it." }
+floating = { form = "floating_node", phase = "deck", states = "floating_node", text = { ltspice26 = "is floating and connected to current source B1", ltspice17 = "is floating and connected to current source B1" }, on = { ltspice26 = { rule = "floating_node.lt" }, ltspice17 = { rule = "floating_node.lt" } } }
+newton = { form = "operating_point_fallback", phase = "sweep_start", states = "operating_point_fallback", text = { ltspice26 = "Direct Newton iteration failed to find operating point.", ltspice17 = "Direct Newton iteration failed to find .op point." }, on = { ltspice26 = { rule = "operating_point_fallback.lt26" }, ltspice17 = { rule = "operating_point_fallback.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_dc_fallback_later"]
 [grid.log-condition.cell.items]
-newton = { form = "operating_point_fallback", phase = "mid_run", states = "operating_point_fallback", text = { ltspice26 = "Direct Newton iteration failed to find operating point.", ltspice17 = "Direct Newton iteration failed to find .op point." }, on = { ltspice26 = { rule = "operating_point_fallback.lt26" }, ltspice17 = { rule = "operating_point_fallback.xvii" } }, not_established = "No recording shows a later point of a .dc sweep needing more than Newton iteration, or what a build writes of it." }
+newton = { form = "operating_point_fallback", phase = "mid_run", states = "operating_point_fallback", text = { ltspice26 = "Direct Newton iteration failed to find operating point." }, refused = { ltspice17 = "XVII finds the operating point by inspection and writes no Newton fallback for this deck." }, on = { ltspice26 = { rule = "operating_point_fallback.lt26" } } }
+one_connection = { form = "dangling_node", phase = "deck", states = "dangling_node", text = { ltspice17 = "Less than two connections to node A" }, refused = { ltspice26 = "LTspice 26 writes nothing of a node with one connection." }, on = { ltspice17 = { rule = "dangling_node.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_unknown_instance_param"]
 [grid.log-condition.cell.items]
-mulu0 = { form = "unknown_instance_parameter", phase = "stepped", states = "unknown_instance_parameter", text = { ltspice26 = "Unknown parameter", ltspice17 = "Error on line 5 : m1" }, on = { ltspice26 = { rule = "unknown_instance_parameter.lt26" }, ltspice17 = { rule = "unknown_instance_parameter.xvii" } }, not_established = "deck/mos_mulu0_bsim4 records the parameter unstepped; whether a build writes it once or once a step, and what else it writes of the deck, is not recorded." }
+mulu0 = { form = "unknown_instance_parameter", phase = "stepped", states = "unknown_instance_parameter", text = { ltspice26 = "Unknown parameter", ltspice17 = "Error on line 5 : m1" }, on = { ltspice26 = { rule = "unknown_instance_parameter.lt26" }, ltspice17 = { rule = "unknown_instance_parameter.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_unknown_directive"]
 [grid.log-condition.cell.items]
-frobnicate = { form = "unknown_directive", phase = "stepped", text = { ltspice26 = "Expected device instantiation or directive here", ltspice17 = "Error on line 4 : .frobnicate" }, states = { ltspice26 = "deck_error", ltspice17 = "unknown_directive" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "unknown_directive.xvii" } }, not_established = "log/err_unknown_directive records the directive unstepped." }
+frobnicate = { form = "unknown_directive", phase = "stepped", text = { ltspice26 = "Expected device instantiation or directive here", ltspice17 = "Error on line 4 : .frobnicate" }, states = { ltspice26 = "deck_error", ltspice17 = "unknown_directive" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "unknown_directive.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_missing_include"]
 [grid.log-condition.cell.items]
-include = { form = "missing_include", phase = "stepped", states = "missing_include", text = { ltspice26 = "File not found.", ltspice17 = "Could not open include file" }, on = { ltspice26 = { rule = "missing_include.lt26" }, ltspice17 = { rule = "missing_include.xvii" } }, not_established = "log/err_missing_include records the include unstepped." }
+include = { form = "missing_include", phase = "stepped", states = "missing_include", text = { ltspice26 = "File not found.", ltspice17 = "Could not open include file" }, on = { ltspice26 = { rule = "missing_include.lt26" }, ltspice17 = { rule = "missing_include.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_missing_model"]
 [grid.log-condition.cell.items]
-model = { form = "missing_model", phase = "stepped", states = "missing_model", text = { ltspice26 = "Undefined model", ltspice17 = "Unable to find definition of model" }, on = { ltspice26 = { rule = "missing_model.lt26" }, ltspice17 = { rule = "missing_model.xvii.1" } }, not_established = "log/err_unknown_model records the model unstepped." }
+model = { form = "missing_model", phase = "stepped", states = "missing_model", text = { ltspice26 = "Undefined model", ltspice17 = "Unable to find definition of model" }, on = { ltspice26 = { rule = "missing_model.lt26" }, ltspice17 = { rule = "missing_model.xvii.1" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_undefined_parameter"]
 [grid.log-condition.cell.items]
-parameter = { form = "undefined_parameter", phase = "stepped", states = "undefined_parameter", text = { ltspice26 = "No such parameter defined.", ltspice17 = "Questionable use of curly braces" }, on = { ltspice26 = { rule = "undefined_parameter.lt26" }, ltspice17 = { rule = "undefined_parameter.xvii" } }, not_established = "log/err_unknown_param records the parameter unstepped." }
-value_as_model = { states = "missing_model", text = { ltspice17 = 'Unable to find definition of model "undefined_r"' }, refused = { ltspice26 = "LTspice 26 writes the undefined parameter alone (log/err_unknown_param)." }, on = { ltspice17 = { rule = "missing_model.xvii.1" } }, not_established = "As parameter." }
+parameter = { form = "undefined_parameter", phase = "stepped", states = "undefined_parameter", text = { ltspice26 = "No such parameter defined.", ltspice17 = "Questionable use of curly braces" }, on = { ltspice26 = { rule = "undefined_parameter.lt26" }, ltspice17 = { rule = "undefined_parameter.xvii" } } }
+value_as_model = { states = "missing_model", text = { ltspice17 = 'Unable to find definition of model "undefined_r"' }, refused = { ltspice26 = "LTspice 26 writes the undefined parameter alone (log/err_unknown_param)." }, on = { ltspice17 = { rule = "missing_model.xvii.1" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_floating_node"]
 [grid.log-condition.cell.items]
-floating = { form = "floating_node", phase = "stepped", states = "floating_node", text = { ltspice26 = "is floating and connected to current source I1", ltspice17 = "is floating and connected to current source I1" }, on = { ltspice26 = { rule = "floating_node.lt" }, ltspice17 = { rule = "floating_node.lt" } }, not_established = "log/err_floating_node records the node unstepped." }
+floating = { form = "floating_node", phase = "stepped", states = "floating_node", text = { ltspice26 = "is floating and connected to current source I1", ltspice17 = "is floating and connected to current source I1" }, on = { ltspice26 = { rule = "floating_node.lt" }, ltspice17 = { rule = "floating_node.lt" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_source_loop"]
 [grid.log-condition.cell.items]
-paralleled = { form = "singular_matrix", phase = "stepped", states = "singular_matrix", text = { ltspice26 = "are paralleled making an over-defined circuit matrix", ltspice17 = "are paralleled making an over-defined circuit matrix" }, on = { ltspice26 = { rule = "singular_matrix.lt" }, ltspice17 = { rule = "singular_matrix.lt" } }, not_established = "log/err_source_loop records the loop unstepped." }
+paralleled = { form = "singular_matrix", phase = "stepped", states = "singular_matrix", text = { ltspice26 = "are paralleled making an over-defined circuit matrix", ltspice17 = "are paralleled making an over-defined circuit matrix" }, on = { ltspice26 = { rule = "singular_matrix.lt" }, ltspice17 = { rule = "singular_matrix.lt" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_deck_error"]
 [grid.log-condition.cell.items]
-too_few_fields = { form = "deck_error", phase = "stepped", text = { ltspice26 = "Expected node name here.", ltspice17 = "R2: Missing node(s)." }, states = { ltspice26 = "deck_error", ltspice17 = "simulator_error" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "simulator_error.lt-ng" } }, not_established = "log/err_bad_card records the card unstepped." }
+too_few_fields = { form = "deck_error", phase = "stepped", text = { ltspice26 = "Expected node name here.", ltspice17 = "R2: Missing node(s)." }, states = { ltspice26 = "deck_error", ltspice17 = "simulator_error" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "simulator_error.lt-ng" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_warnings"]
 [grid.log-condition.cell.items]
-drain_area = { form = "device_size_warning", phase = "stepped", states = "device_size_warning", text = { ltspice26 = "Pd = 0 is less than W.", ltspice17 = "Pd = 0 is less than W." }, on = { ltspice26 = { rule = "device_size_warning.lt" }, ltspice17 = { rule = "device_size_warning.lt" } }, not_established = "deck/mos_model_variants records the warning unstepped." }
-lossy = { form = "simulator_note", phase = "stepped", states = "simulator_note", text = { ltspice26 = "lossy: using linear interpolation", ltspice17 = "lossy: using linear interpolation" }, on = { ltspice26 = { rule = "simulator_note.lt" }, ltspice17 = { rule = "simulator_note.lt" } }, not_established = "deck/element_o records the note unstepped." }
-shorted = { form = "shorted_element", phase = "stepped", states = "shorted_element", text = { ltspice17 = "R2: both pins shorted together" }, refused = { ltspice26 = "LTspice 26 writes nothing of a resistor whose pins are one node (deck/gnd_alias)." }, on = { ltspice17 = { rule = "shorted_element.xvii" } }, not_established = "deck/gnd_alias records the resistor unstepped." }
-one_connection = { form = "dangling_node", phase = "stepped", states = "dangling_node", text = { ltspice17 = "Less than two connections to node C" }, refused = { ltspice26 = "LTspice 26 writes nothing of a node with one connection (deck/global_port)." }, on = { ltspice17 = { rule = "dangling_node.xvii" } }, not_established = "deck/global_port records the node unstepped." }
+drain_area = { form = "device_size_warning", phase = "stepped", states = "device_size_warning", refused = { ltspice26 = "No build warns of this deck's BSIM4 (level 54) MOSFET; deck/mos_model_variants warns of its three BSIM3 (level 8) devices only.", ltspice17 = "As ltspice26." } }
+lossy = { form = "simulator_note", phase = "stepped", states = "simulator_note", text = { ltspice26 = "lossy: using linear interpolation", ltspice17 = "lossy: using linear interpolation" }, on = { ltspice26 = { rule = "simulator_note.lt" }, ltspice17 = { rule = "simulator_note.lt" } } }
+shorted = { form = "shorted_element", phase = "stepped", states = "shorted_element", text = { ltspice17 = "R2: both pins shorted together" }, refused = { ltspice26 = "LTspice 26 writes nothing of a resistor whose pins are one node (deck/gnd_alias)." }, on = { ltspice17 = { rule = "shorted_element.xvii" } } }
+one_connection = { form = "dangling_node", phase = "stepped", states = "dangling_node", text = { ltspice17 = "Less than two connections to node C" }, refused = { ltspice26 = "LTspice 26 writes nothing of a node with one connection (deck/global_port)." }, on = { ltspice17 = { rule = "dangling_node.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_meas_unsaved"]
 [grid.log-condition.cell.items]
-unsaved = { form = "measurement_error", phase = "stepped", text = { ltspice26 = "Voltage not found.", ltspice17 = 'Measurement "vfinal" FAIL' }, states = { ltspice26 = "measurement_error", ltspice17 = "measurement_failed" }, on = { ltspice26 = { rule = "measurement_error.lt26" }, ltspice17 = { rule = "measurement_failed.lt" } }, not_established = "deck/save_omits_meas records the measurement unstepped." }
+unsaved = { form = "measurement_error", phase = "stepped", text = { ltspice26 = "Voltage not found.", ltspice17 = 'Measurement "vfinal" FAIL' }, states = { ltspice26 = "measurement_error", ltspice17 = "measurement_failed" }, on = { ltspice26 = { rule = "measurement_error.lt26" }, ltspice17 = { rule = "measurement_failed.lt" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_meas_failed"]
 [grid.log-condition.cell.items]
-never = { form = "measurement_failed", phase = "stepped", states = "measurement_failed", text = { ltspice26 = 'Measurement "never" FAIL', ltspice17 = 'Measurement "never" FAIL' }, on = { ltspice26 = { rule = "measurement_failed.lt" }, ltspice17 = { rule = "measurement_failed.lt" } }, not_established = "log/meas_failed records the measurement unstepped; a stepped run may print it as a table." }
+never = { form = "measurement_failed", phase = "stepped", states = "measurement_failed", text = { ltspice26 = 'Measurement "never" FAIL', ltspice17 = 'Measurement "never" FAIL' }, on = { ltspice26 = { rule = "measurement_failed.lt" }, ltspice17 = { rule = "measurement_failed.lt" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_op_fallback"]
 [grid.log-condition.cell.items]
-newton = { form = "operating_point_fallback", phase = "stepped", states = "operating_point_fallback", text = { ltspice26 = "Direct Newton iteration failed to find operating point.", ltspice17 = "Direct Newton iteration failed to find .op point." }, on = { ltspice26 = { rule = "operating_point_fallback.lt26" }, ltspice17 = { rule = "operating_point_fallback.xvii" } }, not_established = "log/op_stepping records the search unstepped." }
+floating = { form = "floating_node", phase = "stepped", states = "floating_node", text = { ltspice26 = "is floating and connected to current source B1", ltspice17 = "is floating and connected to current source B1" }, on = { ltspice26 = { rule = "floating_node.lt" }, ltspice17 = { rule = "floating_node.lt" } } }
+newton = { form = "operating_point_fallback", phase = "stepped", states = "operating_point_fallback", text = { ltspice26 = "Direct Newton iteration failed to find operating point.", ltspice17 = "Direct Newton iteration failed to find .op point." }, on = { ltspice26 = { rule = "operating_point_fallback.lt26" }, ltspice17 = { rule = "operating_point_fallback.xvii" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_step_timestep_collapse"]
 [grid.log-condition.cell.items]
-collapse = { form = "convergence_failed", phase = "stepped", states = "convergence_failed", text = { ltspice26 = "Time step too small", ltspice17 = "Time step too small" }, on = { ltspice26 = { rule = "convergence_failed.lt" }, ltspice17 = { rule = "convergence_failed.lt" } }, not_established = "log/timestep_collapse_mid records the collapse unstepped." }
+collapse = { form = "convergence_failed", phase = "stepped", states = "convergence_failed", text = { ltspice26 = "Time step too small", ltspice17 = "Time step too small" }, on = { ltspice26 = { rule = "convergence_failed.lt" }, ltspice17 = { rule = "convergence_failed.lt" } } }
+tolerance_relaxed = { states = "simulator_warning", text = { ltspice26 = "Simulation tolerance relaxed" }, refused = { ltspice17 = "XVII writes no such line." }, on = { ltspice26 = { rule = "simulator_warning.lt-ng" } } }
 
 [[grid.log-condition.cell]]
 cases = ["log/cond_grid_model_value_word"]
 [grid.log-condition.cell.items]
-word = { states = "deck_error", text = { ltspice26 = "cond_grid_model_value_word.cir(5):", ltspice17 = "Error on line 5 : .model dx" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "deck_error.xvii.1" } }, not_established = "No recording shows XVII's Error on line followed by a line no named rule reads, which is all that rule deck_error.xvii.1 takes; this deck is a guess at one." }
+word = { states = "undefined_parameter", text = { ltspice26 = "No such parameter defined.", ltspice17 = "Questionable use of curly braces" }, on = { ltspice26 = { rule = "undefined_parameter.lt26" }, ltspice17 = { rule = "undefined_parameter.xvii" } } }
+ignored = { states = "unknown_model_parameter", text = { ltspice17 = "Error on line 5 : .model dx" }, refused = { ltspice26 = "LTspice 26 writes the undefined parameter and then the model it makes undefined." }, on = { ltspice17 = { rule = "unknown_model_parameter.xvii" } } }
+model = { states = "missing_model", text = { ltspice26 = 'Undefined model "dx"' }, refused = { ltspice17 = "XVII ignores the word and runs the diode." }, on = { ltspice26 = { rule = "missing_model.lt26" } } }
 
 # The step a value belongs to ------------------------------------------------
 
@@ -5121,7 +5126,7 @@ at = { sweep = "list", stepped = "param", nesting = "1", kept = "log", name_case
 "Rv=1k" = { step_value = "1k", steps = [1] }
 "Rv=2k" = { step_value = "2k", steps = [2] }
 
-# Cells waiting for their recording (behaviour step-value-grid) -------------
+# The cells of behaviour step-value-grid -----------------------------------
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_decade_param"]

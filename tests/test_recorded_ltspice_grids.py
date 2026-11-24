@@ -46,11 +46,8 @@ GRIDS = grids()
 #: log-condition: of the rules, simulator_error has no line on LTspice 26,
 #: and simulator_warning and deck_error.xvii.1 none on XVII: no recording
 #: shows a build write a line that only they take, so they claim the build on
-#: no evidence (log/cond_grid_model_value_word guesses at the last). Of the
-#: forms, an unknown model parameter with no .step, a .dc point past the first
-#: and the first that needs more than Newton iteration, and every fault in a
-#: stepped run but the unknown model parameter, whose decks (behaviour
-#: log-condition-grid) wait for a recording run on Windows.
+#: no evidence. The deck written for the last (log/cond_grid_model_value_word)
+#: gives XVII an unrecognized model parameter instead.
 #:
 #: step-value: every coordinate has a recorded cell on both builds.
 #:
@@ -108,7 +105,7 @@ UNRECORDED: dict[str, dict[str, int]] = {
     "value-number": {"ltspice26": 162, "ltspice17": 162},
     "expression-value": {"ltspice26": 76, "ltspice17": 76},
     "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
-    "log-condition": {"ltspice26": 20, "ltspice17": 21},
+    "log-condition": {"ltspice26": 1, "ltspice17": 2},
     "step-value": {"ltspice26": 0, "ltspice17": 0},
     "results-layout": {"ltspice26": 85, "ltspice17": 87},
     "trace-name": {"ltspice26": 27, "ltspice17": 27},
