@@ -2,7 +2,10 @@
 
 A net with no label has no name on the sheet; LTspice's export names it
 (``N001``, or ``NC_01`` for a pin on nothing). The numbering is the exporter's
-own, so it is read off an export of the sheet, never predicted. Each part's
+own, so it is read off an export of the sheet, never predicted. Which kind of
+node a pin on nothing gets (``0`` for an A-device's, a numbered ``NC_`` node
+for most other letters) is ``Nets.open_node``'s answer, not this module's,
+and an export agrees with it. Each part's
 card is found by the name the exporter writes for it, and a card lists its
 nodes in its symbol's SpiceOrder (recorded: ``symbol-orientation``,
 ``export-instance-names``, ``export-instance-prefix``).
@@ -18,8 +21,9 @@ from ltspice_mcp.lib.spice_lex import iter_by_kind, lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.lib.trace_names import UNLABELLED_NET_RE
 
-#: The name LTspice's export gives a pin on nothing: ``NC_01``, ``NC_02``, ...
-#: (recorded: ``net-naming``).
+#: The name LTspice's export gives a pin on nothing of a part whose open pin
+#: ``Nets.open_node`` says is numbered: ``NC_01``, ``NC_02``, ... (recorded:
+#: ``net-naming``). An A-device's open pin is written as ``0`` instead.
 UNCONNECTED_PIN_NET_RE = re.compile(r"nc_\d+", re.IGNORECASE)
 
 

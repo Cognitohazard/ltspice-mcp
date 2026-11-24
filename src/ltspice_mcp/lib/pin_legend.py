@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Literal
 
 from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
+from ltspice_mcp.lib.nets import OpenNode
 
 # Default page size for the paginated views. Kept local (not imported from the
 # tool layer) so this module has no upward dependency.
@@ -33,6 +34,12 @@ DEFAULT_PAGE_SIZE = 100
 # coordinate: the labels on a pin's own point are not all its net's names.
 NetNameOf = Callable[[str, int], "str | None"]
 
+# A pin, as its part's reference and its place among the part's pins → the
+# node LTspice writes for it when it has nothing on it (``Nets.open_node``),
+# ``None`` for a pin with something on it. Built by the caller from
+# ``sheet_nets``, like :data:`NetNameOf`.
+OpenNodeOf = Callable[[str, int], "OpenNode | None"]
+
 # How a pin is tied to its net: by a wire through it, by a label on it alone,
 # or by neither (floating, or touching another pin only).
 PinTie = Literal["wired", "label", "none"]
@@ -44,13 +51,18 @@ CoordPredicate = Callable[["tuple[int, int]"], bool]
 def build_pin_legend(
     geometry: Sequence[Mapping[str, Any]],
     net_name_of: NetNameOf,
+    open_node_of: OpenNodeOf,
 ) -> list[dict[str, Any]]:
-    """Per-component legend: ``[{ref, pins: [{name, x, y, dir?, net}]}]``.
+    """Per-component legend: ``[{ref, pins: [{name, x, y, dir?, net,
+    open_node?, open_node_unknown?}]}]``.
 
     ``geometry`` is ``collect_component_geometry``'s output (components with
     resolvable symbol geometry, each with a ``pins`` list). ``net_name_of``
     resolves a pin to its net name (``None`` = unnamed net); two pins of one
-    part on one point may be on separate nets.
+    part on one point may be on separate nets. ``open_node_of`` gives, for a
+    pin with nothing on it, the node LTspice writes: ``open_node`` is that
+    name (``0``), or ``NC_nn`` where the exporter numbers it, and
+    ``open_node_unknown`` says why no recording shows it.
     """
     legend: list[dict[str, Any]] = []
     for comp in geometry:
@@ -64,6 +76,11 @@ def build_pin_legend(
             }
             if p.get("dir") is not None:
                 entry["dir"] = p["dir"]
+            node = open_node_of(comp["ref"], index)
+            if node is not None and node.unknown is not None:
+                entry["open_node_unknown"] = node.unknown
+            elif node is not None:
+                entry["open_node"] = node.fixed or f"{node.numbered}nn"
             pins.append(entry)
         legend.append({"ref": comp["ref"], "pins": pins})
     return legend

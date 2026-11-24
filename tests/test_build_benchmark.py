@@ -406,8 +406,11 @@ def _exported(build: str, case_id: str) -> dict[str, set[tuple[str, int]]]:
 
 
 def _netlisted(build: str, case_id: str, folder: Path) -> list[tuple[frozenset, frozenset]]:
+    """The nets `netlisted` draws; every pin of these sheets is compared."""
     staged = rec.stage_sheet(build, case_id, folder)
-    return netlisted(read_sheet(staged.read_bytes(), SymbolResolver(local_dir=folder)))
+    nets, uncompared = netlisted(read_sheet(staged.read_bytes(), SymbolResolver(local_dir=folder)))
+    assert not uncompared, uncompared
+    return nets
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(_EXPORTS)))

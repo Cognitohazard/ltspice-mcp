@@ -175,10 +175,18 @@ _RULES = (
         "floating_pin",
         "electrical",
         "point",
-        "A pin LTspice leaves connected to nothing: no other pin, label or wire it "
-        "keeps on the pin's net.",
+        "A pin of a part other than an A-device that LTspice leaves connected to "
+        "nothing: no other pin, label or wire it keeps on the pin's net.",
         check="layout",
         provenance="same-instance-wire",
+    ),
+    Rule(
+        "a_device_open_pins",
+        "electrical",
+        "part",
+        "An A-device with pins that have nothing on them, which LTspice writes as node 0.",
+        check="layout",
+        provenance="a-device-open-pin-forms",
     ),
     Rule(
         "dangling_wire_end",
@@ -410,7 +418,7 @@ class _Index:
     def pins(self) -> list[PinAt]:
         """Every part's pins in SpiceOrder, each part told by its place in the view."""
         return [
-            PinAt((x, y), index, order, part.name, name)
+            PinAt((x, y), index, order, part.name, name, part.element)
             for index, part in enumerate(self.view.parts)
             for order, (name, x, y) in enumerate(part.pins)
         ]
@@ -768,18 +776,61 @@ def _floating_pins(ix: _Index) -> list[Finding]:
     # A pin with nothing else on its net as LTspice netlists the sheet
     # (``Nets.unconnected``): a wire straight between two pins of one part
     # joins nothing, and of one part's pins stacked on a point with nothing
-    # else there only the last in SpiceOrder touches anything.
-    return [
-        Finding(
-            "floating_pin",
-            f"Floating pin: {pin.qualified_name} at {_at(pin.point)}",
-            refs=(pin.reference,),
-            points=(pin.point,),
-            facts={"pin": pin.name},
+    # else there only the last in SpiceOrder touches anything. A pin LTspice
+    # writes as one fixed node (an A-device's, as 0) is a_device_open_pins'.
+    found: list[Finding] = []
+    for pin in ix.pins:
+        node = ix.nets.open_node(pin)
+        if node is None or node.fixed is not None:
+            continue
+        why = f"; {node.unknown}" if node.unknown is not None else ""
+        found.append(
+            Finding(
+                "floating_pin",
+                f"Floating pin: {pin.qualified_name} at {_at(pin.point)}{why}",
+                refs=(pin.reference,),
+                points=(pin.point,),
+                facts={"pin": pin.name},
+            )
         )
-        for pin in ix.pins
-        if ix.nets.unconnected(pin)
-    ]
+    return found
+
+
+@_finds("a_device_open_pins", placeless=True)
+def _a_device_open_pins(ix: _Index) -> list[Finding]:
+    # One finding per part, its open pins in SpiceOrder: LTspice writes each
+    # as the one node Nets.open_node names (0 for an A-device), so the part
+    # is the place to look, not each pin.
+    by_part: dict[int, list[PinAt]] = {}
+    nodes: dict[int, str] = {}
+    for pin in ix.pins:
+        node = ix.nets.open_node(pin)
+        if node is not None and node.fixed is not None:
+            by_part.setdefault(pin.part, []).append(pin)
+            nodes[pin.part] = node.fixed
+    found: list[Finding] = []
+    for part, pins in by_part.items():
+        node, one = nodes[part], len(pins) == 1
+        names = ", ".join(pin.name for pin in pins)
+        places = ", ".join(_at(pin.point) for pin in pins)
+        found.append(
+            Finding(
+                "a_device_open_pins",
+                f"{pins[0].reference} has {len(pins)} "
+                + ("pin with nothing on it" if one else "pins with nothing on them")
+                + f" ({names} at {places}); LTspice writes "
+                + ("it" if one else "each")
+                + f" as node {node}, exactly as it writes a pin on ground, so "
+                + ("it simulates as a pin on ground" if one else "they simulate as pins on ground")
+                + ". Wire or label "
+                + ("it" if one else "a pin")
+                + " to give it another node.",
+                refs=(pins[0].reference,),
+                points=tuple(pin.point for pin in pins),
+                facts={"pins": tuple(pin.name for pin in pins), "node": node},
+            )
+        )
+    return found
 
 
 @_finds("dangling_wire_end")
@@ -1251,7 +1302,12 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       other at a point no wire ends at and nothing sits on.
     - ``diagonal_wire``: a wire neither horizontal nor vertical.
     - ``floating_pin``: a pin LTspice leaves connected to nothing: no other
-      pin, label or wire it keeps on the pin's net (``Nets.unconnected``).
+      pin, label or wire it keeps on the pin's net (``Nets.unconnected``),
+      other than one ``a_device_open_pins`` reports. Where no recording shows
+      which node LTspice writes for it, the sentence says so.
+    - ``a_device_open_pins``: an A-device with pins that have nothing on them,
+      once per part: LTspice writes each as node 0, exactly as a pin on
+      ground (``Nets.open_node``).
     - ``dangling_wire_end``: a wire end on no pin, no label and no other wire.
     - ``dangling_label``: a label that is on no wire and at no pin.
     - ``duplicate_wire``: two wires with the same two ends, in either order.

@@ -23,6 +23,20 @@ LTspice behaviour"; the sheets are also in ``tests/fixtures/t_junctions/``):
 - collinear wires that overlap are joined where an end of one lies on the other;
 - a point on a diagonal wire is on that wire as on any other.
 
+A pin with nothing else on its net (``Nets.unconnected``) is still written as
+some node, and which one depends on the part's element letter alone
+(``open_node_by_ltspice``, which ``nets_by_ltspice`` stores as
+``Nets.open_node``):
+
+- an A-device's open pin is written as node ``0``, exactly as a pin on ground
+  is, whatever symbol, prefix spelling or sheet it is on (the
+  ``adevice_open_pin`` recordings and the ``a-device-open-pin-forms`` cases);
+- an open pin of any letter in ``NUMBERED_OPEN_PIN_LETTERS`` is written as a
+  node of its own, ``NC_`` and a number (``open_pin_letters``,
+  ``open_pin_controlled``, ``elements`` and the other exports with ``NC_``
+  nodes);
+- no recording shows what any other letter's open pin is written as.
+
 Labels that share a name are one node as well, without any wire between them.
 Names that differ only in case are one name (the ``node-name-case``
 recording), and a ``GND`` label, in any case, is ground as ``0`` is (the
@@ -45,6 +59,7 @@ import itertools
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import NamedTuple
 
 from ltspice_mcp.lib.device_names import fold_name
@@ -52,6 +67,7 @@ from ltspice_mcp.lib.nets import (
     DroppedRun,
     LabelAt,
     Nets,
+    OpenNode,
     PinAt,
     Point,
     Segment,
@@ -395,20 +411,21 @@ class NamedNets:
 
 
 def named_nets(
-    parts: Iterable[tuple[str, Iterable[tuple[str, Point]]]],
+    parts: Iterable[tuple[str, Iterable[tuple[str, Point]], str]],
     labels: Iterable[tuple[Point, str]],
     wires: Iterable[Segment],
 ) -> NamedNets:
     """The nets LTspice makes of a sheet (:func:`nets_by_ltspice`), named.
 
-    ``parts`` gives each part's reference and its pins in SpiceOrder, as
-    ``(name, point)``; a part is told from the others by its place among
-    them, two that share a reference included. ``labels`` are ``(point,
-    text)``, ground flags among them, and ``wires`` two points each.
+    ``parts`` gives each part's reference, its pins in SpiceOrder, as
+    ``(name, point)``, and its element letter; a part is told from the others
+    by its place among them, two that share a reference included. ``labels``
+    are ``(point, text)``, ground flags among them, and ``wires`` two points
+    each.
     """
     pins = [
-        PinAt(point, index, order, reference, name)
-        for index, (reference, its_pins) in enumerate(parts)
+        PinAt(point, index, order, reference, name, element.upper())
+        for index, (reference, its_pins, element) in enumerate(parts)
         for order, (name, point) in enumerate(its_pins)
     ]
     marks = [LabelAt(point, index, text) for index, (point, text) in enumerate(labels)]
@@ -564,45 +581,79 @@ def _dropped_among(
     return dropped
 
 
-Signature = frozenset[tuple[frozenset[tuple[str, str]], frozenset[str]]]
+SignatureGroup = tuple[frozenset[tuple[str, str]], frozenset[str]]
+
+
+@dataclass(frozen=True)
+class Signature:
+    """A sheet as a netlist shows it (:func:`signature`).
+
+    ``groups`` are the nodes, each as the ``(reference, pin name)`` pins on it
+    and the names it carries. ``uncompared`` are the open pins whose node no
+    recording establishes, as ``(reference, pin name, reason)``; they are in no
+    group, so two signatures equal in ``groups`` say nothing about them.
+    """
+
+    groups: frozenset[SignatureGroup]
+    uncompared: frozenset[tuple[str, str, str]]
 
 
 def signature(
-    pins: Iterable[tuple[Point, tuple[str, str]]],
+    pins: Iterable[tuple[Point, tuple[str, str], str]],
     labels: Iterable[tuple[Point, str]],
     segments: Iterable[Segment],
 ) -> Signature:
-    """The circuit a sheet draws, as a netlist would show it: each net as the
+    """The circuit a sheet draws, as a netlist would show it: each node as the
     pins on it and the names it carries.
 
     Every rule above is applied (:func:`nets_by_ltspice`), same-named labels as
-    one net among them. Parts are told apart by reference, which on any sheet
-    LTspice netlists names one part. A net with no pin on it is left out, since
-    nothing in a netlist shows it. Names are given as :func:`name_key` has
-    them, so two spellings of one name, or of ground, compare equal.
+    one net among them. A pin with nothing on it is placed where LTspice
+    writes it (``Nets.open_node``): with the net of the name it is written as
+    (ground for an A-device's), or with that name alone; on a node of its own
+    when the exporter numbers it; and in ``uncompared`` when no recording
+    shows which. Parts are told apart by reference, which on any sheet
+    LTspice netlists names one part. A net with no pin on it is left out,
+    since nothing in a netlist shows it. Names are given as :func:`name_key`
+    has them, so two spellings of one name, or of ground, compare equal.
 
     Two sheets with equal signatures connect the same pins and name the same
     nets, wherever their parts and wires are drawn, so an edit meant to change
     only the drawing can be checked by comparing the two. ``pins`` are
-    ``(point, (reference, pin name))``, each part's listed in SpiceOrder, as a
-    symbol gives them; ``labels`` are ``(point, text)`` and ``segments`` wires
-    as two points each.
+    ``(point, (reference, pin name), element letter)``, each part's listed in
+    SpiceOrder, as a symbol gives them; ``labels`` are ``(point, text)`` and
+    ``segments`` wires as two points each.
     """
     parts: dict[str, int] = {}
     placed = [
-        PinAt(point, parts.setdefault(reference, len(parts)), order, reference, name)
-        for order, (point, (reference, name)) in enumerate(pins)
+        PinAt(
+            point, parts.setdefault(reference, len(parts)), order, reference, name, element.upper()
+        )
+        for order, (point, (reference, name), element) in enumerate(pins)
     ]
     named = [LabelAt(point, index, text) for index, (point, text) in enumerate(labels)]
     nets = nets_by_ltspice(placed, named, list(segments))
-    on_net: dict[int, set[tuple[str, str]]] = {}
-    for pin in placed:
-        on_net.setdefault(nets.folded(nets.of_pin(pin)), set()).add((pin.reference, pin.name))
-    names: dict[int, set[str]] = {}
+    names: dict[Hashable, set[str]] = {}
     for label in named:
         names.setdefault(nets.folded(nets.of_label(label)), set()).add(nets.name_key(label.text))
-    return frozenset(
-        (frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()
+    net_named = {key: net for net, keys in names.items() for key in keys}
+    on_net: dict[Hashable, set[tuple[str, str]]] = {}
+    uncompared: set[tuple[str, str, str]] = set()
+    for pin in placed:
+        node = nets.open_node(pin)
+        net: Hashable = nets.folded(nets.of_pin(pin))
+        if node is not None and node.unknown is not None:
+            uncompared.add((pin.reference, pin.name, node.unknown))
+            continue
+        if node is not None and node.fixed is not None:
+            key = nets.name_key(node.fixed)
+            net = net_named.get(key, ("name", key))
+            names.setdefault(net, set()).add(key)
+        on_net.setdefault(net, set()).add((pin.reference, pin.name))
+    return Signature(
+        frozenset(
+            (frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()
+        ),
+        frozenset(uncompared),
     )
 
 
@@ -665,4 +716,29 @@ def nets_by_ltspice(
     ]
     label_nets = {label: point_nets[label.point] for label in labels}
     run_nets = [(run, point_nets[run[0]]) for run in kept]
-    return Nets(pin_nets, label_nets, run_nets, dropped, name_key)
+    open_nodes = {pin: open_node_by_ltspice(pin.element) for pin in pins}
+    return Nets(pin_nets, label_nets, run_nets, dropped, name_key, open_nodes)
+
+
+#: The element letters whose open pin LTspice writes as a node of its own,
+#: ``NC_`` and a number: every letter some export shows with an ``NC_`` node.
+NUMBERED_OPEN_PIN_LETTERS = frozenset("BCDEFGHIJLMOQRSTUVWXZ")
+
+
+def open_node_by_ltspice(element: str) -> OpenNode:
+    """The node LTspice writes for a pin with nothing on it, of a part with
+    element letter ``element``: ``0`` for an A-device, exactly as for a pin on
+    ground; a numbered ``NC_`` node for a letter in
+    :data:`NUMBERED_OPEN_PIN_LETTERS`; else not known. The module docstring
+    names the recordings."""
+    letter = element.upper()
+    if letter == "A":
+        return OpenNode(fixed=GROUND)
+    if letter in NUMBERED_OPEN_PIN_LETTERS:
+        return OpenNode(numbered="NC_")
+    return OpenNode(
+        unknown=(
+            "no recording shows which node LTspice writes for an open pin of a part"
+            f" with element letter {letter or '(none)'}"
+        )
+    )

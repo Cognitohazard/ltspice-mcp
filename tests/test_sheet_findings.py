@@ -63,6 +63,7 @@ class TestTheRegistry:
                 "unjoined_crossing",
                 "diagonal_wire",
                 "floating_pin",
+                "a_device_open_pins",
                 "dangling_wire_end",
                 "dangling_label",
                 "duplicate_wire",
@@ -95,6 +96,7 @@ class TestTheRegistry:
                 "unjoined_crossing",
                 "diagonal_wire",
                 "floating_pin",
+                "a_device_open_pins",
                 "dangling_wire_end",
                 "dangling_label",
                 "duplicate_wire",
@@ -242,7 +244,7 @@ class TestAFloatingPin:
         assert self.floating(wired) == [] and self.floating(labelled) == []
 
     def test_the_finding_names_the_part_the_pin_and_the_place(self) -> None:
-        view = SheetView(parts=(Part("R1", pins=(("A", 16, 0), ("", 16, 96))),))
+        view = SheetView(parts=(Part("R1", pins=(("A", 16, 0), ("", 16, 96)), element="R"),))
         assert only(view, "floating_pin") == [
             Finding(
                 "floating_pin",
@@ -393,7 +395,7 @@ class TestWhatJoinsAndWhatDoesNot:
             parts=(Part("R1", pins=(("1", 48, 0),)),), wires=((0, 0, 64, 0),), labels=labels
         )
         nets = named_nets(
-            [("R1", [("1", (48, 0))])],
+            [("R1", [("1", (48, 0))], "R")],
             [((x, y), text) for x, y, text in labels],
             [((0, 0), (64, 0))],
         )

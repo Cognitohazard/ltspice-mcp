@@ -871,6 +871,7 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
         "unjoined_crossing": 0,
         "diagonal_wire": 0,
         "floating_pin": 2,
+        "a_device_open_pins": 0,
         "dangling_wire_end": 0,
         "dangling_label": 2,
         "duplicate_wire": 1,

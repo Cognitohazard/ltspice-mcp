@@ -61,6 +61,7 @@ from ltspice_mcp.lib.ltspice_window import (
     copies_by_process,
     differing_copies,
 )
+from ltspice_mcp.lib.nets import OpenNode
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -69,7 +70,7 @@ from ltspice_mcp.lib.pin_legend import (
     find_label_only_pins,
     paginate_view,
 )
-from ltspice_mcp.lib.reply_cuts import CUT, NEVER
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
     KEEPS_WIRING,
@@ -265,6 +266,52 @@ _PAGE_SCHEMA: dict[str, Any] = page_schema(
     },
 )
 
+# One pin_legend / touched row: a placed part and each of its pins.
+_LEGEND_PAGE_SCHEMA: dict[str, Any] = page_schema(
+    items={
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string"},
+                "pins": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "x": {"type": "integer"},
+                            "y": {"type": "integer"},
+                            "dir": {"type": "string"},
+                            "net": {"type": ["string", "null"]},
+                            "net_export": {"type": "string"},
+                            "open_node": {
+                                "type": "string",
+                                "description": (
+                                    "The node LTspice writes for this pin, which has nothing "
+                                    "on it: a name such as 0, or NC_nn where the exporter "
+                                    "numbers it."
+                                ),
+                            },
+                            "open_node_unknown": {
+                                "type": "string",
+                                "description": (
+                                    "Why the node LTspice writes for this open pin is not known."
+                                ),
+                            },
+                        },
+                        "required": ["name", "x", "y", "net"],
+                    },
+                    CUT: NEVER,
+                },
+            },
+            "required": ["ref", "pins"],
+        },
+        CUT: ITEMS,
+    },
+    primary_truncated=_PAGE_SCHEMA["properties"]["primary_truncated"],
+)
+
 _POINT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
@@ -392,8 +439,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "views": {
             "type": "object",
             "properties": {
-                "touched": _PAGE_SCHEMA,
-                "pin_legend": _PAGE_SCHEMA,
+                "touched": _LEGEND_PAGE_SCHEMA,
+                "pin_legend": _LEGEND_PAGE_SCHEMA,
                 "preexisting": page_schema(
                     items={
                         "type": "array",
@@ -788,15 +835,21 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
     labelled = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
 
     @functools.cache
-    def names() -> dict[tuple[str, int], str | None]:
+    def pins() -> dict[tuple[str, int], tuple[str | None, OpenNode | None]]:
         nets = sheet_nets(editor, geometry=geometry)
         return {
-            (pin.reference, pin.order): "/".join(sorted(nets.texts(nets.of_pin(pin)))) or None
+            (pin.reference, pin.order): (
+                "/".join(sorted(nets.texts(nets.of_pin(pin)))) or None,
+                nets.nets.open_node(pin),
+            )
             for pin in nets.pins
         }
 
     def net_name_of(reference: str, index: int) -> str | None:
-        return names()[reference, index]
+        return pins()[reference, index][0]
+
+    def open_node_of(reference: str, index: int) -> OpenNode | None:
+        return pins()[reference, index][1]
 
     label_only = find_label_only_pins(
         geometry,
@@ -806,7 +859,7 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
     )
     if not include_legend:
         return [], label_only
-    return build_pin_legend(geometry, net_name_of), label_only
+    return build_pin_legend(geometry, net_name_of, open_node_of), label_only
 
 
 async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:
@@ -814,8 +867,10 @@ async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist:
     committed sheet's export, puts it on (``net_export``: ``N001``, ``NC_01``).
 
     The numbering is the exporter's own, so it comes from an export, never a
-    guess. Only the parts with such a pin are looked up, on the loop as the
-    editor must be; the export is read in a thread.
+    guess. Where the pin has nothing on it, the node agrees with the legend's
+    ``open_node`` (``Nets.open_node``), which says the same without an export.
+    Only the parts with such a pin are looked up, on the loop as the editor
+    must be; the export is read in a thread.
     """
     unnamed = [row["ref"] for row in legend if any(pin["net"] is None for pin in row["pins"])]
     if not unnamed:

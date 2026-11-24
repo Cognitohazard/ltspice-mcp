@@ -155,6 +155,7 @@ from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
     GROUND,
     fold_case,
+    is_ground,
     name_key,
     name_keys,
     named_labels,
@@ -189,6 +190,7 @@ from ltspice_mcp.lib.ltspice_window import (
 )
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
+from ltspice_mcp.lib.nets import Nets, OpenNode
 from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
@@ -326,6 +328,19 @@ async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
                         "pin": {"type": "string"},
                         "x": {"type": "integer"},
                         "y": {"type": "integer"},
+                        "open_node": {
+                            "type": "string",
+                            "description": (
+                                "The node LTspice writes for this pin, which has nothing on "
+                                "it: a name such as 0, or NC_nn where the exporter numbers it."
+                            ),
+                        },
+                        "open_node_unknown": {
+                            "type": "string",
+                            "description": (
+                                "Why the node LTspice writes for this open pin is not known."
+                            ),
+                        },
                     },
                 },
             },
@@ -356,6 +371,7 @@ async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
                 },
             },
             "warnings": WARNINGS_SCHEMA,
+            "hint": HINT_SCHEMA,
         },
     }
 )
@@ -436,7 +452,13 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     labels = sheet.named_nets.texts(root)
     pins = sorted(
         (
-            {"reference": pin.reference, "pin": pin.name, "x": pin.point[0], "y": pin.point[1]}
+            {
+                "reference": pin.reference,
+                "pin": pin.name,
+                "x": pin.point[0],
+                "y": pin.point[1],
+                **_open_node_fields(nets.open_node(pin)),
+            }
             for pin in nets.pins_on(net)
         ),
         key=lambda p: (p["reference"], p["pin"]),
@@ -473,8 +495,60 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         data["snapped_to_wire"] = segment_json(snapped)
     if warnings:
         data["warnings"] = warnings
+    hints = [
+        f"{pin.qualified_name} has nothing on it on the sheet; LTspice writes it as node "
+        "0, exactly as it writes a pin on ground, so it simulates as a pin on ground."
+        for pin in nets.pins_on(net)
+        if _written_as_ground(nets.open_node(pin))
+    ]
+    if any(nets.name_key(label) == GROUND for label in labels):
+        hints += _also_written_as_ground(nets)
+    if hints:
+        data["hint"] = " ".join(hints)
 
     return format_response(data)
+
+
+def _open_node_fields(node: OpenNode | None) -> dict[str, str]:
+    """A pin row's word on the node LTspice writes for a pin with nothing on
+    it (``Nets.open_node``), as the edit's pin legend gives it."""
+    if node is None:
+        return {}
+    if node.unknown is not None:
+        return {"open_node_unknown": node.unknown}
+    return {"open_node": node.fixed or f"{node.numbered}nn"}
+
+
+def _written_as_ground(node: OpenNode | None) -> bool:
+    return node is not None and node.fixed is not None and is_ground(node.fixed)
+
+
+#: How many of the pins LTspice writes as ground with nothing on them a trace
+#: of ground names before it gives the rest as a count.
+_GROUND_OPEN_PINS_NAMED = 10
+
+
+def _also_written_as_ground(nets: Nets) -> list[str]:
+    """The hint of a trace of ground: the pins with nothing on them that
+    LTspice writes as node 0 too, which the sheet's wiring does not join."""
+    pins = sorted(
+        (pin for pin in nets.pins if _written_as_ground(nets.open_node(pin))),
+        key=lambda pin: (pin.reference, pin.order),
+    )
+    if not pins:
+        return []
+    named = ", ".join(pin.qualified_name for pin in pins[:_GROUND_OPEN_PINS_NAMED])
+    if len(pins) > _GROUND_OPEN_PINS_NAMED:
+        named += f", and {len(pins) - _GROUND_OPEN_PINS_NAMED} more"
+    counted = (
+        "1 A-device pin with nothing on it"
+        if len(pins) == 1
+        else f"{len(pins)} A-device pins with nothing on them"
+    )
+    return [
+        f"LTspice also writes node 0 for {counted} ({named}), exactly as it writes a pin "
+        "on ground; the sheet draws no connection to " + ("it." if len(pins) == 1 else "them.")
+    ]
 
 
 def _net_at(sheet: Sheet, point: tuple[int, int]) -> int:
@@ -1873,6 +1947,8 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
             f"{call_to_continue('inspect', {'queries': [again]})} "
             "(one cursor advances pins and coordinates independently)."
         )
+    if tdata.get("hint"):
+        data["hint"] = " ".join(filter(None, (tdata["hint"], data.get("hint"))))
     if tdata.get("warnings"):
         data["warnings"] = tdata["warnings"]
     return {

@@ -259,8 +259,8 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("verify_circuit", "layout"): (
         "Schematic only: geometric facts — overlapping bodies, wires crossing a "
-        "symbol body, floating pins, dangling wire ends, dangling labels, a wire "
-        "drawn twice."
+        "symbol body, floating pins, open A-device pins, dangling wire ends, "
+        "dangling labels, a wire drawn twice."
     ),
     ("verify_circuit", "quality"): (
         "Hygiene facts: on a sheet, nets joined only by label stubs, text "
@@ -512,7 +512,12 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
     ("verify_circuit", "syntax"): ("lint", "does this deck parse", "arity"),
     ("verify_circuit", "symbols"): ("missing symbol", "unresolved part"),
     ("verify_circuit", "export"): ("netlist a schematic", "asc to net"),
-    ("verify_circuit", "layout"): ("overlap", "floating pin", "dangling wire"),
+    ("verify_circuit", "layout"): (
+        "overlap",
+        "floating pin",
+        "open A-device pins",
+        "dangling wire",
+    ),
     ("verify_circuit", "quality"): ("label island", "no dc path to ground"),
     ("verify_circuit", "compare"): ("diff", "equivalence", "is it the same circuit"),
 }

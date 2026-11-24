@@ -214,8 +214,12 @@ def _reference_nets(reference: Circuit) -> dict[str, tuple[_Pin, ...]]:
     return {node: tuple(sorted(pins)) for node, pins in nets.items()}
 
 
-def netlisted(sheet: Sheet) -> list[tuple[frozenset[tuple[str, int]], frozenset[str]]]:
-    """Each net the sheet draws, as LTspice would netlist it: its pins and its names.
+def netlisted(
+    sheet: Sheet,
+) -> tuple[list[tuple[frozenset[tuple[str, int]], frozenset[str]]], list[str]]:
+    """Each net the sheet draws, as LTspice would netlist it: its pins and its
+    names; and, as ``REF.order: why``, each pin with nothing on it whose node
+    no recording shows (``Nets.open_node``), which no net holds.
 
     A pin is its part's reference, as `netlist_graph.canon_ref` spells it, and
     its SpiceOrder, the order a netlist lists a part's nodes in (the
@@ -233,21 +237,20 @@ def netlisted(sheet: Sheet) -> list[tuple[frozenset[tuple[str, int]], frozenset[
     for part in sheet.parts:
         for pin in sorted(part.pins, key=lambda p: p.order):
             assert pin.order > 0, (part.reference, pin)
-            pins.append(((pin.x, pin.y), (part.reference, str(pin.order))))
+            pins.append(((pin.x, pin.y), (part.reference, str(pin.order)), part.element))
         letter = _prefix(part)[:1]
         if letter and letter in "MQ" and len(part.pins) == 3:
             implied.append((canon_ref(part.reference), letter))
+    drawn = signature(
+        pins,
+        [((x, y), name) for x, y, name in sheet.labels],
+        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in sheet.wires],
+    )
     nets = [
-        (
-            {(canon_ref(ref), int(order)) for ref, order in owners},
-            names,
-        )
-        for owners, names in signature(
-            pins,
-            [((x, y), name) for x, y, name in sheet.labels],
-            [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in sheet.wires],
-        )
+        ({(canon_ref(ref), int(order)) for ref, order in owners}, names)
+        for owners, names in drawn.groups
     ]
+    uncompared = sorted(f"{canon_ref(ref)}.{order}: {why}" for ref, order, why in drawn.uncompared)
     for ref, letter in implied:
         if letter == "Q":
             ground = next((net for net in nets if GROUND in net[1]), None)
@@ -261,14 +264,16 @@ def netlisted(sheet: Sheet) -> list[tuple[frozenset[tuple[str, int]], frozenset[
             nets.append(({(ref, 4)}, frozenset()))
         else:
             source[0].add((ref, 4))
-    return [(frozenset(pins), names) for pins, names in nets]
+    return [(frozenset(pins), names) for pins, names in nets], uncompared
 
 
 def _prefix(part: SheetPart) -> str:
     return (part.symbol.file.attr("Prefix") if part.symbol else "").upper()
 
 
-def _drawn_nets(sheet: Sheet, reference: Circuit) -> list[tuple[tuple[_Pin, ...], frozenset[str]]]:
+def _drawn_nets(
+    sheet: Sheet, reference: Circuit
+) -> tuple[list[tuple[tuple[_Pin, ...], frozenset[str]]], list[str]]:
     """`netlisted`, with the two ends of a resistor, capacitor or inductor one
     role. A part the reference does not have keeps its symbol's prefix as its
     letter. A transistor's fourth node, which the export adds to one drawn with
@@ -282,11 +287,12 @@ def _drawn_nets(sheet: Sheet, reference: Circuit) -> list[tuple[tuple[_Pin, ...]
         if card is not None and len(card.nodes) == len(part.pins) == 3:
             implied.add((ref, 4))
     drawn = []
-    for pins, names in netlisted(sheet):
+    nets, uncompared = netlisted(sheet)
+    for pins, names in nets:
         kept = [pin for pin in pins if pin not in implied]
         if kept:
             drawn.append((tuple(sorted(_pin(letters[r], r, o) for r, o in kept)), names))
-    return drawn
+    return drawn, uncompared
 
 
 def equivalence(sheet: Sheet, reference: Circuit) -> dict[str, Any]:
@@ -296,10 +302,12 @@ def equivalence(sheet: Sheet, reference: Circuit) -> dict[str, Any]:
     the reference's ground is the sheet's net labelled ``0``. Separately: the
     nodes the reference says a drawing must name and the sheet does not, the
     parts whose value differs from the card's text after its nodes, and the
-    directives the sheet lacks. ``equivalent`` is about parts and nets only.
+    directives the sheet lacks. ``equivalent`` is about parts and nets only,
+    and is false while a pin is ``pins_not_compared``: one with nothing on it
+    whose node no recording shows.
     """
     expected = _reference_nets(reference)
-    drawn = _drawn_nets(sheet, reference)
+    drawn, uncompared = _drawn_nets(sheet, reference)
     on_sheet = {canon_ref(part.reference) for part in sheet.parts}
     in_reference = {canon_ref(card.ref) for card in reference.cards}
     nets_expected = Counter(expected.values())
@@ -323,6 +331,7 @@ def equivalence(sheet: Sheet, reference: Circuit) -> dict[str, Any]:
             _net_text(pins) for pins in (nets_drawn - nets_expected).elements()
         ),
         "ground_differs": ground_drawn != expected.get(GROUND, ()),
+        "pins_not_compared": uncompared,
         "names_missing": sorted(
             name for name in reference.names if named.get(name) != expected.get(name)
         ),
@@ -339,6 +348,7 @@ def equivalence(sheet: Sheet, reference: Circuit) -> dict[str, Any]:
             "nets_only_in_reference",
             "nets_only_drawn",
             "ground_differs",
+            "pins_not_compared",
         )
     )
     return said

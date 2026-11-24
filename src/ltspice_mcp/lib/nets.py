@@ -13,7 +13,7 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Hashable, Iterable, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Generic, TypeVar
@@ -107,7 +107,8 @@ class PinAt:
 
     ``part`` tells the part from every other part on the sheet, two that share
     a reference included, and ``order`` places the pin among the part's own
-    pins in SpiceOrder.
+    pins in SpiceOrder. ``element`` is the part's element letter, upper case,
+    which the netlister may read to decide what it writes for the pin.
     """
 
     point: Point
@@ -115,11 +116,28 @@ class PinAt:
     order: int
     reference: str
     name: str
+    element: str
 
     @property
     def qualified_name(self) -> str:
         """``REF.PIN``, or the reference alone for a pin with no name."""
         return f"{self.reference}.{self.name}" if self.name else self.reference
+
+
+@dataclass(frozen=True)
+class OpenNode:
+    """The node a netlister writes for a pin with nothing on it: one name for
+    every such pin (``fixed``, such as ``0``), a name of its own made from a
+    prefix and a number (``numbered``), or not known (``unknown``, the reason).
+    Exactly one is set."""
+
+    fixed: str | None = None
+    numbered: str | None = None
+    unknown: str | None = None
+
+    def __post_init__(self) -> None:
+        if sum(value is not None for value in (self.fixed, self.numbered, self.unknown)) != 1:
+            raise ValueError("an OpenNode sets exactly one of fixed, numbered and unknown")
 
 
 @dataclass(frozen=True)
@@ -150,7 +168,8 @@ class Nets:
     the nets of the pins at both its ends (``touched_at``). Labels of one name
     are one net only through ``folded``, and ``name_key`` is the form the
     netlister compares names in. ``pins`` and ``labels`` are what the nets were
-    made over, in the order given.
+    made over, in the order given. ``open_nodes`` holds, for each pin with
+    nothing else on its net, the node the netlister writes for it.
     """
 
     def __init__(
@@ -160,8 +179,10 @@ class Nets:
         runs: Sequence[tuple[Segment, int]],
         dropped: Sequence[DroppedRun],
         name_key: Callable[[str], str],
+        open_nodes: Mapping[PinAt, OpenNode],
     ) -> None:
         self._pin_net = pins
+        self._open_nodes = dict(open_nodes)
         self._label_net = labels
         self.pins: tuple[PinAt, ...] = tuple(pins)
         self.labels: tuple[LabelAt, ...] = tuple(labels)
@@ -211,6 +232,12 @@ class Nets:
         """Whether nothing but ``pin`` is on its net: no other pin, no label and
         no run of wire the netlister keeps."""
         return self._held[self._pin_net[pin]] == 1
+
+    def open_node(self, pin: PinAt) -> OpenNode | None:
+        """The node the netlister writes for ``pin`` when nothing else is on
+        its net (``unconnected``), else None. A pin on another pin's net, a
+        label's or a kept run's is written as that net."""
+        return self._open_nodes.get(pin) if self.unconnected(pin) else None
 
     def pins_at(self, point: Point) -> tuple[PinAt, ...]:
         """Every pin on ``point``."""

@@ -1633,7 +1633,14 @@ extra = ["export/hier_directives.asc", "export/hier_directives.asy"]
 
 [behaviour.a-device-open-pin]
 summary = "What an export writes for the pins of an A-device (a digital gate) that nothing is connected to."
-model = ["lib/connectivity.py", "lib/nets.py", "lib/export_nets.py"]
+model = [
+    "lib/connectivity.py",
+    "lib/nets.py",
+    "lib/export_nets.py",
+    "lib/sheet_findings.py",
+    "tools/inspect_tools.py",
+    "lib/pin_legend.py",
+]
 # A1's pins 1, 2 and 7 are labelled a, b and y, pin 5 is on ground, and pins
 # 3, 4, 6 and 8 touch nothing.
 inputs = ["export/adevice_open_pin.asc"]
@@ -1690,12 +1697,19 @@ inputs = [
 
 [behaviour.a-device-open-pin-forms]
 summary = "What an export writes for an open pin of an A-device in other forms than a-device-open-pin: the build's own AND gate, a symbol of three pins, a part given Prefix A or a by an instance attribute, a pin on a wire with a loose end, two pins drawn on one point or joined by a wire, a block's own sheet, two A-devices on one sheet; and for an open pin of each other element letter."
-model = ["lib/connectivity.py", "lib/nets.py", "lib/export_nets.py"]
+model = [
+    "lib/connectivity.py",
+    "lib/nets.py",
+    "lib/export_nets.py",
+    "lib/sheet_findings.py",
+    "tools/inspect_tools.py",
+    "lib/pin_legend.py",
+]
 # Each sheet is a [[case]] below, since each copies other symbols.
 
 [behaviour.a-device-input-on-ground]
 summary = "Whether the build's own AND gate, run from a sheet, treats an input on node 0 as not used or as logic low: input a at 1 V, the output y into 1k to ground, and input b open or on a ground flag. Nothing in the server models this yet."
-model = []
+model = ["assets/guide/ltspice.md"]
 # Each run keeps its netlist, log and raw; V(y) is 1 V when b is taken as not
 # used and 0 when it is taken as low.
 

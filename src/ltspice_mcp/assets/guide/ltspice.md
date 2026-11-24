@@ -310,6 +310,12 @@ C1 out 0 {C}
   are LTspice's own, netlisted with prefix `A`. An A-device's description and
   the parameters it takes are attributes of its symbol, which
   `inspect(kind="symbol")` lists.
+- A pin of an A-device with nothing on it is exported as node 0, exactly as a
+  pin on ground, so the two simulate alike. What node 0 does depends on the
+  terminal. On LTspice's own AND gate, with input 1 at 1 V and input 2 on node
+  0, the output stays high (V(y) = 0.999 V into 1k), so that input does not
+  pull the output low; and the eighth terminal on node 0 carries the output
+  current to ground.
 - **`*!LTspice: <directive>`** is read as a directive, not a comment, despite
   the `*`.
 - **Area multipliers**: an undocumented `m=<value>` works on R, Q and J as well

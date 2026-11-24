@@ -332,7 +332,7 @@ class Sheet:
         """Every part's pins as :attr:`nets` reads them, in SpiceOrder, each
         part told by its place in ``parts``."""
         return tuple(
-            PinAt((pin.x, pin.y), index, order, part.reference, pin.name)
+            PinAt((pin.x, pin.y), index, order, part.reference, pin.name, part.element)
             for index, part in enumerate(self.parts)
             for order, pin in enumerate(part.pins)
         )

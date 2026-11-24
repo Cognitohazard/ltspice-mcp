@@ -10,7 +10,7 @@ the indexed search finds exactly what the exhaustive one does.
 from __future__ import annotations
 
 import random
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -21,22 +21,27 @@ from ltspice_mcp.lib.connectivity import (
     NamedNets,
     Point,
     Segment,
+    Signature,
     _join,  # pyright: ignore[reportPrivateUsage]
     _runs_and_drops,  # pyright: ignore[reportPrivateUsage]
     build_on_wire_predicate,
     name_key,
     named_nets,
     nets_by_ltspice,
+    open_node_by_ltspice,
     point_on_segment,
     signature,
 )
 from ltspice_mcp.lib.nets import LabelAt, NetChange, PinAt, net_change
+from ltspice_mcp.lib.sheet import element_letter
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 from ltspice_mcp.lib.symbol_library import find_symbol
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 
 Pins = list[tuple[Point, tuple[str, str]]]
 Labels = list[tuple[Point, str]]
+#: Each part's element letter, by reference.
+Elements = dict[str, str]
 
 
 class Wired(NamedTuple):
@@ -153,6 +158,28 @@ def sheet_inputs(path: Path) -> tuple[Pins, Labels, list[Segment]]:
     labels: Labels = [((flag.x, flag.y), flag.name) for flag in doc.flags]
     segments = [((w.x1, w.y1), (w.x2, w.y2)) for w in doc.wires]
     return pins, labels, segments
+
+
+def sheet_elements(path: Path) -> Elements:
+    """Each part's element letter on the sheet at ``path``, as LTspice
+    netlists it: from its own ``Prefix``, else its symbol's, else its name."""
+    doc = parse_asc(path.read_bytes())
+    found: Elements = {}
+    for symbol in doc.symbols:
+        asy = find_symbol(symbol.symbol, path.parent, [TESTS / "fixtures" / "symbols"])
+        info = parse_asy_file(asy) if asy is not None else None
+        own = dict(symbol.attrs).get("Prefix")
+        found[symbol.reference] = element_letter(
+            own, info.prefix if info is not None else None, symbol.reference
+        )
+    return found
+
+
+def generated_elements(seed: int, pins: Pins) -> Elements:
+    """An element letter for each generated part: an A-device, whose open pins
+    LTspice writes as node 0, one it numbers, or one no recording covers."""
+    rng = random.Random(seed)
+    return {ref: rng.choice("ARN") for _point, (ref, _name) in pins}
 
 
 def generated_sheet(seed: int) -> tuple[Pins, Labels, list[Segment]]:
@@ -301,7 +328,11 @@ class TestNames:
 
     def test_labels_of_one_name_are_one_net_once_folded(self) -> None:
         named = named_nets(
-            [("R1", [("A", (16, 0))]), ("R2", [("A", (112, 0))]), ("R3", [("A", (200, 0))])],
+            [
+                ("R1", [("A", (16, 0))], "R"),
+                ("R2", [("A", (112, 0))], "R"),
+                ("R3", [("A", (200, 0))], "R"),
+            ],
             [((0, 0), "vdd"), ((96, 0), "vdd"), ((184, 0), "out")],
             [((0, 0), (16, 0)), ((96, 0), (112, 0)), ((184, 0), (200, 0))],
         )
@@ -365,7 +396,7 @@ class TestWhatAPointWouldJoin:
 
     def test_what_sits_on_the_place_is_joined_only_when_it_lands_there(self) -> None:
         """A label lands on what is there; a part's pin is not asked that way."""
-        nets = named_nets([("R1", [("A", (50, 50))])], [((50, 50), "out")], [])
+        nets = named_nets([("R1", [("A", (50, 50))], "R")], [((50, 50), "out")], [])
         assert nets.joined_at((50, 50)) == ((), 0)
         assert nets.joined_at((50, 50), landing=True) == ((frozenset({"out"}),), 0)
         assert nets.joined_at((700, 700), landing=True) == ((), 0)
@@ -385,7 +416,7 @@ class TestWhatAPointWouldJoin:
         one part keeps the wire (``same_instance_label_inside``), and at either
         end it is on that pin alone (``same_instance_wire``)."""
         nets = named_nets(
-            [("R1", [("1", (0, 0)), ("2", (0, 96))])],
+            [("R1", [("1", (0, 0)), ("2", (0, 96))], "R")],
             [((0, 0), "a"), ((0, 96), "b")],
             [((0, 0), (0, 96))],
         )
@@ -398,9 +429,23 @@ R1 = [((0, 0), ("R1", "A")), ((0, 96), ("R1", "B"))]
 R2 = [((96, 0), ("R2", "A")), ((96, 96), ("R2", "B"))]
 
 
+def groups(
+    pins: Pins, labels: Labels, segments: list[Segment], elements: Elements | None = None
+) -> frozenset[tuple[frozenset[tuple[str, str]], frozenset[str]]]:
+    """The signature's groups for ``pins`` given as ``(point, (reference,
+    name))``, each part of the element ``elements`` gives it (``R`` when
+    none), and nothing left uncompared."""
+    letters = elements or {}
+    found = signature(
+        [(point, owner, letters.get(owner[0], "R")) for point, owner in pins], labels, segments
+    )
+    assert found.uncompared == frozenset()
+    return found.groups
+
+
 class TestSignature:
     def test_it_is_each_net_as_its_pins_and_names(self) -> None:
-        assert signature(
+        assert groups(
             R1 + R2, [((48, 0), "in"), ((0, 96), "0")], [((0, 0), (96, 0))]
         ) == frozenset(
             {
@@ -410,12 +455,12 @@ class TestSignature:
             }
         )
 
-    def test_one_circuit_drawn_two_ways_has_one_signature(self) -> None:
-        straight = signature(R1 + R2, [], [((0, 0), (96, 0))])
+    def test_one_circuit_drawn_two_ways_has_one_groups(self) -> None:
+        straight = groups(R1 + R2, [], [((0, 0), (96, 0))])
         # The same two pins joined by a detour, with the parts elsewhere.
         moved = [((160, 32), ("R1", "A")), ((160, 128), ("R1", "B"))]
         moved += [((320, 64), ("R2", "A")), ((320, 160), ("R2", "B"))]
-        detour = signature(
+        detour = groups(
             moved,
             [],
             [((160, 32), (160, 16)), ((160, 16), (320, 16)), ((320, 16), (320, 64))],
@@ -423,28 +468,28 @@ class TestSignature:
         assert straight == detour
 
     def test_a_wire_swapped_for_two_labels_of_one_name_is_the_same_circuit_named(self) -> None:
-        wired = signature(R1 + R2, [((0, 0), "n")], [((0, 0), (96, 0))])
-        labelled = signature(R1 + R2, [((0, 0), "n"), ((96, 0), "n")], [])
+        wired = groups(R1 + R2, [((0, 0), "n")], [((0, 0), (96, 0))])
+        labelled = groups(R1 + R2, [((0, 0), "n"), ((96, 0), "n")], [])
         assert wired == labelled
 
-    def test_a_different_connection_is_a_different_signature(self) -> None:
-        to_the_top = signature(R1 + R2, [], [((0, 0), (96, 0))])
-        to_the_bottom = signature(R1 + R2, [], [((0, 0), (96, 96))])
+    def test_a_different_connection_is_a_different_groups(self) -> None:
+        to_the_top = groups(R1 + R2, [], [((0, 0), (96, 0))])
+        to_the_bottom = groups(R1 + R2, [], [((0, 0), (96, 96))])
         assert to_the_top != to_the_bottom
 
     def test_a_net_with_no_pin_is_not_in_it(self) -> None:
-        with_a_stub = signature(R1, [((200, 200), "spare")], [((200, 200), (264, 200))])
-        assert with_a_stub == signature(R1, [], [])
+        with_a_stub = groups(R1, [((200, 200), "spare")], [((200, 200), (264, 200))])
+        assert with_a_stub == groups(R1, [], [])
 
     def test_a_straight_wire_between_two_pins_of_one_part_joins_nothing(self) -> None:
         # LTspice leaves that wire out of the netlist, so the pins stay apart.
-        assert signature(R1, [], [((0, 0), (0, 96))]) == signature(R1, [], [])
+        assert groups(R1, [], [((0, 0), (0, 96))]) == groups(R1, [], [])
         # And still does when the run is drawn as two pieces in one line.
-        assert signature(R1, [], [((0, 0), (0, 48)), ((0, 48), (0, 96))]) == signature(R1, [], [])
+        assert groups(R1, [], [((0, 0), (0, 48)), ((0, 48), (0, 96))]) == groups(R1, [], [])
 
     def test_a_parts_pins_alone_on_one_point_touch_nothing(self) -> None:
         both_here = [((0, 0), ("R1", "1")), ((0, 0), ("R1", "2"))]
-        assert signature(both_here, [], []) == frozenset(
+        assert groups(both_here, [], []) == frozenset(
             {
                 (frozenset({("R1", "1")}), frozenset()),
                 (frozenset({("R1", "2")}), frozenset()),
@@ -454,7 +499,7 @@ class TestSignature:
     def test_only_its_last_pin_there_touches_another_parts(self) -> None:
         pins = [((0, 0), ("R1", "1")), ((0, 0), ("R1", "2"))]
         pins += [((0, 0), ("R2", "1")), ((0, 0), ("R3", "2"))]
-        assert signature(pins, [], []) == frozenset(
+        assert groups(pins, [], []) == frozenset(
             {
                 (frozenset({("R1", "1")}), frozenset()),
                 (frozenset({("R1", "2"), ("R2", "1"), ("R3", "2")}), frozenset()),
@@ -464,16 +509,12 @@ class TestSignature:
     def test_a_wire_or_a_label_on_the_point_joins_every_pin_there(self) -> None:
         both_here = [((0, 0), ("R1", "1")), ((0, 0), ("R1", "2"))]
         together = frozenset({("R1", "1"), ("R1", "2")})
-        assert signature(both_here, [((0, 0), "f")], []) == frozenset(
-            {(together, frozenset({"f"}))}
-        )
-        assert signature(both_here, [], [((0, 0), (64, 0))]) == frozenset(
-            {(together, frozenset())}
-        )
+        assert groups(both_here, [((0, 0), "f")], []) == frozenset({(together, frozenset({"f"}))})
+        assert groups(both_here, [], [((0, 0), (64, 0))]) == frozenset({(together, frozenset())})
 
     def test_the_same_wire_taken_out_of_line_joins_them(self) -> None:
         around = [((0, 0), (-32, 0)), ((-32, 0), (-32, 96)), ((-32, 96), (0, 96))]
-        assert signature(R1, [], around) == frozenset(
+        assert groups(R1, [], around) == frozenset(
             {(frozenset({("R1", "A"), ("R1", "B")}), frozenset())}
         )
 
@@ -483,11 +524,15 @@ class TestSignature:
 # ---------------------------------------------------------------------------
 
 
-def reference_signature(pins: Pins, labels: Labels, segments: list[Segment]):
+def reference_signature(
+    pins: Pins, labels: Labels, segments: list[Segment], elements: Elements
+) -> Signature:
     """The signature as it was first written, on the exhaustive
     :func:`reference_partition`: every pin on its point's wired net, then,
     where a point holds nothing but pins, each part's last pin left there and
-    its others on nothing.
+    its others on nothing. A pin with nothing on it then goes where its
+    element's open node says: with the net of that name, on its own, or
+    uncompared.
 
     It checks how ``nets_by_ltspice`` puts the rules together; the rules
     themselves are held to LTspice's exports in
@@ -502,7 +547,7 @@ def reference_signature(pins: Pins, labels: Labels, segments: list[Segment]):
     kept = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in dropped]
     part = reference_partition(pins, labels, kept)
     net_of = folded(part)
-    on_net: dict[Point, set[tuple[str, str]]] = {}
+    on_net: dict[Hashable, set[tuple[str, str]]] = {}
     alone: list[tuple[str, str]] = []
     for coord, at in part.pin_owners.items():
         touching = at
@@ -510,33 +555,68 @@ def reference_signature(pins: Pins, labels: Labels, segments: list[Segment]):
             last = {ref: (ref, name) for ref, name in at}
             touching = list(last.values())
             alone += [pin for pin in at if last[pin[0]] != pin]
+            if len(touching) == 1:
+                alone += touching
+                continue
         on_net.setdefault(net_of(coord), set()).update(touching)
-    names: dict[Point, set[str]] = {}
+    names: dict[Hashable, set[str]] = {}
     for coord, texts in part.label_texts.items():
         names.setdefault(net_of(coord), set()).update(name_key(text) for text in texts)
+    by_name = {key: net for net, keys in names.items() for key in keys}
+    uncompared: set[tuple[str, str, str]] = set()
+    for ref, name in alone:
+        node = open_node_by_ltspice(elements[ref])
+        if node.unknown is not None:
+            uncompared.add((ref, name, node.unknown))
+        elif node.fixed is not None:
+            net = by_name.get(name_key(node.fixed), ("name", name_key(node.fixed)))
+            names.setdefault(net, set()).add(name_key(node.fixed))
+            on_net.setdefault(net, set()).add((ref, name))
+        else:
+            on_net[("alone", ref, name)] = {(ref, name)}
     nets = {(frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()}
-    return frozenset(nets | {(frozenset({pin}), frozenset()) for pin in alone})
+    return Signature(frozenset(nets), frozenset(uncompared))
+
+
+def with_elements(pins: Pins, elements: Elements) -> list[tuple[Point, tuple[str, str], str]]:
+    return [(point, owner, elements[owner[0]]) for point, owner in pins]
 
 
 class TestTheSignatureIsTheReferenceCircuit:
     @pytest.mark.parametrize("path", SUITE_SHEETS, ids=suite_name)
     def test_on_every_sheet_in_the_suite(self, path: Path) -> None:
-        inputs = sheet_inputs(path)
-        assert signature(*inputs) == reference_signature(*inputs)
+        pins, labels, segments = sheet_inputs(path)
+        elements = sheet_elements(path)
+        assert signature(with_elements(pins, elements), labels, segments) == reference_signature(
+            pins, labels, segments, elements
+        )
 
     @pytest.mark.parametrize("seed", range(200))
     def test_on_generated_sheets(self, seed: int) -> None:
-        inputs = generated_sheet(seed)
-        assert signature(*inputs) == reference_signature(*inputs)
+        pins, labels, segments = generated_sheet(seed)
+        elements = generated_elements(seed, pins)
+        assert signature(with_elements(pins, elements), labels, segments) == reference_signature(
+            pins, labels, segments, elements
+        )
+
+    def test_the_sheets_hold_open_pins_of_every_kind(self) -> None:
+        kinds: set[str] = set()
+        for seed in range(200):
+            pins, labels, segments = generated_sheet(seed)
+            elements = generated_elements(seed, pins)
+            found = reference_signature(pins, labels, segments, elements)
+            kinds |= {"unknown"} if found.uncompared else set()
+            kinds |= {"fixed" for group, names in found.groups if "0" in names and len(group) > 1}
+        assert kinds == {"unknown", "fixed"}
 
 
 #: R1's two pins, at either end of a wire straight between them, or (with
 #: ``STACKED``) both on one point.
-TIE_A = PinAt((0, 0), 1, 0, "R1", "1")
-TIE_B = PinAt((0, 96), 1, 1, "R1", "2")
-STACKED = PinAt((0, 0), 1, 1, "R1", "2")
+TIE_A = PinAt((0, 0), 1, 0, "R1", "1", "R")
+TIE_B = PinAt((0, 96), 1, 1, "R1", "2", "R")
+STACKED = PinAt((0, 0), 1, 1, "R1", "2", "R")
 #: Another part's pin on the point R1's stacked pins share.
-OTHER = PinAt((0, 0), 2, 0, "R2", "1")
+OTHER = PinAt((0, 0), 2, 0, "R2", "1", "R")
 
 
 class TestNetsOverTerminals:
@@ -595,7 +675,7 @@ class TestNetsOverTerminals:
         assert nets.unconnected(TIE_A) and not nets.unconnected(STACKED)
 
     def test_two_parts_that_share_a_reference_stay_two_parts(self) -> None:
-        one, two = PinAt((0, 0), 1, 0, "R1", "1"), PinAt((0, 96), 2, 0, "R1", "1")
+        one, two = PinAt((0, 0), 1, 0, "R1", "1", "R"), PinAt((0, 96), 2, 0, "R1", "1", "R")
         nets = nets_by_ltspice([one, two], [], [((0, 0), (0, 96))])
         assert nets.of_pin(one) == nets.of_pin(two)
         assert nets.dropped == ()
@@ -625,7 +705,9 @@ class TestNetChange:
     @staticmethod
     def _nets(wires: list[Segment], labels: Labels | None = None) -> NamedNets:
         """R1.1 at (0, 0) and R2.1 at (96, 0), with ``wires`` and ``labels``."""
-        return named_nets([("R1", [("1", (0, 0))]), ("R2", [("1", (96, 0))])], labels or [], wires)
+        return named_nets(
+            [("R1", [("1", (0, 0))], "R"), ("R2", [("1", (96, 0))], "R")], labels or [], wires
+        )
 
     def test_a_wire_taken_away_splits_the_net_it_held(self) -> None:
         change = net_change(self._nets([((0, 0), (96, 0))]).nets, self._nets([]).nets)
@@ -659,7 +741,7 @@ class TestNetChange:
     def test_two_states_that_do_not_hold_the_same_parts_are_refused(self) -> None:
         """A part added or taken away between the two shifts every later part's
         place, so the comparison would pair the wrong pins."""
-        other = named_nets([("R1", [("1", (0, 0))]), ("R3", [("1", (96, 0))])], [], [])
+        other = named_nets([("R1", [("1", (0, 0))], "R"), ("R3", [("1", (96, 0))], "R")], [], [])
         with pytest.raises(ValueError, match="part R2 before and part R3 after"):
             net_change(self._nets([]).nets, other.nets)
 
@@ -667,6 +749,8 @@ class TestNetChange:
         """R2 moved along the wire it ends on stays on R1's net."""
         before = self._nets([((0, 0), (192, 0))]).nets
         after = named_nets(
-            [("R1", [("1", (0, 0))]), ("R2", [("1", (192, 0))])], [], [((0, 0), (192, 0))]
+            [("R1", [("1", (0, 0))], "R"), ("R2", [("1", (192, 0))], "R")],
+            [],
+            [((0, 0), (192, 0))],
         ).nets
         assert net_change(before, after) == NetChange()

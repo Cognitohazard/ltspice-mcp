@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import Iterator
+from collections.abc import Hashable, Iterator
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -210,12 +210,20 @@ def editor_nets(editor: AscEditor) -> tuple[NamedNets, dict[tuple[str, int], dic
 
 
 def modelled_groups(sheet: Path) -> set[frozenset[str]]:
-    """The pins the editor's sheet's nets put on each node."""
+    """The pins the editor's sheet's nets put on each node: a pin with nothing
+    on it on the node LTspice writes for it (``Nets.open_node``), which for a
+    name is the net carrying that name, or that name alone."""
     nets, rows = editor_nets(_editor(sheet))
-    nodes: dict[int, set[str]] = {}
+    nodes: dict[Hashable, set[str]] = {}
     for pin in nets.pins:
         order = rows[pin.reference, pin.order]["order"]
-        nodes.setdefault(nets.of_pin(pin), set()).add(f"{canon_ref(pin.reference)}.{order}")
+        node = nets.nets.open_node(pin)
+        assert node is None or node.unknown is None, (pin.reference, order, node)
+        net: Hashable = nets.of_pin(pin)
+        if node is not None and node.fixed is not None:
+            named = nets.net_named(node.fixed)
+            net = named if named is not None else ("name", nets.nets.name_key(node.fixed))
+        nodes.setdefault(net, set()).add(f"{canon_ref(pin.reference)}.{order}")
     return {frozenset(pins) for pins in nodes.values()}
 
 
@@ -718,16 +726,16 @@ def netlisted_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins on each net of the sheet's signature, as ``REF.order`` sets."""
     editor = _editor(sheet)
     pins = [
-        ((pin["x"], pin["y"]), (canon_ref(row["ref"]), str(pin["order"])))
+        ((pin["x"], pin["y"]), (canon_ref(row["ref"]), str(pin["order"])), element)
         for row in collect_component_geometry(editor)
+        for element in [element_class(editor, row["ref"])]
         for pin in row["pins"]
     ]
     labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
     wires = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wire_segments_of(editor)]
-    return {
-        frozenset(f"{ref}.{order}" for ref, order in on_net)
-        for on_net, _names in signature(pins, labels, wires)
-    }
+    drawn = signature(pins, labels, wires)
+    assert drawn.uncompared == frozenset(), drawn.uncompared
+    return {frozenset(f"{ref}.{order}" for ref, order in on_net) for on_net, _names in drawn.groups}
 
 
 @pytest.mark.parametrize(
@@ -2704,10 +2712,9 @@ def test_a_block_sheets_directives_go_inside_its_subcircuit(build: str):
     assert set(scoped.values()) == {("hier_directives",)}, scoped
 
 
-#: An A-device's pins that touch nothing: both builds export each as node 0,
-#: with the pin on the ground flag. The server's nets leave each on a net of
-#: its own.
-OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY = frozenset({"a1.3", "a1.4", "a1.5", "a1.6", "a1.8"})
+#: The A-device pins LTspice writes as node 0: pins 3, 4, 6, 8 have nothing
+#: on them; pin 5 is on a ground flag.
+A_DEVICE_PINS_LTSPICE_WRITES_AS_NODE_0 = frozenset({"a1.3", "a1.4", "a1.5", "a1.6", "a1.8"})
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -2715,9 +2722,80 @@ def test_an_a_device_pin_on_nothing_is_exported_as_ground(build: str, tmp_path: 
     case_id = "export/adevice_open_pin"
     assert exported_bodies(build, case_id)[0] == "A1 a b 0 0 0 0 y 0 AND"
     exported = exported_groups(build, case_id)
-    assert OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY in exported
-    modelled = modelled_groups(rec.stage_sheet(build, case_id, tmp_path))
-    assert OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY not in modelled
-    assert {pin for group in modelled if len(group) == 1 for pin in group} >= (
-        OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY
-    )
+    assert A_DEVICE_PINS_LTSPICE_WRITES_AS_NODE_0 in exported
+    assert modelled_groups(rec.stage_sheet(build, case_id, tmp_path)) == exported
+
+
+#: The recorded sheets with an A-device pin that nothing is on whose symbols
+#: are all beside the sheet. ``tests/test_a_device_open_pins.py`` covers the
+#: rest: the stock AND gate
+#: (``test_the_stock_and_gate_groups_as_ltspice_exported_it``), the other
+#: letters (``test_every_other_recorded_letter_numbers_its_open_pins``) and the
+#: block, whose pins are compared with its subcircuit body
+#: (``test_the_open_pins_of_an_a_device_inside_a_block_are_the_subcircuits``).
+A_DEVICE_OPEN = [
+    case_id
+    for case_id in rec.cases_of("a-device-open-pin") + rec.cases_of("a-device-open-pin-forms")
+    if case_id
+    not in {
+        "export/adevice_open_pin_stock_and",
+        "export/adevice_block_top",
+        "export/open_pin_letters",
+        "export/open_pin_controlled",
+    }
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(A_DEVICE_OPEN)))
+def test_a_pin_with_nothing_on_it_is_on_the_node_ltspice_writes_for_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """The partition and the signature both put each open pin on the node the
+    export writes for it: node 0 for an A-device, a node of its own for any
+    other part."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    exported = exported_groups(build, case_id)
+    assert netlisted_groups(sheet) == exported
+    assert modelled_groups(sheet) == exported
+
+
+@pytest.mark.parametrize(
+    ("case_id", "open_pins"),
+    [
+        ("export/adevice_open_pin", {"A1": ("3", "4", "6", "8")}),
+        ("export/adevice_open_pin_three", {"A1": ("2", "3")}),
+        ("export/adevice_open_pin_loose_wire", {"A1": ("2", "4", "5", "6", "8")}),
+        ("export/adevice_two_open", {"A1": ("3", "4", "5", "6", "8"), "A2": ("3", "4", "5", "6", "8")}),
+        ("export/adevice_prefix_by_attribute", {"A1": ("A", "B"), "A2": ("a", "b", "c", "d")}),
+        ("export/adevice_prefix_lower_case", {"a1": ("a", "b", "c", "d")}),
+        (
+            "export/adevice_stacked_pins",
+            {"A1": tuple("12345678"), "A2": tuple("12345678")},
+        ),
+    ],
+)
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_both_tools_name_the_a_device_pins_ltspice_writes_as_node_0(
+    build: str, case_id: str, open_pins: dict[str, tuple[str, ...]], tmp_path: Path
+):
+    """Each A-device with open pins gets one finding that names them in
+    SpiceOrder, and none of them is called floating: the export writes each
+    as node 0, the node of a pin on ground."""
+    exported = rec.export_instances(build, case_id)
+    for reference, names in open_pins.items():
+        card = exported_card(build, case_id, reference)
+        assert card.nodes.count("0") >= len(names), (reference, card.nodes)
+    assert set(exported) == {canon_ref(reference) for reference in open_pins}
+
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    from_the_editor = sheet_findings(_editor(sheet))
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    from_the_checker = findings(sheet_view(scene), ["floating_pin", "a_device_open_pins"])
+    for found in (from_the_editor, from_the_checker):
+        assert [one for one in found if one.rule == "floating_pin"] == []
+        assert {
+            one.refs[0]: one.facts["pins"] for one in found if one.rule == "a_device_open_pins"
+        } == open_pins
+        assert {
+            one.facts["node"] for one in found if one.rule == "a_device_open_pins"
+        } == {"0"}

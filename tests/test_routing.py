@@ -31,7 +31,7 @@ def sheet(
 ) -> tuple[SheetView, NamedNets]:
     view = SheetView(parts=parts, wires=wires, labels=labels)
     nets = named_nets(
-        [(part.ref, [(name, (x, y)) for name, x, y in part.pins]) for part in parts],
+        [(part.ref, [(name, (x, y)) for name, x, y in part.pins], part.ref[0]) for part in parts],
         [((x, y), text) for x, y, text in labels],
         [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wires],
     )

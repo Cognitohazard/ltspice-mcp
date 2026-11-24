@@ -904,7 +904,11 @@ def sheet_nets(
     op would leave it before the op changes it.
     """
     parts = [
-        (entry["ref"], [(pin["name"], (pin["x"], pin["y"])) for pin in entry["pins"]])
+        (
+            entry["ref"],
+            [(pin["name"], (pin["x"], pin["y"])) for pin in entry["pins"]],
+            element_class(editor, entry["ref"]),
+        )
         for entry in (collect_component_geometry(editor) if geometry is None else geometry)
         if entry["ref"] != without
     ]
@@ -1854,6 +1858,7 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
                     (pin["name"], shifted((pin["x"], pin["y"]), entry["ref"] in moved_parts))
                     for pin in entry["pins"]
                 ],
+                element_class(editor, entry["ref"]),
             )
             for entry in geometry.values()
         ],
@@ -2165,8 +2170,9 @@ def _pins_on_crossings(
     others = [entry for entry in collect_component_geometry(editor) if entry["ref"] != reference]
     nets = sheet_nets(editor, geometry=others)
     after = sheet_nets(editor, geometry=[*others, {"ref": reference, "pins": list(pins)}])
+    landing = {(one.part, one.order): one for one in after.pins}
     for order, pin, through in on_wires:
-        landed = PinAt((pin["x"], pin["y"]), len(others), order, reference, pin["name"])
+        landed = landing[len(others), order]
         # Each net it lands on is known by the names that net carries itself
         # (NamedNets.own_names), as for a label.
         joined = sorted(
