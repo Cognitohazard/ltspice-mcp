@@ -1568,9 +1568,12 @@ inputs = ["deck/meas_subckt_node_x.cir", "deck/meas_subckt_node_no_x.cir"]
 
 [behaviour.save-subckt-dotted]
 summary = "Whether a .save and a .meas read a node inside a subcircuit instance spelled with a dot (xamp.mid), as ngspice spells it, as the build's own spelling with a colon."
-model = ["lib/device_names.py", "lib/lint_rules.py"]
+model = ["lib/device_names.py", "lib/lint_rules.py", "lib/result_observations.py"]
 # mid is the middle of a 1k/1k divider on a 1 V step: the raw holds V(xamp:mid)
 # (or V(amp:mid)) and the .meas reads 0.5 if the dot is read as a colon.
+# Recorded: neither build reads the dot as a colon. Each raw holds only V(in);
+# LTspice 26 logs "Voltage not found." and XVII FAIL'ed for the .meas, and
+# XVII does not refuse the .save for it.
 inputs = ["deck/save_subckt_dotted.cir"]
 
 [behaviour.node-name-nonascii-case]
