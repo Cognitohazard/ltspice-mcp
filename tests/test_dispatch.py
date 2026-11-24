@@ -141,7 +141,7 @@ _DECLARED_INVERSES: dict[str, str] = {
     "add_directive": "remove_directive",
     "remove_directive": "add_directive",
     # Re-applied with its result's x and y, now as instruction and was as text,
-    # it puts the text back.
+    # it puts the text back; after a find edit, now as find and was as text.
     "replace_directive": _SELF_INVERSE,
     # Re-applied with its result's was as the symbol, it puts the symbol back;
     # the wires it drew stay, for remove_wire.
@@ -172,9 +172,9 @@ class TestOpInverseClosure:
     """The schematic-editing OP surface must be closed under inversion: for every
     op that mutates the .asc, an inverse op exists (or it is self-inverse). This
     is a SURFACE guard — it asserts an undo *capability* exists, not that state
-    round-trips byte-for-byte (e.g. remove_component(cleanup_wires=true) drops
-    wires add_component will not restore; reset_schematic is the recovery hatch
-    for those). It is scoped to the apply_schematic_ops op union; the standalone
+    round-trips byte-for-byte (e.g. remove_component(cleanup_wires=true) is
+    undone by add_component, then wire_pins over its result's removed_wires and
+    add_net_label over its removed_labels). It is scoped to the apply_schematic_ops op union; the standalone
     mutating tools are guarded separately by TestMutatingToolsAreReversible.
     Absence-class gaps have no happy path to stress-test, so a missing inverse
     ships silently (as remove_wire/remove_net_label once did) — asserting the

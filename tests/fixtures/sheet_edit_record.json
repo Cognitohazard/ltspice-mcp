@@ -18,6 +18,15 @@
    "tests/test_edit_schematic.py::test_an_edit_reports_what_it_introduced_and_counts_the_rest"
   ]
  },
+ "02038584de79f6d8": {
+  "answer": {
+   "reply": "962dbd6da763b99a",
+   "sheet": "e96a58751c84ec0a"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_wires_between_labels_of_one_name_stay_as_wiring_joins_them"
+  ]
+ },
  "0288ad349ee9895b": {
   "answer": {
    "reply": "d7a56fc64302254b",
@@ -44,6 +53,15 @@
   },
   "tests": [
    "tests/test_edge_cases.py::TestWirePinsZeroLength::test_self_loop_rejected"
+  ]
+ },
+ "03bf5183481ffc27": {
+  "answer": {
+   "reply": "fbad35d185803b56",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_an_op_looking_for_words_an_earlier_op_took_is_refused"
   ]
  },
  "03d8b426a88c348f": {
@@ -102,6 +120,15 @@
    "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[plot panes only]"
   ]
  },
+ "097f9cbf402b3cbb": {
+  "answer": {
+   "reply": "4c6ebc7ed7d9920f",
+   "sheet": "978168eb0ad4a325"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_wires_to_two_labels_of_one_name_off_any_pin_stay"
+  ]
+ },
  "0a0920044ddbe2a6": {
   "answer": {
    "reply": "09ad7ea1f774182d",
@@ -110,6 +137,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_second_pin-labelled]",
    "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_second_pin-labelled]"
+  ]
+ },
+ "0b1c24786b026ec8": {
+  "answer": {
+   "reply": "102473bd9d4c8623",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_loop_from_the_pin_goes_whole"
   ]
  },
  "0b3ad8c69693fe94": {
@@ -274,6 +310,15 @@
    "tests/test_edit_schematic.py::test_op_less_read_needs_no_expected_sha"
   ]
  },
+ "1041ac5e9e11302e": {
+  "answer": {
+   "reply": "516914505fdfdd36",
+   "sheet": "f8080604de39c2ac"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_a_wire_on_a_pin_another_part_shares_stays_on_that_pin"
+  ]
+ },
  "10773c27fff0b39b": {
   "answer": {
    "reply": "e74e8cc3e17e4321",
@@ -290,6 +335,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_an_edit_names_the_record_and_its_line[-empty]"
+  ]
+ },
+ "117ffa80da31383c": {
+  "answer": {
+   "reply": "ae6cee5898d3517b",
+   "sheet": "6c6ab94b03231648"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
   ]
  },
  "13c2e21dc0562fc2": {
@@ -364,6 +418,24 @@
   },
   "tests": [
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[vcvs_stage_labelled]"
+  ]
+ },
+ "1678edc1430e1b45": {
+  "answer": {
+   "reply": "671677b78dfa6396",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_a_wire_moved_away_earlier_in_the_batch_is_not_said_removed"
+  ]
+ },
+ "1743294a8d49c811": {
+  "answer": {
+   "reply": "6cb46afc37c344d0",
+   "sheet": "6235692e78c45cfe"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_the_reverse_call_restores_the_record_byte_for_byte"
   ]
  },
  "186adc1447eb192a": {
@@ -486,6 +558,15 @@
    "tests/test_edit_schematic.py::test_an_equivalent_comparison_commits_and_leaves_the_netlist_out[file]"
   ]
  },
+ "1c6a16e40f111919": {
+  "answer": {
+   "reply": "5de202bd0c6004e3",
+   "sheet": "e0a8aa7acd9b20b5"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_cp1252_sheet_is_written_in_cp1252"
+  ]
+ },
  "1cabc2ada90c7b1a": {
   "answer": {
    "reply": "1d9a03d99bb69d92",
@@ -502,6 +583,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::TestDataFlagPreservation::test_an_edit_keeps_the_data_flags_on_disk"
+  ]
+ },
+ "1dc12d8485b5aec5": {
+  "answer": {
+   "reply": "1eb6eb30aa388967",
+   "sheet": "376255a809d7f5b7"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
   ]
  },
  "1dfb74428729788d": {
@@ -569,6 +659,15 @@
    "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/library_folder_named]"
   ]
  },
+ "20a887bd763591fc": {
+  "answer": {
+   "reply": "5b644a034c4047ac",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_each_copy_of_a_drawn_twice_wire_is_listed"
+  ]
+ },
  "212ca8c6790598e3": {
   "answer": {
    "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
@@ -633,6 +732,15 @@
    "tests/test_edit_schematic.py::test_missing_expected_sha_refusal_hands_back_the_current_digest"
   ]
  },
+ "242f89bdc3c7add8": {
+  "answer": {
+   "reply": "d8f7b195711a4516",
+   "sheet": "def91da6b4946f43"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[old-text-ends-in-a-break]"
+  ]
+ },
  "25300c274ae95854": {
   "answer": {
    "reply": "a486c0a0a8f9f4e3",
@@ -667,6 +775,15 @@
   },
   "tests": [
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rc_lowpass_drawn]"
+  ]
+ },
+ "26dd2b246c5e110b": {
+  "answer": {
+   "reply": "e6435671caad81c6",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_chain_from_the_pin_to_nothing_goes_whole"
   ]
  },
  "282bedee7f0b2ce4": {
@@ -750,6 +867,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[holding a sheet of the block's name-gone]"
   ]
  },
+ "2df07f3c6190d0e4": {
+  "answer": {
+   "reply": "a830a423b540090a",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_label_on_the_pin_itself_goes"
+  ]
+ },
  "2e1957892a2cf06e": {
   "answer": {
    "reply": "f2f8e9a1a70f8180",
@@ -776,6 +902,15 @@
   },
   "tests": [
    "tests/test_circuit_asc.py::TestEmptyAttributeHandling::test_edit_schematic_refuses_an_empty_value_without_writing"
+  ]
+ },
+ "2eed4f0fede8b24f": {
+  "answer": {
+   "reply": "6c3c63734e438ceb",
+   "sheet": "9757ebe4480722b5"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_direct_wire_to_a_lone_pin_goes"
   ]
  },
  "2f2f05aa84eb3e6c": {
@@ -839,6 +974,15 @@
   },
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_compared_with_its_export_names_its_unlabelled_nets[ltspice17]"
+  ]
+ },
+ "33b78b1d6069b550": {
+  "answer": {
+   "reply": "1c4de71c62bd9b3b",
+   "sheet": "0caa8e7da9b053bc"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_wires_that_join_two_pins_at_a_point_the_walk_reached_stay"
   ]
  },
  "347d138af5a9684d": {
@@ -932,6 +1076,15 @@
   },
   "tests": [
    "tests/test_edit_open_window.py::test_window_pid_goes_with_a_save[discard]"
+  ]
+ },
+ "3bf09ba34882ec5d": {
+  "answer": {
+   "reply": "4d4b9c70114135b2",
+   "sheet": "c0f3531aa6e12659"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[now-twice]"
   ]
  },
  "3c96f67f8a9ba691": {
@@ -1147,6 +1300,15 @@
    "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-source-symbol-made-a-current-source]"
   ]
  },
+ "46d9422580a192c4": {
+  "answer": {
+   "reply": "ee39cafc837514b5",
+   "sheet": "c5c8427117667247"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[text-begins-regex]"
+  ]
+ },
  "47520cd2f71bcf5f": {
   "answer": {
    "reply": "9582e655cf957d5d",
@@ -1163,6 +1325,15 @@
   },
   "tests": [
    "tests/test_reported_behaviours.py::test_one_batch_removes_a_comment_rewrites_a_directive_and_checks_equivalence"
+  ]
+ },
+ "48831f35a01d9074": {
+  "answer": {
+   "reply": "5334d3c3e0908b1f",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_wire_on_to_a_ground_flag_goes_with_the_flag"
   ]
  },
  "48934a41d8835fa0": {
@@ -1343,6 +1514,15 @@
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[move_component]"
   ]
  },
+ "54229bbe7ba1256e": {
+  "answer": {
+   "reply": "7e062ef030f564c2",
+   "sheet": "994a45ddc5a1930c"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_cleanup_off_takes_nothing_and_reports_nothing"
+  ]
+ },
  "557660cf5e631e78": {
   "answer": {
    "reply": "8f544ae360301a63",
@@ -1429,6 +1609,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_empty_ops_with_views_reads_the_sheet"
+  ]
+ },
+ "5c212772473f6b64": {
+  "answer": {
+   "reply": "d5f3fd9b5dc835cf",
+   "sheet": "696eb8e55d1658c0"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_two_wires_that_met_at_the_pin_still_meet"
   ]
  },
  "5c773e098663d5fa": {
@@ -1538,6 +1727,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_library_symbol_redrawn_between_edits_is_read_again"
+  ]
+ },
+ "6234c8274508c39e": {
+  "answer": {
+   "reply": "59310bba925dbb30",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_dry_run_reports_as_a_commit_and_its_later_ops_see_the_change"
   ]
  },
  "6238091d44cca299": {
@@ -1720,6 +1918,24 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/diagonal_wire_interior]"
   ]
  },
+ "697227684ad07066": {
+  "answer": {
+   "reply": "c7856abc8d7b5cd5",
+   "sheet": "0caa8e7da9b053bc"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_reversed_records_give_the_same_reply"
+  ]
+ },
+ "6b5e3ccf0639dc7c": {
+  "answer": {
+   "reply": "8e1f11e79ec75ea5",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_a_removal_of_what_the_cleanup_took_says_which_op_took_it"
+  ]
+ },
  "6baebd583c0ffda3": {
   "answer": {
    "reply": "88ee824307c1910d",
@@ -1857,6 +2073,15 @@
    "tests/test_circuit_asc.py::TestNoEditSplitsANetItWasNotAskedTo::test_a_route_over_a_pin_already_on_its_net_is_not_said_to_join_it"
   ]
  },
+ "71dfd8f25a23dbd0": {
+  "answer": {
+   "reply": "20aec31749f19745",
+   "sheet": "7b1e2d0f93b5f68c"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_label_the_taken_wire_leaves_on_nothing_goes_with_it"
+  ]
+ },
  "721e38944487c29c": {
   "answer": {
    "reply": "260db9345109dc96",
@@ -1894,6 +2119,15 @@
    "tests/test_edit_schematic.py::test_reference_structural_diff_reports_the_delta"
   ]
  },
+ "73113f6d9ab1d38a": {
+  "answer": {
+   "reply": "6e40ecd78797dfa4",
+   "sheet": "2cea0028ab498abb"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
+  ]
+ },
  "735a50064b630a31": {
   "answer": {
    "reply": "8e2ca84c743213fc",
@@ -1902,6 +2136,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/collinear_overlap]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/collinear_overlap]"
+  ]
+ },
+ "738f514b728b50db": {
+  "answer": {
+   "reply": "4b104fd5f6f7aaad",
+   "sheet": "bed9c6cced91d89c"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_crlf_sheet_is_written_as_a_whole_text_edit_writes_it"
   ]
  },
  "73aa8cdaaa1c956b": {
@@ -2023,6 +2266,15 @@
    "tests/test_set_plot_panes.py::test_a_dry_run_reports_and_writes_nothing"
   ]
  },
+ "7bd7e50c1a0a8656": {
+  "answer": {
+   "reply": "9b1e596ae0efdabc",
+   "sheet": "a2c85c35638158fc"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
+  ]
+ },
  "7c0088d2748054a5": {
   "answer": {
    "reply": "4c80a61703357693",
@@ -2067,6 +2319,15 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[noise-Noise Spectral Density - (V/Hz\\xbd or A/Hz\\xbd)-scales1]"
+  ]
+ },
+ "7d78f5ac7bab3d1d": {
+  "answer": {
+   "reply": "b054129d0cace1e1",
+   "sheet": "1565a5bcb1800dfb"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupKeeps::test_a_wire_from_a_ground_flag_on_the_pin_stays"
   ]
  },
  "7db9e7bd8eff0e21": {
@@ -2198,6 +2459,15 @@
    "tests/test_post_op_warnings.py::TestReadabilityWarnings::test_wiring_profile_counts_wired_pins"
   ]
  },
+ "8744fbf07d2435a2": {
+  "answer": {
+   "reply": "afc0d30435592f9a",
+   "sheet": "1f3521b2aa65498a"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_reversed_records_give_the_same_reply"
+  ]
+ },
  "8745bfb504716d09": {
   "answer": {
    "reply": "56671e749019be71",
@@ -2205,6 +2475,15 @@
   },
   "tests": [
    "tests/test_reported_behaviours.py::test_an_edit_that_changes_model_lines_compares_equivalent_with_its_reference"
+  ]
+ },
+ "87b27d203b27ee80": {
+  "answer": {
+   "reply": "5d5d76452927b676",
+   "sheet": "9757ebe4480722b5"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_both_forms_of_remove_wire_name_the_op_that_took_a_wire_drawn_in_the_batch"
   ]
  },
  "880866ff6f0f7bba": {
@@ -2346,6 +2625,15 @@
    "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on"
   ]
  },
+ "8e4dd4e73da6db3b": {
+  "answer": {
+   "reply": "cdfe443b5677eaf8",
+   "sheet": "cfde6e5643938e2f"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_nothing_past_a_wire_end_that_holds_a_label_is_touched"
+  ]
+ },
  "8e7c8122ead4c544": {
   "answer": {
    "reply": "e38ef66af9a5da0c",
@@ -2400,6 +2688,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-resistor-symbol-made-a-source]"
+  ]
+ },
+ "910244cc6febfe7e": {
+  "answer": {
+   "reply": "5aa28bea4a59b4ca",
+   "sheet": "aa1e280e0d2fb89b"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[line-left-empty]"
   ]
  },
  "92d86276a120bbfb": {
@@ -2568,6 +2865,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[sallen_key_labelled]"
   ]
  },
+ "9be3eef8daf9db23": {
+  "answer": {
+   "reply": "9eb901a269ccbb76",
+   "sheet": "b82aa0aee4cfaaa6"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[line-left-empty]"
+  ]
+ },
  "9c5dd49cd8c19ae3": {
   "answer": {
    "reply": "d1cc31fcabd785f2",
@@ -2656,6 +2962,15 @@
   },
   "tests": [
    "tests/test_parallel_sessions.py::TestCircuitFileLock::test_a_plot_panes_edit_locks_the_plot_settings_file"
+  ]
+ },
+ "a2b7b897affba191": {
+  "answer": {
+   "reply": "f589886f66578b10",
+   "sheet": "b230d39e26051c2d"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
   ]
  },
  "a2c55b3727cdcbd1": {
@@ -2796,6 +3111,24 @@
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component value]"
   ]
  },
+ "a82d14c70f5dd489": {
+  "answer": {
+   "reply": "4ab0f40746a8a5ed",
+   "sheet": "0aa829d47b313c60"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_dry_run_reports_as_a_commit_and_its_later_ops_see_the_change"
+  ]
+ },
+ "a83cbf5e2b736e82": {
+  "answer": {
+   "reply": "4858bbc34e26376a",
+   "sheet": "adeb71632f8c9a44"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_chain_to_a_lone_pin_leaves_that_pin_floating"
+  ]
+ },
  "a87fe321057fbe0f": {
   "answer": {
    "reply": "bbf6a3a451e47f55",
@@ -2887,6 +3220,15 @@
   },
   "tests": [
    "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_net_trace_shows_the_file"
+  ]
+ },
+ "ac312effe30915c8": {
+  "answer": {
+   "reply": "46bb43c0a5d4ae8f",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_removing_both_parts_with_cleanup_takes_the_wiring_once"
   ]
  },
  "acf14994712eb346": {
@@ -3049,6 +3391,24 @@
    "tests/test_edit_schematic.py::test_the_python_seam_scopes_the_same_way_and_completes_the_view"
   ]
  },
+ "b5e57dde0e68a9d7": {
+  "answer": {
+   "reply": "1410e63215abf3a4",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_cleanup_on_the_second_part_alone_walks_through_the_first_ones_pin"
+  ]
+ },
+ "b6b374c0e2139874": {
+  "answer": {
+   "reply": "fe262d0f135c4f3c",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_old_words_a_write_would_refuse_get_no_undo_but_the_reason"
+  ]
+ },
  "b7d3281bdd711d97": {
   "answer": {
    "reply": "fc7522849f3813f6",
@@ -3204,6 +3564,15 @@
    "tests/test_edit_schematic.py::test_post_commit_reference_error_returns_committed_envelope"
   ]
  },
+ "c12db5ca6c9f4659": {
+  "answer": {
+   "reply": "43cb2ab898689c84",
+   "sheet": "d534426f36f7c976"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_old_words_a_write_would_refuse_get_no_undo_but_the_reason"
+  ]
+ },
  "c16810207025819d": {
   "answer": {
    "reply": "67d06ab732f078f1",
@@ -3246,6 +3615,15 @@
    "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_component_listing_shows_the_file"
   ]
  },
+ "c2a8bb886f3875d5": {
+  "answer": {
+   "reply": "3c0c529a20ae7996",
+   "sheet": "a2c85c35638158fc"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
+  ]
+ },
  "c2ef9dc91b06b977": {
   "answer": {
    "reply": "0a291a96b210a73a",
@@ -3262,6 +3640,15 @@
   },
   "tests": [
    "tests/test_circuit_asc.py::TestRemoveComponentNoFalseOrphans::test_other_component_pin_not_flagged"
+  ]
+ },
+ "c4a4b3088bec07c7": {
+  "answer": {
+   "reply": "a9e5949d2b1ceb96",
+   "sheet": "46d3e2ff5aa968c7"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
   ]
  },
  "c4cad6c8ed355cd4": {
@@ -3324,6 +3711,15 @@
   "platform": "windows",
   "tests": [
    "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
+  ]
+ },
+ "c724bc2b25cc8a51": {
+  "answer": {
+   "reply": "eb7c64f494fc5a75",
+   "sheet": "c376d27e54d9024f"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[text-begins-regex]"
   ]
  },
  "c77db94b400b78d7": {
@@ -3396,6 +3792,15 @@
   },
   "tests": [
    "tests/test_circuit_asc.py::TestWirePinsTJunction::test_a_label_then_a_wire_to_it_in_one_batch_leaves_nothing_loose"
+  ]
+ },
+ "ce83de869ccb0293": {
+  "answer": {
+   "reply": "7a55a1452b1aefa2",
+   "sheet": "963601b69bc1109d"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
   ]
  },
  "cf90017ff085bd97": {
@@ -3545,6 +3950,15 @@
    "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_value]"
   ]
  },
+ "d88266ae47dcc236": {
+  "answer": {
+   "reply": "5048c189e2c1b0bc",
+   "sheet": "9206da277cf7f99b"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[old-text-ends-in-a-break]"
+  ]
+ },
  "daf6cfa941c166e1": {
   "answer": {
    "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
@@ -3561,6 +3975,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs"
+  ]
+ },
+ "db880ad35f8e679e": {
+  "answer": {
+   "reply": "d06dc6622235ee5e",
+   "sheet": "9757ebe4480722b5"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_chain_to_a_lone_pin_goes_whole"
   ]
  },
  "dba8c02c0d9b52bb": {
@@ -3582,6 +4005,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_case_separate_wires]"
   ]
  },
+ "dc657ce0afb63456": {
+  "answer": {
+   "reply": "ad93230852f76518",
+   "sheet": "888b77594921bfe0"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_chained_batch_applies_in_order"
+  ]
+ },
  "e0d6d2fa5889688f": {
   "answer": {
    "reply": "40bcea797eca185f",
@@ -3599,6 +4031,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_record_in_a_sheet_the_target_loads_names_that_sheet"
+  ]
+ },
+ "e1926262379df960": {
+  "answer": {
+   "reply": "35e1ff4fa888f996",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_character_cp1252_lacks_is_refused_and_nothing_is_written"
   ]
  },
  "e2a92b73197a9159": {
@@ -3779,6 +4220,15 @@
    "tests/test_edit_schematic.py::test_view_pagination_cursor_resumption"
   ]
  },
+ "ea9bf2cf2baf3089": {
+  "answer": {
+   "reply": "53fb795608e45280",
+   "sheet": "e2119df623d7d696"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_loop_through_a_pin_of_another_part_goes_whole"
+  ]
+ },
  "eaceff9ef1f9fdfe": {
   "answer": {
    "reply": "7c21440fd3aada9b",
@@ -3796,6 +4246,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/wire_end_on_vertical_wire_interior]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_end_on_vertical_wire_interior]"
+  ]
+ },
+ "eb96d5d34ca1cc53": {
+  "answer": {
+   "reply": "da9e28ce8dc09ee3",
+   "sheet": "bed9c6cced91d89c"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_crlf_sheet_is_written_as_a_whole_text_edit_writes_it"
   ]
  },
  "ebbed1d26e34bfea": {
@@ -3886,6 +4345,24 @@
   ],
   "varies": true
  },
+ "f0e2ed70d0f06b22": {
+  "answer": {
+   "reply": "8e25f9912e1e62ce",
+   "sheet": "9d34e089abd619cd"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[now-twice]"
+  ]
+ },
+ "f1013df5f9d18002": {
+  "answer": {
+   "reply": "d5109bf9e506a123",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_a_dry_run_keeps_the_same_record"
+  ]
+ },
  "f15f26e5915d467b": {
   "answer": {
    "reply": "ff7a0981212bf877",
@@ -3893,6 +4370,15 @@
   },
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_value_for_a_source_that_plays_a_file_on_a_sheet"
+  ]
+ },
+ "f1a8cfdcd46dc357": {
+  "answer": {
+   "reply": "7117c247d623d999",
+   "sheet": "cfde6e5643938e2f"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_a_later_call_names_the_wires_still_at_the_ends_it_named"
   ]
  },
  "f1bea3b6d0f2ab59": {
@@ -3974,6 +4460,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
+  ]
+ },
+ "f83941293ef836b8": {
+  "answer": {
+   "reply": "04f1a6bb26dfdb40",
+   "sheet": "3993c8aff400ea83"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_the_reverse_call_restores_the_record_byte_for_byte"
   ]
  },
  "f863e58c7583c288": {
@@ -4109,6 +4604,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_attribute]"
+  ]
+ },
+ "ff8f84cc23ae69e8": {
+  "answer": {
+   "reply": "3a0f5b81368e4faf",
+   "sheet": "69145669f0de6249"
+  },
+  "tests": [
+   "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_a_later_call_that_removes_what_the_cleanup_took_is_refused"
   ]
  },
  "ffa010f1f58ba95b": {

@@ -495,6 +495,8 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "change a directive",
         "edit a directive",
         "change a .model",
+        "change one value of a directive",
+        ".param",
     ),
     ("edit_schematic", "set_plot_panes"): (
         "plot settings",

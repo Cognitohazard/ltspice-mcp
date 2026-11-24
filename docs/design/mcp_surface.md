@@ -2047,8 +2047,11 @@ lists the segments it found `already_present` and the `junctions` it made,
 and a removal's entry reports how much it removed; `remove_directive`'s
 entry names each text it removed, with its kind and place (`removed_texts`),
 and `replace_directive`'s gives the text it changed, with its kind and place
-and what it `was` and is `now`. A text is given as it reads, a line break as
-a line break.
+and what it `was` and is `now`. After a `find` edit, `line` is the first line
+it touched (from 1), `was` and `now` hold only the touched lines, and `undo`
+is the op that puts the words back, or `undo_refused` says why a write of the
+old words would be refused. A text is
+given as it reads, a line break as a line break.
 Everything else an op reports is in the views. `applied` counts the ops the
 batch applied, every op of a committed batch, so an op with nothing to report
 is counted though it has no `results` entry. `results` is not a page because,
@@ -3199,10 +3202,25 @@ symbol back; the wires it drew stay, for `remove_wire`.
 `remove_wire` removes an exact segment; a segment drawn more than once goes
 whole, and is refused when that would cut its net in two, since asking to
 remove a duplicate is not asking to cut a connection. `remove_component` takes
-`cleanup_wires` to also delete the wires its removal leaves dangling: a wire
-with an end on one of its pins goes when taking it away parts nothing it
-joins by wire, so a wire that still joins two or more pins or labels (another
-wire's, at the pin, or ones along it) stays.
+`cleanup_wires` to also delete what its removal leaves dangling, and it is the
+only op that cleans up. The freed points are the part's pin points that no
+other part's pin is on. From them, until nothing changes: a wire with an end
+on a freed point goes unless taking it splits a net between pins and labels
+(`nets.net_change`), and each end of a taken wire that holds no pin and no
+label becomes a freed point. A label or ground flag on a freed point or along
+a taken wire goes when, on the sheet left, it sits on no pin and no wire.
+Nothing not reached from a freed point is touched, and the result does not
+depend on the order of the sheet's records. The op's result lists
+`removed_wires` (one per record taken), `removed_labels`, and `kept_wires`
+(each wire left with an end on a freed point or a pin; `joins` names one member
+of each piece of the net it holds together: its first pin in sheet order, else
+its first label, with the pieces in that order too, as `nets.net_change` lists
+them). Each is sent whole: it is bounded by the wires and labels reached from
+one part's own pins. Within one call, a `remove_wire` or `remove_net_label`
+whose target an earlier removal op took succeeds with `already_removed_by`
+(that op's index); a removal that finds nothing otherwise is refused, naming
+the wires at the given ends (ten, then how many more) or the pins and wires
+at the label's point, and pointing to `inspect(kind="net")` to list them.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either
@@ -3220,7 +3238,33 @@ on one anchor cannot be told apart, so one of them is moved first. A
 directive's new text is checked as `add_directive`'s is, and a refused op
 changes nothing. Applied again with its result's `x` and `y`, `now` as
 `instruction` and `was` as `text`, it puts the text back, unless `now` begins
-with `regex:`, which names a pattern.
+with `regex:`, which names a pattern. A new text that is empty or only white
+space is refused, naming `remove_directive`.
+
+With `find`, `replace_directive` changes only those words: `text` replaces
+them and the rest of the text stays. `find` and `text` are read as the text
+reads, CR and CRLF each one line break, and matched literally and
+case-sensitive. `find` is looked for in the one text `instruction` names
+(`x` and `y` picking among several), else in the texts anchored at `x` and
+`y`, else in every directive and comment on the sheet, and must be found
+exactly once. Not found, the refusal names the text `instruction` named and,
+when `find` is in the file's spelling, gives the reading form; found in
+several texts, it lists them (ten, then a count) and asks for `instruction`,
+or `x` and `y`; found several times in one text, it gives the count and up to
+ten line:column places and asks for a longer `find`. A directive's new whole
+text is checked as above; a comment is not. `instruction` is optional with
+`find`, and a call with neither is refused. Its result's `undo` is a
+`replace_directive` op that puts the words back and succeeds: `now` as `find`
+and `was` as `text`, at the text's `x` and `y`, when `now` is not empty and is
+found once among the texts there; otherwise the whole new text as
+`instruction` (a pattern of its record when it begins with `regex:`) and the
+whole old text as `text`. A whole-text edit strips its `text`, so when the old
+text begins or ends with a space or a line break, that op also gives the whole
+new text as `find`, and the old text comes back exactly. The check before a
+write wins over the reverse call: when the old text is one a write would
+refuse (an unrunnable directive the edit made runnable), the result gives no
+`undo` but `undo_refused`, the reason that check gives; the old words are
+still in `was`.
 
 A text is read as both LTspice builds read a TEXT record, which they draw and
 export alike (recorded as `text-backslash`): `\n` is a line break, even inside

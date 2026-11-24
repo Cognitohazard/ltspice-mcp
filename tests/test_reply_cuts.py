@@ -306,6 +306,12 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         _NOT_COMPARED
     ),
     **{
+        ("schematic_edit.handle_edit_schematic", f"results[].{key}"): (
+            "the wires and labels reached from one part's own pins"
+        )
+        for key in ("removed_wires", "removed_labels", "kept_wires")
+    },
+    **{
         (handler, path): _UNBOUNDED
         for handler in (
             "analysis.handle_plot_waveform",

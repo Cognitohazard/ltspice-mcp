@@ -69,6 +69,7 @@ from ltspice_mcp.lib.pin_legend import (
     find_label_only_pins,
     paginate_view,
 )
+from ltspice_mcp.lib.reply_cuts import CUT, NEVER
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
     KEEPS_WIRING,
@@ -426,9 +427,12 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "(requested segments already on the sheet, not redrawn) and "
                 "junctions (where the route joined existing wiring off its "
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
-                "report how much they took; remove_directive names each text it "
+                "report how much they took, or already_removed_by when an earlier op of "
+                "the batch took their target; remove_component with cleanup_wires names "
+                "each wire and label it took and each wire it kept, with why; remove_directive names each text it "
                 "removed in removed_texts, with its kind and place, and replace_directive "
-                "gives the text it changed, with what it was and what it is now. "
+                "gives the text it changed, with what it was and what it is now; "
+                "with find, was and now hold only the lines it touched, from line. "
                 "set_component_value and "
                 "set_component_attribute report each attribute they changed, with "
                 "what it was and what it is now (no was or now where the attribute is absent). set_plot_panes "
@@ -470,17 +474,95 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "required": ["kind", "text", "x", "y"],
                         },
                     },
-                    "deleted_wires": {"type": "integer"},
+                    "removed_wires": {
+                        "type": "array",
+                        "items": _SEGMENT_SCHEMA,
+                        CUT: NEVER,
+                        "description": "Each wire record remove_component's cleanup took.",
+                    },
+                    "removed_labels": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                            "required": ["text", "x", "y"],
+                        },
+                        CUT: NEVER,
+                        "description": (
+                            "Each label or ground flag the cleanup took: on the sheet "
+                            "left it sat on no pin and no wire."
+                        ),
+                    },
+                    "kept_wires": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "wire": _SEGMENT_SCHEMA,
+                                "joins": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "One member of each piece of the net this wire "
+                                        "holds together: its first pin in sheet order, "
+                                        "else its first label."
+                                    ),
+                                },
+                                "on_pin": {
+                                    "type": "string",
+                                    "description": "Another part's pin on the removed pin's point.",
+                                },
+                            },
+                            "required": ["wire"],
+                        },
+                        CUT: NEVER,
+                        "description": "Each wire the cleanup reached and kept, with why.",
+                    },
+                    "already_removed_by": {
+                        "type": "integer",
+                        "description": (
+                            "The index of the earlier op of this batch that already took "
+                            "what this removal names."
+                        ),
+                    },
                     "text": {
                         "type": "object",
                         "properties": {
                             "kind": {"type": "string", "enum": ["directive", "comment"]},
                             "x": {"type": "integer"},
                             "y": {"type": "integer"},
+                            "line": {"type": "integer"},
                             "was": {"type": "string"},
                             "now": {"type": "string"},
                         },
                         "required": ["kind", "x", "y", "was", "now"],
+                    },
+                    "undo": {
+                        "type": "object",
+                        "description": (
+                            "After a find edit: the replace_directive op that puts the "
+                            "words back."
+                        ),
+                        "properties": {
+                            "op": {"type": "string", "const": "replace_directive"},
+                            "x": {"type": "integer"},
+                            "y": {"type": "integer"},
+                            "find": {"type": "string"},
+                            "instruction": {"type": "string"},
+                            "text": {"type": "string"},
+                        },
+                        "required": ["op", "x", "y", "text"],
+                    },
+                    "undo_refused": {
+                        "type": "string",
+                        "description": (
+                            "After a find edit whose old words a write would refuse: "
+                            "why no undo is given. The old words are in the text's was."
+                        ),
                     },
                     "changed": {
                         "type": "object",
