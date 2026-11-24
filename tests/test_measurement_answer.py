@@ -43,6 +43,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
     printed_form,
     printed_measurements,
+    prints_measurement,
     read_log_text,
     result_unreadable,
 )
@@ -550,6 +551,27 @@ async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
                 assert _same(got, want), (cell.id, route, got, want)
         for route, named in fields.items():
             assert named[name] == field, (cell.id, route, named[name], field)
+
+
+@pytest.mark.parametrize(
+    "case_id", ["deck/pow_neg_base_cube_root", "deck/pow_neg_base_square_root"]
+)
+async def test_a_warning_that_quotes_a_param_is_no_measurement_on_any_route(
+    case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice XVII warns of a ``.param`` it cannot resolve by quoting it,
+    ``WARNING: Can't resolve .param p1=(-8)**(1/3)``, a line shaped like a
+    result line. LTspice prints every measurement's name in lower case on
+    both builds (``log/meas_grid_name_upper``), so a line headed
+    ``WARNING`` is the message, and no route reports a measurement for a deck
+    that measures nothing."""
+    text = read_log_text(rec.recorded("ltspice17", f"{case_id}.log"))
+    (warning,) = [line for line in text.splitlines() if line.startswith("WARNING: Can't resolve")]
+    assert not prints_measurement(warning)
+    assert printed_measurements(text) == {}
+    routes = await _every_route("ltspice17", case_id, state_no_sim, work_dir)
+    for route, answers in routes.items():
+        assert answers == {}, (route, answers)
 
 
 async def test_a_printed_value_that_is_not_a_number_says_what_the_log_printed_on_every_route(

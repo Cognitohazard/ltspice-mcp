@@ -185,6 +185,13 @@ _NGSPICE_NOTE_SKIP = {"compatibility modes selected"}
 # is dropped before it can pollute measurement_stats / the observation surfacer.
 _NGSPICE_TITLE_PSEUDO_MEAS = "circuit"
 
+# LTspice prints a measurement's name in lower case on both builds, whatever
+# case the deck wrote (recorded: log/meas_grid_name_upper), so a line headed by
+# one of these words in capitals is a message, never a result: XVII quotes a
+# ``.param`` it cannot resolve as ``WARNING: Can't resolve .param
+# p1=(-8)**(1/3)`` (deck/pow_neg_base_cube_root), shaped like a result line.
+_LTSPICE_MESSAGE_HEADS = frozenset({"WARNING", "ERROR"})
+
 # LTspice writes one ``.step <name>=<value>[, ...]`` line per iteration of a
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
 # RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
@@ -1252,7 +1259,11 @@ def _printed_on(line: str) -> tuple[str, PrintedMeasurement] | None:
     table of, by its name as printed, or None. The table's columns are left
     to :func:`printed_measurements`, which has the next line."""
     result = _RE_MEAS_RESULT_LINE.match(line)
-    if result is not None and result["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS:
+    if (
+        result is not None
+        and result["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS
+        and result["name"] not in _LTSPICE_MESSAGE_HEADS
+    ):
         return result["name"], PrintedMeasurement(
             result[0].strip(), result["value"] or result["word"]
         )
