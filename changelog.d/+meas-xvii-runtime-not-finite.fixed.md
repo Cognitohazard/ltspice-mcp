@@ -1,0 +1,1 @@
+An AC measurement LTspice XVII printed as `(-1.#INFdB,0°)` now reads as 0, and one printed as `(-1.#INDdB,-1.#IND°)` reads as a number that is not finite, instead of the step reading as text no route could use.

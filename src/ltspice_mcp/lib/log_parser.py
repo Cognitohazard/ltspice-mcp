@@ -5,6 +5,7 @@ For .raw file parsing (waveform data, statistics), see raw_parser.py.
 
 from __future__ import annotations
 
+import cmath
 import contextlib
 import io
 import logging
@@ -1870,6 +1871,28 @@ _RE_PRINTED_WITH_UNIT = re.compile(
     r"(?P<number>[-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
 )
 
+# LTspice XVII prints a number that is not finite as its C runtime spells
+# one: ``-1.#INF`` and ``-1.#IND``. An AC result keeps its
+# ``(<magnitude>dB,<angle>°)`` form, which spicelib then leaves as text: a
+# result of 0 is ``(-1.#INFdB,0°)``, one that is not a number
+# ``(-1.#INDdB,-1.#IND°)`` (the recorded log/meas_grid_ac_step_step_outcomes;
+# LTspice 26 prints the first as ``(-infdB,0°)``, which spicelib reads).
+_RUNTIME_NOT_FINITE = {"#INF": math.inf, "#IND": math.nan}
+_PRINTED_REAL = r"[-+]?(?:inf|1\.#(?:INF|IND)|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)"
+_RE_PRINTED_POLAR = re.compile(
+    rf"\((?P<db>{_PRINTED_REAL})dB,(?P<angle>{_PRINTED_REAL})°?\)", re.IGNORECASE
+)
+
+
+def _printed_real(text: str) -> float:
+    """A real number as LTspice printed it, its C runtime's spellings of a
+    number that is not finite included."""
+    _, hash_, kind = text.partition("#")
+    if not hash_:
+        return float(text)
+    value = _RUNTIME_NOT_FINITE["#" + kind.upper()]
+    return -value if text.startswith("-") else value
+
 
 #: The line LTspice 26 prints at the end of an unstepped frequency response
 #: analysis's log, one per analyzer (the recorded raw/fra):
@@ -1951,9 +1974,18 @@ def printed_fra_margins(text: str) -> list[dict[str, Any]]:
 
 def printed_measurement(value: str) -> float | None:
     """A measurement LTspice printed as a number with its unit, read as the
-    number (``90.6295°`` is 90.6295, ``infdB`` infinite); None for any other
-    text."""
-    match = _RE_PRINTED_WITH_UNIT.fullmatch(value.strip())
+    number (``90.6295°`` is 90.6295, ``infdB`` infinite), or as an AC result
+    spicelib left as text, read as :func:`_complex_measurement` reads one
+    (``(-1.#INFdB,0°)`` is 0, ``(-1.#INDdB,-1.#IND°)`` not a number); None
+    for any other text."""
+    text = value.strip()
+    if match := _RE_PRINTED_POLAR.fullmatch(text):
+        magnitude = 10 ** (_printed_real(match["db"]) / 20)
+        angle = _printed_real(match["angle"])
+        if not (math.isfinite(magnitude) and math.isfinite(angle)):
+            return magnitude if math.isinf(magnitude) and math.isfinite(angle) else math.nan
+        return _complex_measurement(cmath.rect(magnitude, math.radians(angle)))
+    match = _RE_PRINTED_WITH_UNIT.fullmatch(text)
     return float(match["number"]) if match else None
 
 

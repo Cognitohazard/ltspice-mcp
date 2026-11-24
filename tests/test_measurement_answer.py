@@ -48,6 +48,7 @@ from ltspice_mcp.lib.log_parser import (
     result_unreadable,
 )
 from ltspice_mcp.lib.metrics import measurements_at_step
+from ltspice_mcp.lib.presenter import resolve_pointer
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -210,6 +211,36 @@ def _inspect_said(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return said
 
 
+_RECIPE_ROWS = "/results/m/values"
+
+
+async def _whole_recipe(state: SessionState, source: dict[str, Any]) -> dict[str, Any]:
+    """The measurements recipe's reply over every step of ``source``, with the
+    rows of each page the reply was cut into, read through its continuation."""
+    reply = await dispatched(
+        state,
+        "analyze_results",
+        sources=[source],
+        recipes=_RECIPE,
+        all_steps=True,
+        include=_EACH_STEP,
+    )
+    cut = reply.get("cut", {})
+    assert set(cut) <= {_RECIPE_ROWS}, cut
+    rows = list(reply["results"]["m"].get("values", []))
+    entry = cut.get(_RECIPE_ROWS, {})
+    while "next" in entry:
+        page = await dispatched(
+            state,
+            "analyze_results",
+            **{"continue": {"result_set_id": reply["result_set_id"], "cursor": entry["next"]}},
+        )
+        rows.extend(resolve_pointer(page, _RECIPE_ROWS))
+        entry = page.get("cut", {}).get(_RECIPE_ROWS, {})
+    reply["results"]["m"]["values"] = rows
+    return reply
+
+
 async def _every_route(
     build: str,
     case_id: str,
@@ -227,14 +258,7 @@ async def _every_route(
     routes: dict[str, dict[str, Answer]] = {}
     named: Fields = {} if fields is None else fields
     told: Said = {} if said is None else said
-    reply = await dispatched(
-        state,
-        "analyze_results",
-        sources=[{"path": str(log), "label": "log"}],
-        recipes=_RECIPE,
-        all_steps=True,
-        include=_EACH_STEP,
-    )
+    reply = await _whole_recipe(state, {"path": str(log), "label": "log"})
     routes["recipe, by path"] = _recipe_answers(reply)
     told["recipe, by path"] = _recipe_said(reply)
     summary = await dispatched(
@@ -269,14 +293,7 @@ async def _every_route(
     # A run records its simulator's class name and the build it named.
     job.simulator = "LTspice"
     job.cases[0].simulator_version = rec.manifest(build)["reported_build"]
-    reply = await dispatched(
-        state,
-        "analyze_results",
-        sources=[{"job_id": job_id, "label": "job"}],
-        recipes=_RECIPE,
-        all_steps=True,
-        include=_EACH_STEP,
-    )
+    reply = await _whole_recipe(state, {"job_id": job_id, "label": "job"})
     routes["recipe, by job"] = _recipe_answers(reply)
     told["recipe, by job"] = _recipe_said(reply)
     by_job = await dispatched(
@@ -319,9 +336,18 @@ _NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
 #: under ``meascplxfmt=polar``, a complex result, real when its angle is 0 or
 #: 180 degrees; ``(<re>,<im>)`` under ``meascplxfmt=cartesian``, real when its
 #: imaginary part is 0; a number with its unit (``90.6295°``, ``infdB``).
-_POLAR = re.compile(rf"\(({_NUMBER}|[-+]?inf)(dB)?,({_NUMBER})\W*\)", re.IGNORECASE)
+# XVII prints a number that is not finite as its C runtime spells one
+# (``-1.#INF``, ``-1.#IND``; log/meas_grid_ac_step_step_outcomes).
+_NOT_FINITE = r"[-+]?(?:inf|1\.#INF|1\.#IND)"
+_POLAR = re.compile(
+    rf"\(({_NUMBER}|{_NOT_FINITE})(dB)?,({_NUMBER}|{_NOT_FINITE})\W*\)", re.IGNORECASE
+)
 _CARTESIAN = re.compile(rf"\(({_NUMBER}),({_NUMBER})\)", re.IGNORECASE)
 _WITH_UNIT = re.compile(rf"({_NUMBER}|[-+]?inf)(?:°|dB)", re.IGNORECASE)
+
+
+def _real(text: str) -> float:
+    return float(text.replace("1.#INF", "inf").replace("1.#IND", "nan"))
 
 
 def _printed_number(text: str, complex_format: str) -> float:
@@ -330,8 +356,10 @@ def _printed_number(text: str, complex_format: str) -> float:
         re_part, im_part = float(match[1]), float(match[2])
         return re_part if im_part == 0 else abs(complex(re_part, im_part))
     if match := _POLAR.fullmatch(text):
-        magnitude = 10 ** (float(match[1]) / 20) if match[2] else float(match[1])
-        angle = float(match[3]) % 360
+        magnitude = 10 ** (_real(match[1]) / 20) if match[2] else _real(match[1])
+        angle = _real(match[3]) % 360
+        if math.isnan(magnitude) or math.isnan(angle):
+            return math.nan
         if math.isclose(angle, 0, abs_tol=1e-6) or math.isclose(angle, 360, abs_tol=1e-6):
             return magnitude
         if math.isclose(angle, 180, abs_tol=1e-6):
@@ -1018,3 +1046,28 @@ async def test_a_stepped_run_whose_every_measurement_failed_reads_each_step_on_e
     routes = await _every_route(build, case_id, state_no_sim, work_dir)
     for route, answers in routes.items():
         assert answers["max_f"] == [None, None], (route, answers)
+
+
+async def test_an_ac_result_xvii_prints_in_its_runtime_spelling_reads_on_every_route(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """XVII prints an AC result of 0 as ``(-1.#INFdB,0°)`` and one that is not
+    a number as ``(-1.#INDdB,-1.#IND°)``
+    (``log/meas_grid_ac_step_step_outcomes``, second step). The first reads
+    as 0, as LTspice 26's ``(-infdB,0°)`` does, which in a row XVII printed
+    is a 0 not established as the result; the second as null, with a
+    statement that the log printed a number that is not finite, on every
+    route."""
+    case_id = "log/meas_grid_ac_step_step_outcomes"
+    text = read_log_text(rec.recorded("ltspice17", f"{case_id}.log"))
+    lines = text.splitlines()
+    assert "     2\t(-1.#INFdB,0°)\t2000\t8000" in lines
+    assert "     2\t(-1.#INDdB,-1.#IND°)\t2000\t8000" in lines
+    said: Said = {}
+    routes = await _every_route("ltspice17", case_id, state_no_sim, work_dir, said=said)
+    for route, answers in routes.items():
+        assert answers["max_sz"][1] == NOT_ESTABLISHED, (route, answers["max_sz"])
+        assert answers["param_sz"][1] == NOT_ESTABLISHED, (route, answers["param_sz"])
+        assert answers["pp_sz"][1] is None, (route, answers["pp_sz"])
+        reason = said[route]["pp_sz"]["unreadable"]["reason"]
+        assert "'(-1.#INDdB,-1.#IND°)', a number that is not finite" in reason, (route, reason)
