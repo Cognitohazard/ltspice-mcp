@@ -1000,3 +1000,21 @@ async def test_a_failed_step_of_a_table_with_bounds_reads_on_every_route(
         first, second = answers[name]
         assert isinstance(first, float), (route, answers[name])
         assert second is None, (route, answers[name])
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_stepped_run_whose_every_measurement_failed_reads_each_step_on_every_route(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped run whose every measurement failed at every step prints each
+    as one ``Measurement "max_f" FAIL'ed`` line and no table
+    (``log/meas_grid_tran_step_failed``, two ``.step`` lines). Each step's
+    row is read and each measurement failed at it, on every route, rather
+    than the measurements recipe refusing to pair a step with no table row."""
+    case_id = "log/meas_grid_tran_step_failed"
+    text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+    assert 'Measurement "max_f" FAIL\'ed' in text.splitlines()
+    assert sum(line.startswith(".step ") for line in text.splitlines()) == 2
+    routes = await _every_route(build, case_id, state_no_sim, work_dir)
+    for route, answers in routes.items():
+        assert answers["max_f"] == [None, None], (route, answers)

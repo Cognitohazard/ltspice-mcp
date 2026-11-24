@@ -2082,7 +2082,18 @@ def parse_measurements(
         # mode" is a *warning*-class diagnostic; without carrying it, callers
         # (e.g. measurement_stats) report "no diagnostics" while every other
         # tool surfaces the reason.
-        return empty_measurements(extract_log_diagnostics(log_path), failed_names)
+        table = empty_measurements(extract_log_diagnostics(log_path), failed_names)
+        # A stepped run whose every measurement failed at every step prints
+        # one FAIL'ed line for each and no table (log/meas_grid_tran_step_failed),
+        # so its '.step' lines are the only count of its steps. Each failed
+        # measurement holds one null per step, so every step reads as failed
+        # instead of being out of range.
+        steps = reader.step_count or 0
+        if failed_names and steps > 1:
+            table["step_count"] = steps
+            for entry in table["measurements"].values():
+                entry["values"] = [None] * steps
+        return table
 
     # A value LTspice printed that is not a number fails its own entry, not
     # the table: a WHEN's threshold written as a parameter, an expression or a
