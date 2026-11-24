@@ -283,6 +283,29 @@ class TestWhatIsLeftUndone:
         (found,) = only(view, "dangling_label")
         assert (found.points, found.facts) == (((200, 200),), {"label": "loose"})
 
+    def test_only_a_lone_plain_label_on_nothing_is_said_to_be_left_out(self) -> None:
+        """The recording (export/label_on_nothing) is one plain label alone
+        under its name; a ground flag, a port and a shared name keep the
+        plain wording, since no recording shows what LTspice does with them."""
+        view = SheetView(
+            labels=(
+                (0, 0, "loose"),
+                (100, 0, "0"),
+                (200, 0, "port"),
+                (300, 0, "twice"),
+                (400, 0, "TWICE"),
+            ),
+            ports=((200, 0, "port"),),
+        )
+        details = {found.facts["label"]: found.detail for found in only(view, "dangling_label")}
+        assert details == {
+            "loose": "Dangling label 'loose' at (0,0), which LTspice leaves out of the netlist",
+            "0": "Dangling label '0' at (100,0)",
+            "port": "Dangling label 'port' at (200,0)",
+            "twice": "Dangling label 'twice' at (300,0)",
+            "TWICE": "Dangling label 'TWICE' at (400,0)",
+        }
+
     def test_a_wire_drawn_twice_in_either_direction(self) -> None:
         view = SheetView(wires=((0, 0, 64, 0), (64, 0, 0, 0), (0, 16, 0, 16)))
         (found,) = only(view, "duplicate_wire")

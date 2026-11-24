@@ -582,6 +582,8 @@ class NetFlag:
     # Nothing meets this flag's coordinate — LTspice marks that with a small
     # square at the point, and so do we.
     unconnected: bool = False
+    # A hierarchical port: the flag carries an ``IOPIN`` direction.
+    port: bool = False
 
 
 @dataclass(frozen=True)
@@ -893,7 +895,10 @@ def scene_of_sheet(
         [(p.x, p.y) for sym in scene.symbols for p in sym.pins],
         [((w.x1, w.y1), (w.x2, w.y2)) for w in wires],
     )
-    flags = [NetFlag(x, y, name, is_ground=(name.strip() == "0")) for x, y, name in sheet.labels]
+    flags = [
+        NetFlag(f.x, f.y, f.name, is_ground=(f.name.strip() == "0"), port=f.port is not None)
+        for f in sheet.document.flags
+    ]
     for fl in flags:
         occupied = wire_directions_at(wires, fl.x, fl.y)
         if not occupied:
@@ -985,4 +990,5 @@ def sheet_view(scene: Scene) -> SheetView:
         grounds=tuple(
             (flag.x, flag.y, ground_polygon(flag)) for flag in scene.flags if flag.is_ground
         ),
+        ports=tuple((flag.x, flag.y, flag.text) for flag in scene.flags if flag.port),
     )

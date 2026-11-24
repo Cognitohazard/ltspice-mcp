@@ -13507,14 +13507,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "0",
-     "message": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "message": "Dangling label '0' at (0,192)",
      "x": 0,
      "y": 192
     }
@@ -13607,7 +13607,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -13628,7 +13628,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (0,192)",
      "refs": []
     },
     "ok": false,
@@ -13667,14 +13667,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "0",
-     "message": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "message": "Dangling label '0' at (0,192)",
      "x": 0,
      "y": 192
     }
@@ -13767,7 +13767,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -13788,7 +13788,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (0,192)",
      "refs": []
     },
     "ok": false,
@@ -13840,14 +13840,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "0",
-     "message": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "message": "Dangling label '0' at (0,192)",
      "x": 0,
      "y": 192
     }
@@ -13940,7 +13940,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -13961,7 +13961,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (0,192)",
      "refs": []
     },
     "ok": false,
@@ -20986,14 +20986,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "0",
-     "message": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "message": "Dangling label '0' at (0,192)",
      "x": 0,
      "y": 192
     }
@@ -21086,7 +21086,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -21107,7 +21107,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (0,192)",
      "refs": []
     },
     "ok": false,
@@ -21146,14 +21146,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "OUT",
-     "message": "Dangling label 'OUT' at (0,96), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'OUT' at (0,96)",
      "x": 0,
      "y": 96
     },
@@ -21266,7 +21266,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -21287,7 +21287,7 @@
        96
       ]
      ],
-     "detail": "Dangling label 'OUT' at (0,96), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'OUT' at (0,96)",
      "refs": []
     },
     "ok": false,
@@ -21983,14 +21983,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "0",
-     "message": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "message": "Dangling label '0' at (0,192)",
      "x": 0,
      "y": 192
     }
@@ -22083,7 +22083,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -22104,7 +22104,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (0,192)",
      "refs": []
     },
     "ok": false,
@@ -22458,14 +22458,14 @@
     {
      "kind": "dangling_label",
      "label": "IN",
-     "message": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "message": "Dangling label 'IN' at (0,16)",
      "x": 0,
      "y": 16
     },
     {
      "kind": "dangling_label",
      "label": "0",
-     "message": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "message": "Dangling label '0' at (0,192)",
      "x": 0,
      "y": 192
     }
@@ -22558,7 +22558,7 @@
        16
       ]
      ],
-     "detail": "Dangling label 'IN' at (0,16), which LTspice leaves out of the netlist",
+     "detail": "Dangling label 'IN' at (0,16)",
      "refs": []
     },
     "ok": false,
@@ -22579,7 +22579,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (0,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (0,192)",
      "refs": []
     },
     "ok": false,
@@ -76454,7 +76454,7 @@
        96
       ]
      ],
-     "detail": "Dangling label '0' at (16,96), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (16,96)",
      "refs": []
     },
     "ok": false,
@@ -79558,7 +79558,7 @@
        144
       ]
      ],
-     "detail": "Dangling label '0' at (96,144), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (96,144)",
      "refs": []
     },
     "ok": false,
@@ -79624,7 +79624,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (96,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (96,192)",
      "refs": []
     },
     "ok": false,
@@ -79690,7 +79690,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (96,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (96,192)",
      "refs": []
     },
     "ok": false,
@@ -79756,7 +79756,7 @@
        192
       ]
      ],
-     "detail": "Dangling label '0' at (96,192), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (96,192)",
      "refs": []
     },
     "ok": false,
@@ -79835,7 +79835,7 @@
        144
       ]
      ],
-     "detail": "Dangling label '0' at (96,144), which LTspice leaves out of the netlist",
+     "detail": "Dangling label '0' at (96,144)",
      "refs": []
     },
     "ok": false,

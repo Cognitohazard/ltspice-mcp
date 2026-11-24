@@ -363,7 +363,8 @@ class SheetView:
     ground among them, and ``texts`` are the sheet's directives and comments as
     ``(x, y, first line)``. ``text_extents`` are the labels', directives' and
     comments' text as drawn, as ``(x, y, first line, extent)``, and
-    ``grounds`` the ground flags as drawn, as ``(x, y, corners)``.
+    ``grounds`` the ground flags as drawn, as ``(x, y, corners)``, and
+    ``ports`` the labels that are hierarchical ports, as ``(x, y, name)``.
     """
 
     parts: tuple[Part, ...] = ()
@@ -372,6 +373,7 @@ class SheetView:
     texts: tuple[tuple[int, int, str], ...] = ()
     text_extents: tuple[tuple[int, int, str, BBox], ...] = ()
     grounds: tuple[tuple[int, int, tuple[Point, ...]], ...] = ()
+    ports: tuple[tuple[int, int, str], ...] = ()
 
 
 class _Index:
@@ -810,15 +812,23 @@ def _dangling_wire_ends(ix: _Index) -> list[Finding]:
 @_finds("dangling_label")
 def _dangling_labels(ix: _Index) -> list[Finding]:
     names = Counter(text.casefold() for _x, _y, text in ix.view.labels)
+    ports = set(ix.view.ports)
+
+    def left_out(x: int, y: int, text: str) -> bool:
+        # Both builds export a sheet with a lone plain label as they export
+        # it without one: no node of its name (recorded:
+        # export/label_on_nothing). A label whose name another label shares,
+        # a ground flag and a port are not recorded, so nothing is claimed
+        # for them.
+        return (
+            names[text.casefold()] == 1 and not is_ground(text) and (x, y, text) not in ports
+        )
+
     return [
         Finding(
             "dangling_label",
             f"Dangling label '{text}' at {_at((x, y))}"
-            # Both builds export a sheet with a lone label as they export it
-            # without one: no node of its name (recorded:
-            # export/label_on_nothing). A label whose name another label
-            # shares is not recorded, so nothing is claimed for it.
-            + (", which LTspice leaves out of the netlist" if names[text.casefold()] == 1 else ""),
+            + (", which LTspice leaves out of the netlist" if left_out(x, y, text) else ""),
             points=((x, y),),
             facts={"label": text},
         )
