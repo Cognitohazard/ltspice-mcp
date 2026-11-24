@@ -2256,6 +2256,17 @@ def _apply_component_rule(
         if card.kind != "instance" or not card.name or card.name.casefold() not in refs:
             continue
         view = _instance_view(card, card.name, "Random component target", file.path.name)
+        if view.ref[:1].upper() == "K":
+            # A coupling value is not a component tolerance: a draw around a
+            # value near 1 can leave the range a K card accepts, and a
+            # structured edit refuses K for the same reason
+            # (component_value.apply_value_to_instance).
+            raise VariationError(
+                "random_nominal_unavailable",
+                f"Random component target {view.ref!r} is a mutual-inductance coupling, "
+                "which has no plain numeric nominal to draw around; vary a .param the "
+                "coupling reads instead",
+            )
         nominal = parse_value(view.value or "")
         if nominal is None:
             raise VariationError(

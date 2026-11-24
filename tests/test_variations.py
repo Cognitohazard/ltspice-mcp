@@ -1764,6 +1764,30 @@ def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str
     assert excinfo.value.code == "random_nominal_unavailable"
 
 
+@pytest.mark.parametrize("target", ["K1", "*"])
+def test_a_random_rule_does_not_draw_a_coupling_value(tmp_path: Path, target: str):
+    """A K card's last word is its coupling value, which a tolerance draw
+    around 0.99 would push past 1. A random component rule matching it, by
+    name or by glob, is refused and leaves the coupling as written."""
+    path = tmp_path / "dut.cir"
+    text = "* coupled\nV1 in 0 1\nL1 in 0 1m\nL2 out 0 1m\nR1 out 0 1k\nK1 L1 L2 0.99\n.op\n.end\n"
+    path.write_text(text)
+    circuit = CircuitDeck("dut", path, text)
+    variation = RandomVariation.model_validate(
+        {
+            "kind": "random",
+            "runs": 1,
+            "seed": 3,
+            "rules": [{"rule": "component", "target": target, "tolerance": 0.1}],
+        }
+    )
+
+    with pytest.raises(VariationError, match="mutual-inductance coupling") as excinfo:
+        materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "random_nominal_unavailable"
+
+
 def test_a_card_added_before_end_takes_the_decks_line_breaks(tmp_path: Path):
     """A mismatch rule adds a variant ``.model`` for a top-level transistor
     before the deck's ``.end`` through the same splice as the ``.options
