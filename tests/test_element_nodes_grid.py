@@ -42,7 +42,7 @@ GRID = grid("element-node")
 
 #: How many routes answer otherwise than a recorded cell, per build, each
 #: declared on its cell (``differs``). A count may only fall.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 0, "ltspice17": 0}
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 13, "ltspice17": 8}
 
 
 def _recorded(build: str, case_id: str) -> bool:
@@ -215,8 +215,8 @@ NGSPICE_DIFFERS: dict[str, str] = {
     },
     "deck/element_grid_values:Kk": (
         "a K card couples two inductors and has no node; the view reads the inductors' "
-        "names as its nodes (ElementSpec kind none) for every simulator, which the "
-        "LTspice recording of the cell will count as a difference"
+        "names as its nodes (ElementSpec kind none) for every simulator, as it does "
+        "against both LTspice builds, which wire neither inductor as a node"
     ),
 }
 

@@ -509,9 +509,11 @@ summary = "The cells of the element-node grid (at the end of this file) that no 
 model = ["lib/spice_lex_views.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/netlist_graph.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:ELEMENT_SPECS", "lib/spice_lex_views.py:read_instance", "lib/spice_validator.py:_TERMINAL_COUNTS"]
 # Every node name in a deck belongs to one element card, so a word of the card
 # that the .op raw holds as a node voltage is a node LTspice gave it, and a
-# word that is no node is not in the raw. Each card that a build may refuse
+# word that is no node is not in the raw. Each card that a build might refuse
 # (one with nothing after its nodes, a special-function A card) is in a deck
-# of its own.
+# of its own: both builds stop on an R, C or I card with nothing after its
+# nodes, LTspice XVII on such an L card too, and both run the V card and the
+# A card.
 inputs = [
     "deck/element_grid_values.cir",
     "deck/element_grid_keyed.cir",
@@ -7692,7 +7694,7 @@ Ee = { letter = "E", nodes = ["e_op", "e_on", "e_ip", "e_in"] }
 Gg = { letter = "G", nodes = ["g_op", "g_on", "g_ip", "g_in"] }
 Ff = { letter = "F", nodes = ["f_a", "f_b"] }
 Hh = { letter = "H", nodes = ["h_a", "h_b"] }
-Kk = { letter = "K", nodes = [] }
+Kk = { letter = "K", nodes = [], differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit", "parse_netlist_graph", "inspect components", "api inspect components"], reason = "The view reads a K card's inductor names as its nodes (ElementSpec kind none), where both builds wire neither Lk1 nor Lk2 as a node." }, { build = "ltspice17", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit", "parse_netlist_graph", "inspect components", "api inspect components"], reason = "The view reads a K card's inductor names as its nodes (ElementSpec kind none), where both builds wire neither Lk1 nor Lk2 as a node." }] }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_keyed"]
@@ -7713,41 +7715,48 @@ Jj = { letter = "J", nodes = ["j_d", "j_g", "j_s"], model = "jmod" }
 Ss = { letter = "S", nodes = ["s_a", "s_b", "s_cp", "s_cn"], model = "smod" }
 Xx = { letter = "X", nodes = ["x_a", "x_b"], model = "xsub" }
 
+# Both builds run Aa and wire all eight of its words as nodes: the raw holds
+# v(a_1) to v(a_8), and BUF is its model (element_grid_digital). LTspice XVII
+# warns of fewer than two connections to each of a_2 to a_6 and a_8, and both
+# builds call a_2 to a_5 floating. A sheet's A-device is exported with all
+# eight nodes, a pin that touches nothing written as node 0 on both builds
+# (export/adevice_open_pin).
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_digital"]
 [grid.element-node.cell.items]
-Aa = { letter = "A", follows = "model", nodes = ["a_1", "a_2", "a_3", "a_4", "a_5", "a_6", "a_7", "a_8"], model = "buf", not_established = "No recording shows a special-function A card." }
+Aa = { letter = "A", follows = "model", nodes = ["a_1", "a_2", "a_3", "a_4", "a_5", "a_6", "a_7", "a_8"], model = "buf", differs = [{ build = "ltspice26", routes = ["spice_validator._instance_terminals"], reason = "The dangling-node check counts no terminal of an A card (_TERMINAL_COUNTS has no A), so it never warns of an A pin used once, where LTspice XVII warns of fewer than two connections to a_2 to a_6 and a_8." }, { build = "ltspice17", routes = ["spice_validator._instance_terminals"], reason = "The dangling-node check counts no terminal of an A card (_TERMINAL_COUNTS has no A), so it never warns of an A pin used once, where LTspice XVII warns of fewer than two connections to a_2 to a_6 and a_8." }] }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_nothing_r"]
 [grid.element-node.cell.items]
-Rn = { letter = "R", follows = "nothing", nodes = ["r_a", "r_b"], not_established = "No recording shows a resistor with no value: LTspice may refuse it, or read the second word as its value." }
+Rn = { letter = "R", follows = "nothing", nodes = ["r_a", "r_b"], refused = { ltspice26 = "LTspice 26 stops on a resistor with nothing after its nodes: resistor parameters expected.", ltspice17 = "LTspice XVII stops on a resistor with nothing after its nodes: missing resistance value." } }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_nothing_c"]
 [grid.element-node.cell.items]
-Cn = { letter = "C", follows = "nothing", nodes = ["c_a", "c_b"], not_established = "No recording shows a capacitor with no value." }
+Cn = { letter = "C", follows = "nothing", nodes = ["c_a", "c_b"], refused = { ltspice26 = "LTspice 26 stops on a capacitor with nothing after its nodes: a device instantiation or directive expected.", ltspice17 = "LTspice XVII stops on a capacitor with nothing after its nodes: missing capacitance value." } }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_nothing_l"]
 [grid.element-node.cell.items]
-Ln = { letter = "L", follows = "nothing", nodes = ["l_a", "l_b"], not_established = "No recording shows an inductor with no value." }
+Ln = { letter = "L", follows = "nothing", nodes = ["l_a", "l_b"], refused = { ltspice17 = "LTspice XVII stops on an inductor with nothing after its nodes: missing inductance value." }, differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit", "parse_netlist_graph", "inspect components", "api inspect components"], reason = "The view reads the second of an L card's two words as its value, where LTspice 26 runs the card with both as nodes." }] }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_nothing_v"]
 [grid.element-node.cell.items]
-Vn = { letter = "V", follows = "nothing", nodes = ["v_a", "v_b"], not_established = "No recording shows a voltage source with no value: LTspice may run it as 0 V." }
+Vn = { letter = "V", follows = "nothing", nodes = ["v_a", "v_b"] }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_nothing_i"]
 [grid.element-node.cell.items]
-In = { letter = "I", follows = "nothing", nodes = ["i_a", "i_b"], not_established = "No recording shows a current source with no value: LTspice may run it as 0 A." }
+In = { letter = "I", follows = "nothing", nodes = ["i_a", "i_b"], refused = { ltspice26 = "LTspice 26 stops on a current source with nothing after its nodes: missing current value.", ltspice17 = "LTspice XVII stops on a current source with nothing after its nodes: missing current value." } }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_node_counts"]
+refused = { ltspice26 = "LTspice 26 stops on an M card with three nodes before its model: a node or model name expected." }
 [grid.element-node.cell.items]
-Qq = { node_count = "q_four", nodes = ["q_c", "q_b", "q_e", "q_s"], model = "qmod" }
-Mm = { node_count = "m_three", nodes = ["m_d", "m_g", "m_s"], model = "mmod" }
+Qq = { node_count = "q_four", nodes = ["q_c", "q_b", "q_e", "q_s"], model = "qmod", differs = [{ build = "ltspice17", routes = ["spice_validator._instance_terminals"], reason = "The dangling-node check counts a BJT's first three nodes and leaves its substrate out, as LTspice XVII's warning of a node used once does: it does not warn of q_s, which only Qq uses." }] }
+Mm = { node_count = "m_three", nodes = ["m_d", "m_g", "m_s"], model = "mmod", refused = { ltspice26 = "LTspice 26 stops on an M card with three nodes before its model: a node or model name expected." } }
 
 [[grid.element-node.cell]]
 cases = ["deck/element_grid_switch_on"]
