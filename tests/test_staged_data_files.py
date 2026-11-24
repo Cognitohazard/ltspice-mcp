@@ -191,8 +191,9 @@ def test_staging_copies_a_relative_data_file_and_names_the_copy(
 ):
     """The recorded decks, staged for LTspice: the data file is copied byte
     for byte and the card names the copy by its whole path, since the run
-    starts from a copy of the deck in another folder. That LTspice reads an
-    absolute data path is not recorded, and the staging says so."""
+    starts from a copy of the deck in another folder. Both LTspice builds
+    read a data file named by an absolute path, quoted or not
+    (``data-file-absolute-path``), so the staging adds no note about it."""
     root = tmp_path / stem
     deck = root / f"{stem}.cir"
     (root / data).parent.mkdir(parents=True, exist_ok=True)
@@ -209,8 +210,7 @@ def test_staging_copies_a_relative_data_file_and_names_the_copy(
     assert copy.read_bytes() == source.read_bytes()
     entry = next(item for item in staged.manifest if item.path == (root / data).resolve())
     assert (entry.staged, entry.live, entry.staged_path) == (True, False, copy)
-    (note,) = [item for item in staged.observations if item["code"] == "data_path_unrecorded"]
-    assert note["evidence"]["paths"] == [str(copy)]
+    assert not [item for item in staged.observations if item["code"] == "data_path_unrecorded"]
 
 
 def test_two_data_paths_on_one_card_are_each_rewritten(tmp_path: Path):
@@ -249,7 +249,6 @@ def test_ngspice_staging_reads_an_included_files_data_path_from_the_decks_folder
     (included,) = staged.includes
     (reference,) = scan_data_references(lex_for_edit(included.text, deck=False).read, "ngspice")
     assert Path(reference.raw_path).read_text() == _level_file(BESIDE_THE_DECK)
-    assert not [item for item in staged.observations if item["code"] == "data_path_unrecorded"]
 
 
 def test_ltspice_staging_refuses_a_relative_data_path_in_an_included_file(tmp_path: Path):

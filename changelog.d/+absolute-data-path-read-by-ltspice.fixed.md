@@ -1,0 +1,1 @@
+A run whose deck reads a data file (`wavefile=` or a PWL `file=`) no longer reports `data_path_unrecorded` on LTspice: both LTspice 26 and XVII read the staged copy by its absolute path, quoted or not. A relative data path on a card in an included file is still refused, and the refusal now says that LTspice 26 reads it from the included file's folder and XVII from the deck's.

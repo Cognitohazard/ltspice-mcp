@@ -382,8 +382,6 @@ def stage_deck(
     stated: list[OtherReading] = []
     # The data files read in place, each reported once.
     live_data: set[Path] = set()
-    # The data references rewritten to an absolute path, for the LTspice note.
-    absolute_data: list[str] = []
 
     primary_destination = _destination_for(stands_at, staging_root, roots, root_index)
 
@@ -713,10 +711,7 @@ def stage_deck(
         copied = snapshot_file(
             located, _destination_for(located, staging_root, roots, root), depth + 1, walk=False
         )
-        rendered = _render_absolute(copied)
-        if rendered not in absolute_data:
-            absolute_data.append(rendered)
-        return _render_data_path(rendered, data.quoted)
+        return _render_data_path(_render_absolute(copied), data.quoted)
 
     def _snapshot_origin(resolved: Path) -> str:
         """Snapshot the file the primary deck was generated from; return its digest.
@@ -752,22 +747,6 @@ def stage_deck(
         entry.sha256 for entry in manifest if entry.path == source and entry.section is None
     )
     origin_sha = _snapshot_origin(authored)
-    if absolute_data and dialect == "ltspice":
-        observations.append(
-            {
-                "code": "data_path_unrecorded",
-                "kind": "provenance",
-                "detail": (
-                    "The staged deck names the staged copy of each data file it reads "
-                    "by an absolute path, in quotes when it holds a space. That LTspice "
-                    "reads an absolute wavefile= or PWL file= path, and a quoted one, "
-                    "is not recorded (data-file-absolute-path in the LTspice "
-                    "recordings, pending): if a case reports the file missing, this is "
-                    "why."
-                ),
-                "evidence": {"paths": absolute_data},
-            }
-        )
     return StagedDeck(
         source_path=source,
         staged_deck=staged_primary,

@@ -947,9 +947,9 @@ The data files a deck reads are staged with it: on LTspice a source's
 `filesource` model's `file=`. A relative path is read from the deck's folder,
 as both simulators read it, for a card in an included file too on ngspice; on
 LTspice such a card in an included file is refused (`data_file_unestablished`),
-since which folder LTspice reads it from is not recorded. The file is copied
-byte for byte and the staged card names the copy by its absolute path, which
-an LTspice run reports as not recorded (`data_path_unrecorded`). A data file
+since LTspice 26 reads it from the included file's folder and LTspice XVII from
+the deck's. The file is copied byte for byte and the staged card names the copy
+by its absolute path, which both LTspice builds read, quoted or not. A data file
 named by an absolute path is read where it is: the manifest marks it `live:
 true` and an observation (`live_data_file`) reports it. A data file that does
 not exist (`data_file_missing`) or lies outside `[security] allowed_paths`

@@ -499,7 +499,6 @@ FROZEN_ERROR_CODES = (
     "data_file_outside_allowed_paths",
     "data_file_unestablished",
     "data_file_unstaged",
-    "data_path_unrecorded",
     "deadline",
     "deck_sets_simulator_seed",
     "detached_owner",

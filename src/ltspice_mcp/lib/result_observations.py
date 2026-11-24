@@ -726,7 +726,6 @@ NOT_READ_BY_JOB: Mapping[str, str] = {
     "value_read_otherwise": "how another build reads the source, not what its run wrote",
     "live_include": "which input the run read live, not what its run wrote",
     "live_data_file": "which input the run read live, not what its run wrote",
-    "data_path_unrecorded": "how the staged deck names a data file, not what its run wrote",
     "source_unavailable_after_staging": "the source after staging; the staged copy ran",
     "source_modified_after_staging": "the source after staging; the staged copy ran",
 }
