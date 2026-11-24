@@ -11,7 +11,10 @@ A cell is one expression as a deck writes it, on one source whose node
 voltage in the ``.op`` raw is what LTspice computed. Every recorded cell, on
 each build, is read through every route: ``evaluate`` with the deck's
 parameters, ``load_hierarchy``, and ``inspect(kind="hierarchy")`` through the
-server's dispatch and through the Python API. A route either takes LTspice's
+server's dispatch and through the Python API, where the reader does not know
+which build runs the deck, and ``Environment`` and ``load_hierarchy`` told the
+build that ran it, where a power the builds compute differently is decided by
+it. A route either takes LTspice's
 number (within ``SAME_VALUE_RTOL``: a raw stores a node voltage in four bytes)
 or declines the expression; one that takes another number, or takes one where
 LTspice refused the deck, is a difference, declared on its cell (``differs``)
@@ -38,6 +41,7 @@ from ltspice_mcp.lib.format import SAME_VALUE_RTOL
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.hierarchy_expr import Environment
 from ltspice_mcp.lib.ngspice_mode import run_batch
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.state import SessionState
@@ -52,6 +56,22 @@ GRID = grid("expression-value")
 #: declared on its cell (``differs``, with the routes and the reason). A count
 #: may only fall: a fix lowers it here in the same change.
 KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 0, "ltspice17": 0}
+
+
+#: How each recorded build names itself in a run's output, so the reader is
+#: told which build runs the deck (``SemanticProfile.of``).
+_PRODUCERS = {
+    "ltspice26": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
+    "ltspice17": Producer("ltspice", "Linear Technology Corporation LTspice XVII", None),
+}
+
+
+def _number(cell: Cell, build: str) -> float | None:
+    """The number a cell declares for ``build``, None where it declares none."""
+    number = cell.extra.get("number")
+    if isinstance(number, dict):
+        return number.get(build)
+    return number
 
 
 def _recorded(build: str, case_id: str) -> bool:
@@ -213,7 +233,9 @@ def test_a_cell_of_one_plain_operator_declares_what_arithmetic_gives(cell: Cell)
     here from the deck's parameters, never from the evaluator."""
     expected = _arithmetic(cell)
     if expected is not None:
-        assert cell.extra.get("number") == pytest.approx(expected), cell.id
+        for build in rec.BUILDS:
+            if build not in cell.refused:
+                assert _number(cell, build) == pytest.approx(expected), (cell.id, build)
 
 
 def test_every_operator_the_evaluator_takes_is_a_value_of_an_axis():
@@ -263,16 +285,25 @@ def _same(taken: float | None, ltspice: float | None) -> bool:
 
 
 def _environment_value(
-    case_id: str, node: str, *, simulator: str, mode: str | None
+    case_id: str,
+    node: str,
+    *,
+    simulator: str,
+    mode: str | None,
+    ltspice_build: str | None = None,
 ) -> float | None:
     """The value ``Environment`` gives the probe node's source, over the
     deck's ``.param`` assignments."""
     params, values = _deck(case_id)
-    environment = Environment(params, simulator=simulator, ngbehavior=mode)
+    environment = Environment(
+        params, simulator=simulator, ngbehavior=mode, ltspice_build=ltspice_build
+    )
     return environment.fact(values[node], "V", element_value=True).value
 
 
-async def _hierarchy_values(state: SessionState, deck: Path) -> dict[str, dict[str, float | None]]:
+async def _hierarchy_values(
+    state: SessionState, deck: Path, build: str
+) -> dict[str, dict[str, float | None]]:
     query = {"kind": "hierarchy", "path": str(deck), "simulator": "ltspice"}
     reply = await dispatched(state, "inspect", queries=[query])
     api_reply = await asyncio.to_thread(lambda: SyncApi(state).inspect(queries=[query]))
@@ -285,9 +316,13 @@ async def _hierarchy_values(state: SessionState, deck: Path) -> dict[str, dict[s
                 found.setdefault(route, {})[row["nodes"][0]["name"].lower()] = row["value"].get(
                     "value"
                 )
-    for row in load_hierarchy(str(deck), None, SemanticProfile("ltspice")).instances:
-        if row.reference[:1].upper() in ("R", "V"):
-            found.setdefault("load_hierarchy", {})[row.nodes[0].name.lower()] = row.value.value
+    for route, profile in (
+        ("load_hierarchy", SemanticProfile("ltspice")),
+        ("load_hierarchy, build known", SemanticProfile.of(_PRODUCERS[build], None)),
+    ):
+        for row in load_hierarchy(str(deck), None, profile).instances:
+            if row.reference[:1].upper() in ("R", "V"):
+                found.setdefault(route, {})[row.nodes[0].name.lower()] = row.value.value
     return found
 
 
@@ -303,20 +338,28 @@ async def test_every_recorded_cell_evaluates_as_ltspice_computed_it_on_every_rou
     )
     deck = work_dir / _source_of(case_id).name
     deck.write_bytes(_source_of(case_id).read_bytes())
-    hierarchy = await _hierarchy_values(state_no_sim, deck)
+    hierarchy = await _hierarchy_values(state_no_sim, deck, build)
+    known = SemanticProfile.of(_PRODUCERS[build], None).ltspice_build
+    assert known is not None
     found: set[tuple[str, str]] = set()
     declared: set[tuple[str, str]] = set()
     for cell in GRID.cells_of(case_id):
         node = cell.extra["node"]
-        if voltages is None:
+        if voltages is None or build in cell.refused:
+            # A build that stops on an expression can still write a raw for
+            # the rest of the deck: its log is what says it refused.
             assert build in cell.refused, f"{cell.id}: {build} took no number"
+            assert _number(cell, build) is None, f"{cell.id}: {build} took no number"
             ltspice = None
         else:
             assert build not in cell.refused, f"{cell.id}: {build} ran the deck"
             ltspice = voltages[f"v({node})"]
-            assert cell.extra.get("number") == pytest.approx(ltspice, rel=SAME_VALUE_RTOL), cell.id
+            assert _number(cell, build) == pytest.approx(ltspice, rel=SAME_VALUE_RTOL), cell.id
         answers = {
             "Environment": _environment_value(case_id, node, simulator="ltspice", mode=None),
+            "Environment, build known": _environment_value(
+                case_id, node, simulator="ltspice", mode=None, ltspice_build=known
+            ),
             **{route: values[node] for route, values in hierarchy.items()},
         }
         found |= {

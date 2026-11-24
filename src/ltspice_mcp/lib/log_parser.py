@@ -1228,6 +1228,14 @@ _RE_MEAS_RESULT_LINE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# The words a simulator's own diagnostic line starts with, in the case it
+# prints them. Both LTspice builds print a measurement's name in lower case on
+# its result line (recorded: log/meas_grid_name_upper, where T_UP prints as
+# t_up), so ``WARNING: Can't resolve .param p1=(-8)**(1/3)`` (XVII, recorded:
+# deck/pow_neg_base_cube_root) is a warning and no result of a measurement
+# named warning.
+_DIAGNOSTIC_WORDS = frozenset({"WARNING", "Warning", "ERROR", "Error"})
+
 # The heading of a stepped run's table for one measurement.
 _RE_MEAS_HEADING = re.compile(r"^Measurement:[ \t]*(?P<name>\S+)")
 # The line under a heading naming the table's columns: ``step``, then the rest
@@ -1252,7 +1260,11 @@ def _printed_on(line: str) -> tuple[str, PrintedMeasurement] | None:
     table of, by its name as printed, or None. The table's columns are left
     to :func:`printed_measurements`, which has the next line."""
     result = _RE_MEAS_RESULT_LINE.match(line)
-    if result is not None and result["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS:
+    if (
+        result is not None
+        and result["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS
+        and result["name"] not in _DIAGNOSTIC_WORDS
+    ):
         return result["name"], PrintedMeasurement(
             result[0].strip(), result["value"] or result["word"]
         )

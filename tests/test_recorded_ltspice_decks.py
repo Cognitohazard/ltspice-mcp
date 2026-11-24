@@ -2490,9 +2490,10 @@ def test_an_undefined_element_model_stops_the_run(build: str, case_id: str, mode
     assert refusals(case_id) == set()
 
 
-#: Both builds run ``10Ω`` as 10 ohms; the server's value parser refuses it,
-#: and the lint only warns of a non-ASCII suffix (``value-suffix-nonascii``).
-READ_AS_TEN_BY_LTSPICE_AND_REFUSED_BY_THE_VALUE_PARSER = "10Ω"
+#: Both builds run ``10Ω`` as 10 ohms, and so does the server's value parser,
+#: which skips any letter after a number; the lint warns of a non-ASCII suffix
+#: (``value-suffix-nonascii``).
+READ_AS_TEN_BY_LTSPICE_AND_BY_THE_VALUE_PARSER = "10Ω"
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -2500,12 +2501,11 @@ def test_a_value_written_with_an_ohm_sign_is_its_number(build: str, tmp_path: Pa
     """``10Ω`` runs as 10 ohms in UTF-8, in UTF-16 and in cp1253 on both
     builds (cp1252 has no ohm sign; XVII reads the UTF-8 bytes as two cp1252
     letters, which it skips as it skips any unit). The checks pass the
-    decks, and the server's value parser refuses the value."""
+    decks, and the server's value parser reads the same 10."""
     for stem in ("ohm_utf8", "ohm_utf16le_bom", "ohm_cp1253"):
         assert rec.operating_point(build, f"deck/{stem}", tmp_path / stem)["v(a)"] == 10.0
         assert refusals(f"deck/{stem}") == set()
-    with pytest.raises(ValueError, match="Cannot parse"):
-        parse_spice_value(READ_AS_TEN_BY_LTSPICE_AND_REFUSED_BY_THE_VALUE_PARSER)
+    assert parse_spice_value(READ_AS_TEN_BY_LTSPICE_AND_BY_THE_VALUE_PARSER) == 10.0
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

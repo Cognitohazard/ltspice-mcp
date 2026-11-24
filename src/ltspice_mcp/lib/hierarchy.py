@@ -147,6 +147,18 @@ class SemanticProfile:
                 self, "definitions", definition_rule(Producer(self.simulator, None, None))
             )
 
+    @property
+    def ltspice_build(self) -> str | None:
+        """The recorded LTspice build that reads the deck, as ``naming``
+        spells it (``LTspice 26``, ``LTspice XVII``), or None when the reader
+        is not LTspice or is a build with no recording of its own (``naming``
+        then carries a note). Where the builds compute an expression
+        differently, it decides (``hierarchy_expr._power``)."""
+        naming = self.naming
+        if self.simulator != "ltspice" or naming is None or naming.note is not None:
+            return None
+        return naming.read_as
+
     @classmethod
     def of(
         cls,
@@ -928,6 +940,7 @@ def resolve_hierarchy(
         _parameters(top, profile),
         simulator=profile.simulator,
         ngbehavior=profile.ngbehavior,
+        ltspice_build=profile.ltspice_build,
         dynamic_reason=dynamic_reason,
     )
     scale = global_env.fact(scale_expression)
@@ -1055,6 +1068,7 @@ def resolve_hierarchy(
                     expressions,
                     simulator=profile.simulator,
                     ngbehavior=profile.ngbehavior,
+                    ltspice_build=profile.ltspice_build,
                     parent=env,
                     overrides=overrides,
                     dynamic_reason=dynamic_reason,

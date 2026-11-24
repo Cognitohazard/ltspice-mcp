@@ -388,7 +388,7 @@ inputs = [
 
 [behaviour.number-grid]
 summary = "The cells of the value-number grid (at the end of this file) that no other recording fills: each scale suffix in each case it can be written in, alone, with unit letters after it and with an ohm sign after it; each way of writing a mantissa (decimal, a dot at either end, an exponent, a sign, an underscore, inf, nan, a number past the largest double, a digit that is not ASCII), alone and before a suffix, digits after a suffix, after an R and after a unit; a micro sign, a Greek mu and an ohm sign in each encoding of a deck; and the same forms inside braces. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/format.py", "lib/hierarchy_expr.py", "lib/lint_rules.py", "lib/metrics.py", "lib/format.py:parse_spice_value", "lib/format.py:is_scaled_number", "lib/hierarchy_expr.py:_NUMBER", "lib/format.py:parse_plain_value", "lib/format.py:plain_number", "lib/lint_rules.py:_MILLI_SUFFIX_RE", "lib/metrics.py:parse_freq"]
+model = ["lib/format.py", "lib/hierarchy_expr.py", "lib/lint_rules.py", "lib/metrics.py", "lib/format.py:parse_spice_value", "lib/format.py:is_scaled_number", "lib/hierarchy_expr.py:_NUMBER", "lib/format.py:parse_plain_value", "lib/format.py:plain_number", "lib/lint_rules.py:_MILLI_SUFFIX_RE", "lib/metrics.py:parse_freq", "lib/netlist_graph.py", "lib/netlist_graph.py:values_equal", "lib/stored_values.py"]
 # Each source's value is one form, so the voltage of its node in the .op raw
 # is the number LTspice read. A form either build may refuse, or turn into a
 # value that stops the run, is in a deck of its own, since a refusal stops the
@@ -431,11 +431,10 @@ inputs = [
     "deck/number_grid_utf16le.cir",
     "deck/number_grid_utf8_bom.cir",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.expression-grid]
 summary = "The cells of the expression-value grid (at the end of this file) that no other recording fills: each arithmetic operator over a positive, a negative and a zero operand on each side; ** and the caret over a positive, zero and negative base to a whole, negative, zero and fractional exponent; a unary minus and plus; chains of minus, of division and of powers, a negated power, a negated name as an exponent, precedence and parentheses; and the same sum written in quotes, in braces in braces, with no braces and in a .param. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/hierarchy_expr.py", "lib/hierarchy.py", "lib/hierarchy_expr.py:evaluate", "lib/hierarchy_expr.py:_power", "lib/hierarchy_expr.py:Environment"]
+model = ["lib/hierarchy_expr.py", "lib/hierarchy.py", "lib/hierarchy_expr.py:evaluate", "lib/hierarchy_expr.py:_power", "lib/hierarchy_expr.py:Environment", "lib/netlist_graph.py:values_equal"]
 # Each source's value is one expression over the parameters the deck's first
 # .param sets, so the voltage of its node in the .op raw is what LTspice
 # computed. A division by zero, a power that may have no real value, and a
@@ -457,7 +456,6 @@ inputs = [
     "deck/expr_grid_zero_to_a_negative_power.cir",
     "deck/expr_grid_zero_to_zero.cir",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.card-grid]
 summary = "The cells of the deck-card grid (at the end of this file) that no other recording fills: a + line after its card, right after the title and first in an included file; a ; inside braces and inside quotes; a .end inside a subcircuit; a .ends naming its subcircuit, naming none, naming another, with none open and missing; a carriage return alone and a form feed between cards; a deck whose file name is not ASCII; and each directive the server acts on, in lower and upper case, in its standard spelling and in the other the code knows. What a cell declares where no recording shows its form is a prediction, which the recording settles."
@@ -6631,17 +6629,17 @@ cases = ["deck/suffix_percent"]
 [[grid.value-number.cell]]
 cases = ["deck/ohm_utf8"]
 [grid.value-number.cell.items]
-"10Ω" = { node = "a", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf8", number = 10.0, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a value followed by a sign that is not a letter." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a value followed by a sign that is not a letter." }] }
+"10Ω" = { node = "a", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf8", number = 10.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/ohm_utf16le_bom"]
 [grid.value-number.cell.items]
-"10Ω" = { node = "a", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 10.0, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a value followed by a sign that is not a letter." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a value followed by a sign that is not a letter." }] }
+"10Ω" = { node = "a", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 10.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/ohm_cp1253"]
 [grid.value-number.cell.items]
-"10Ω" = { node = "a", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "cp1253", number = 10.0, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a value followed by a sign that is not a letter." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a value followed by a sign that is not a letter." }] }
+"10Ω" = { node = "a", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "cp1253", number = 10.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/micro_utf8"]
@@ -6701,8 +6699,8 @@ cases = ["deck/number_grid_suffixes"]
 "1UΩ" = { node = "n21", mantissa = "whole", suffix = "u", case = "upper", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1e-06 }
 "1µV" = { node = "n22", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "letters", sign = "micro_sign", encoding = "utf16le_bom", number = 1e-06 }
 "1µΩ" = { node = "n23", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1e-06 }
-"1μV" = { node = "n24", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "letters", sign = "greek_mu", encoding = "utf16le_bom", number = { ltspice26 = 1e-06 }, not_established = "No recording shows LTspice XVII read a Greek mu it decodes as one character (UTF-16)." }
-"1μΩ" = { node = "n25", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = { ltspice26 = 1e-06 }, not_established = "No recording shows LTspice XVII read a Greek mu it decodes as one character (UTF-16)." }
+"1μV" = { node = "n24", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "letters", sign = "greek_mu", encoding = "utf16le_bom", number = 1e-06 }
+"1μΩ" = { node = "n25", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1e-06 }
 "1nΩ" = { node = "n26", mantissa = "whole", suffix = "n", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1e-09 }
 "1N" = { node = "n27", mantissa = "whole", suffix = "n", case = "upper", tail = "none", after = "suffix", number = 1e-09 }
 "1NV" = { node = "n28", mantissa = "whole", suffix = "n", case = "upper", tail = "letters", number = 1e-09 }
@@ -6721,12 +6719,12 @@ cases = ["deck/number_grid_suffixes"]
 "1Mil" = { node = "n41", mantissa = "whole", suffix = "mil", case = "mixed", tail = "none", after = "suffix", number = 2.54e-05 }
 "1MilV" = { node = "n42", mantissa = "whole", suffix = "mil", case = "mixed", tail = "letters", number = 2.54e-05 }
 "1MilΩ" = { node = "n43", mantissa = "whole", suffix = "mil", case = "mixed", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 2.54e-05 }
-"1r" = { node = "n44", mantissa = "whole", suffix = "r", case = "lower", tail = "none", number = 1.0, not_established = "No recording shows an R with no digits after it (4R7 is 4.7)." }
-"1rV" = { node = "n45", mantissa = "whole", suffix = "r", case = "lower", tail = "letters", number = 1.0, not_established = "No recording shows an R with no digits after it (4R7 is 4.7)." }
-"1rΩ" = { node = "n46", mantissa = "whole", suffix = "r", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1.0, not_established = "No recording shows an R with no digits after it (4R7 is 4.7)." }
-"1R" = { node = "n47", mantissa = "whole", suffix = "r", case = "upper", tail = "none", number = 1.0, not_established = "No recording shows an R with no digits after it (4R7 is 4.7)." }
-"1RV" = { node = "n48", mantissa = "whole", suffix = "r", case = "upper", tail = "letters", number = 1.0, not_established = "No recording shows an R with no digits after it (4R7 is 4.7)." }
-"1RΩ" = { node = "n49", mantissa = "whole", suffix = "r", case = "upper", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1.0, not_established = "No recording shows an R with no digits after it (4R7 is 4.7)." }
+"1r" = { node = "n44", mantissa = "whole", suffix = "r", case = "lower", tail = "none", number = 1.0 }
+"1rV" = { node = "n45", mantissa = "whole", suffix = "r", case = "lower", tail = "letters", number = 1.0 }
+"1rΩ" = { node = "n46", mantissa = "whole", suffix = "r", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1.0 }
+"1R" = { node = "n47", mantissa = "whole", suffix = "r", case = "upper", tail = "none", number = 1.0 }
+"1RV" = { node = "n48", mantissa = "whole", suffix = "r", case = "upper", tail = "letters", number = 1.0 }
+"1RΩ" = { node = "n49", mantissa = "whole", suffix = "r", case = "upper", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_mantissa"]
@@ -6748,201 +6746,201 @@ cases = ["deck/number_grid_mantissa"]
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_mantissa_digits"]
 [grid.value-number.cell.items]
-"1.5k5" = { node = "n01", mantissa = "decimal", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"1.5r5" = { node = "n02", mantissa = "decimal", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-"1.k5" = { node = "n03", mantissa = "trailing_dot", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"1.r5" = { node = "n04", mantissa = "trailing_dot", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-".5k5" = { node = "n05", mantissa = "leading_dot", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-".5r5" = { node = "n06", mantissa = "leading_dot", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-"1e3k5" = { node = "n07", mantissa = "exponent", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"1e3r5" = { node = "n08", mantissa = "exponent", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-"1E3k5" = { node = "n09", mantissa = "exponent_upper", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"1E3r5" = { node = "n10", mantissa = "exponent_upper", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-"1e-3k5" = { node = "n11", mantissa = "exponent_signed", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"1e-3r5" = { node = "n12", mantissa = "exponent_signed", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
+"1.5k5" = { node = "n01", mantissa = "decimal", suffix = "k", case = "lower", after = "suffix_digits", number = { ltspice26 = 2000.0, ltspice17 = 1500.0 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1.5r5" = { node = "n02", mantissa = "decimal", suffix = "r", case = "lower", after = "r_digits", number = { ltspice26 = 2.0, ltspice17 = 1.5 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1.k5" = { node = "n03", mantissa = "trailing_dot", suffix = "k", case = "lower", after = "suffix_digits", number = 1000.0 }
+"1.r5" = { node = "n04", mantissa = "trailing_dot", suffix = "r", case = "lower", after = "r_digits", number = 1.0 }
+".5k5" = { node = "n05", mantissa = "leading_dot", suffix = "k", case = "lower", after = "suffix_digits", number = 500.0 }
+".5r5" = { node = "n06", mantissa = "leading_dot", suffix = "r", case = "lower", after = "r_digits", number = 0.5 }
+"1e3k5" = { node = "n07", mantissa = "exponent", suffix = "k", case = "lower", after = "suffix_digits", number = { ltspice26 = 1000500.0, ltspice17 = 1500000.0 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1e3r5" = { node = "n08", mantissa = "exponent", suffix = "r", case = "lower", after = "r_digits", number = { ltspice26 = 1000.5, ltspice17 = 1500.0 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1E3k5" = { node = "n09", mantissa = "exponent_upper", suffix = "k", case = "lower", after = "suffix_digits", number = { ltspice26 = 1000500.0, ltspice17 = 1500000.0 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1E3r5" = { node = "n10", mantissa = "exponent_upper", suffix = "r", case = "lower", after = "r_digits", number = { ltspice26 = 1000.5, ltspice17 = 1500.0 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1e-3k5" = { node = "n11", mantissa = "exponent_signed", suffix = "k", case = "lower", after = "suffix_digits", number = { ltspice26 = 501.0, ltspice17 = 1.5 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
+"1e-3r5" = { node = "n12", mantissa = "exponent_signed", suffix = "r", case = "lower", after = "r_digits", number = { ltspice26 = 0.5009999871253967, ltspice17 = 0.001500000013038516 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a number that is not whole, which the builds read differently (1.5k5 is 1500 on XVII and 2000 on LTspice 26; 1e3k5 is 1.5e6 and 1000500)." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_signed"]
 [grid.value-number.cell.items]
-"+1" = { node = "n01", mantissa = "plus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0, not_established = "No recording shows a value written with a sign." }
-"+1k" = { node = "n02", mantissa = "plus", suffix = "k", case = "lower", tail = "none", after = "suffix", number = 1000.0, not_established = "No recording shows a value written with a sign." }
-"+1k5" = { node = "n03", mantissa = "plus", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"+1r5" = { node = "n04", mantissa = "plus", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-"+1V5" = { node = "n05", mantissa = "plus", after = "letter_digits", number = 1.0, not_established = "No recording shows a value written with a sign." }
-"-1" = { node = "n06", mantissa = "minus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = -1.0, not_established = "No recording shows a value written with a sign." }
-"-1k" = { node = "n07", mantissa = "minus", suffix = "k", case = "lower", tail = "none", after = "suffix", number = -1000.0, not_established = "No recording shows a value written with a sign." }
-"-1k5" = { node = "n08", mantissa = "minus", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows digits after a suffix behind a mantissa that is not a whole number (1k5 is 1500)." }
-"-1r5" = { node = "n09", mantissa = "minus", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows digits after an R behind a mantissa that is not a whole number (4R7 is 4.7)." }
-"-1V5" = { node = "n10", mantissa = "minus", after = "letter_digits", number = -1.0, not_established = "No recording shows a value written with a sign." }
+"+1" = { node = "n01", mantissa = "plus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0 }
+"+1k" = { node = "n02", mantissa = "plus", suffix = "k", case = "lower", tail = "none", after = "suffix", number = 1000.0 }
+"+1k5" = { node = "n03", mantissa = "plus", suffix = "k", case = "lower", after = "suffix_digits", number = 1500.0 }
+"+1r5" = { node = "n04", mantissa = "plus", suffix = "r", case = "lower", after = "r_digits", number = 1.5 }
+"+1V5" = { node = "n05", mantissa = "plus", after = "letter_digits", number = 1.0 }
+"-1" = { node = "n06", mantissa = "minus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = -1.0 }
+"-1k" = { node = "n07", mantissa = "minus", suffix = "k", case = "lower", tail = "none", after = "suffix", number = -1000.0 }
+"-1k5" = { node = "n08", mantissa = "minus", suffix = "k", case = "lower", after = "suffix_digits", number = { ltspice26 = -500.0, ltspice17 = -1500.0 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a negative number, which the builds read differently (-1k5 is -1500 on XVII and -500 on LTspice 26)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a negative number, which the builds read differently (-1k5 is -1500 on XVII and -500 on LTspice 26)." }] }
+"-1r5" = { node = "n09", mantissa = "minus", suffix = "r", case = "lower", after = "r_digits", number = { ltspice26 = -0.5, ltspice17 = -1.5 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a negative number, which the builds read differently (-1k5 is -1500 on XVII and -500 on LTspice 26)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses digits after a suffix behind a negative number, which the builds read differently (-1k5 is -1500 on XVII and -500 on LTspice 26)." }] }
+"-1V5" = { node = "n10", mantissa = "minus", after = "letter_digits", number = -1.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_underscore"]
 [grid.value-number.cell.items]
-"1_000" = { node = "n01", mantissa = "underscore", after = "nothing", not_established = "No recording shows an underscore inside a number; Python's float reads 1_000 as 1000." }
+"1_000" = { node = "n01", mantissa = "underscore", after = "nothing", number = 1.0, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses an underscore inside a number, where both builds stop (1_000 is 1)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses an underscore inside a number, where both builds stop (1_000 is 1)." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_inf"]
 [grid.value-number.cell.items]
-"inf" = { node = "n01", mantissa = "inf", after = "nothing", not_established = "No recording shows inf as a value; Python's float reads it as infinity." }
+"inf" = { node = "n01", mantissa = "inf", after = "nothing", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses inf and nan, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_nan"]
 [grid.value-number.cell.items]
-"nan" = { node = "n01", mantissa = "nan", after = "nothing", not_established = "No recording shows nan as a value; Python's float reads it as not a number." }
+"nan" = { node = "n01", mantissa = "nan", after = "nothing", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses inf and nan, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_overflow"]
 [grid.value-number.cell.items]
-"1e999" = { node = "n01", mantissa = "overflow", after = "nothing", not_established = "No recording shows a number past the largest double; Python's float reads 1e999 as infinity." }
+"1e999" = { node = "n01", mantissa = "overflow", after = "nothing", number = { ltspice26 = 1e+200, ltspice17 = inf }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a number past a double's range, which LTspice 26 takes as 1e200 and XVII as infinity." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a number past a double's range, which LTspice 26 takes as 1e200 and XVII as infinity." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_nonascii_digit_nothing"]
 [grid.value-number.cell.items]
-"٣" = { node = "n01", mantissa = "nonascii_digits", suffix = "none", case = "lower", tail = "none", after = "nothing", not_established = "No recording shows a digit that is not ASCII; Python reads ٣ as 3." }
+"٣" = { node = "n01", mantissa = "nonascii_digits", suffix = "none", case = "lower", tail = "none", after = "nothing", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a digit that is not ASCII, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_nonascii_digit_suffix"]
 [grid.value-number.cell.items]
-"٣k" = { node = "n01", mantissa = "nonascii_digits", suffix = "k", case = "lower", tail = "none", after = "suffix", not_established = "No recording shows a digit that is not ASCII; Python reads ٣ as 3." }
+"٣k" = { node = "n01", mantissa = "nonascii_digits", suffix = "k", case = "lower", tail = "none", after = "suffix", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a digit that is not ASCII, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_nonascii_digit_suffix_digits"]
 [grid.value-number.cell.items]
-"٣k5" = { node = "n01", mantissa = "nonascii_digits", suffix = "k", case = "lower", after = "suffix_digits", not_established = "No recording shows a digit that is not ASCII; Python reads ٣ as 3." }
+"٣k5" = { node = "n01", mantissa = "nonascii_digits", suffix = "k", case = "lower", after = "suffix_digits", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a digit that is not ASCII, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_nonascii_digit_r_digits"]
 [grid.value-number.cell.items]
-"٣r5" = { node = "n01", mantissa = "nonascii_digits", suffix = "r", case = "lower", after = "r_digits", not_established = "No recording shows a digit that is not ASCII; Python reads ٣ as 3." }
+"٣r5" = { node = "n01", mantissa = "nonascii_digits", suffix = "r", case = "lower", after = "r_digits", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a digit that is not ASCII, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_nonascii_digit_letter_digits"]
 [grid.value-number.cell.items]
-"٣V5" = { node = "n01", mantissa = "nonascii_digits", after = "letter_digits", not_established = "No recording shows a digit that is not ASCII; Python reads ٣ as 3." }
+"٣V5" = { node = "n01", mantissa = "nonascii_digits", after = "letter_digits", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a value that is no number as an unknown parameter (Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: parse_spice_value refuses a digit that is not ASCII, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_cp1253"]
 [grid.value-number.cell.items]
 "1µ" = { node = "n01", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "cp1253", number = 1e-06 }
-"1μ" = { node = "n02", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "cp1253", not_established = "No recording shows a Greek mu stored in cp1253 (byte EC, a letter to a cp1252 reader)." }
-"2Ω" = { node = "n03", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "cp1253", number = 1.0 }
+"1μ" = { node = "n02", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "cp1253", number = 1.0 }
+"2Ω" = { node = "n03", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "cp1253", number = 2.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_utf8_bom"]
 [grid.value-number.cell.items]
-"1μ" = { node = "n01", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf8_bom", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, not_established = "No recording shows LTspice XVII read a Greek mu it decodes as one character (UTF-16)." }
-"2Ω" = { node = "n02", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf8_bom", number = 1.0 }
+"1μ" = { node = "n01", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf8_bom", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, decoded = [{ build = "ltspice17", reads = "1Î¼", reason = "LTspice XVII decodes a UTF-8 deck as cp1252, so it reads the stored bytes of the sign as two letters that are no scale and took 1; the server, and LTspice 26, read the sign. The difference is the decoding of the stored file, not a reading of the text: every route that starts from the stored file states it (stored_values), and a route that reads text is not held to a number read from other text." }] }
+"2Ω" = { node = "n02", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf8_bom", number = 2.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_utf16le"]
 [grid.value-number.cell.items]
-"1μ" = { node = "n01", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf16le", number = { ltspice26 = 1e-06 }, not_established = "No recording shows LTspice XVII read a Greek mu it decodes as one character (UTF-16)." }
-"2Ω" = { node = "n02", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le", number = 1.0 }
+"1μ" = { node = "n01", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf16le", number = 1e-06 }
+"2Ω" = { node = "n02", mantissa = "whole", suffix = "none", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le", number = 2.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces"]
 [grid.value-number.cell.items]
-"{1}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1t}" = { node = "n02", where = "braces", mantissa = "whole", suffix = "t", case = "lower", tail = "none", after = "suffix", number = 1000000000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1T}" = { node = "n03", where = "braces", mantissa = "whole", suffix = "t", case = "upper", tail = "none", after = "suffix", number = 1000000000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1g}" = { node = "n04", where = "braces", mantissa = "whole", suffix = "g", case = "lower", tail = "none", after = "suffix", number = 1000000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1G}" = { node = "n05", where = "braces", mantissa = "whole", suffix = "g", case = "upper", tail = "none", after = "suffix", number = 1000000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1meg}" = { node = "n06", where = "braces", mantissa = "whole", suffix = "meg", case = "lower", tail = "none", after = "suffix", number = 1000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1MEG}" = { node = "n07", where = "braces", mantissa = "whole", suffix = "meg", case = "upper", tail = "none", after = "suffix", number = 1000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1Meg}" = { node = "n08", where = "braces", mantissa = "whole", suffix = "meg", case = "mixed", tail = "none", after = "suffix", number = 1000000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1k}" = { node = "n09", where = "braces", mantissa = "whole", suffix = "k", case = "lower", tail = "none", after = "suffix", number = 1000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1K}" = { node = "n10", where = "braces", mantissa = "whole", suffix = "k", case = "upper", tail = "none", after = "suffix", number = 1000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1m}" = { node = "n11", where = "braces", mantissa = "whole", suffix = "m", case = "lower", tail = "none", after = "suffix", number = 0.001, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1M}" = { node = "n12", where = "braces", mantissa = "whole", suffix = "m", case = "upper", tail = "none", after = "suffix", number = 0.001, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1u}" = { node = "n13", where = "braces", mantissa = "whole", suffix = "u", case = "lower", tail = "none", after = "suffix", number = 1e-06, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1U}" = { node = "n14", where = "braces", mantissa = "whole", suffix = "u", case = "upper", tail = "none", after = "suffix", number = 1e-06, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1n}" = { node = "n15", where = "braces", mantissa = "whole", suffix = "n", case = "lower", tail = "none", after = "suffix", number = 1e-09, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1N}" = { node = "n16", where = "braces", mantissa = "whole", suffix = "n", case = "upper", tail = "none", after = "suffix", number = 1e-09, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1p}" = { node = "n17", where = "braces", mantissa = "whole", suffix = "p", case = "lower", tail = "none", after = "suffix", number = 1e-12, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1P}" = { node = "n18", where = "braces", mantissa = "whole", suffix = "p", case = "upper", tail = "none", after = "suffix", number = 1e-12, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1f}" = { node = "n19", where = "braces", mantissa = "whole", suffix = "f", case = "lower", tail = "none", after = "suffix", number = 1e-15, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1F}" = { node = "n20", where = "braces", mantissa = "whole", suffix = "f", case = "upper", tail = "none", after = "suffix", number = 1e-15, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1.5}" = { node = "n21", where = "braces", mantissa = "decimal", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.5, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1.}" = { node = "n22", where = "braces", mantissa = "trailing_dot", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{.5}" = { node = "n23", where = "braces", mantissa = "leading_dot", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 0.5, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1e3}" = { node = "n24", where = "braces", mantissa = "exponent", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1E3}" = { node = "n25", where = "braces", mantissa = "exponent_upper", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1e-3}" = { node = "n26", where = "braces", mantissa = "exponent_signed", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 0.001, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{+1}" = { node = "n27", where = "braces", mantissa = "plus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{-1}" = { node = "n28", where = "braces", mantissa = "minus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = -1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0 }
+"{1t}" = { node = "n02", where = "braces", mantissa = "whole", suffix = "t", case = "lower", tail = "none", after = "suffix", number = 1000000000000.0 }
+"{1T}" = { node = "n03", where = "braces", mantissa = "whole", suffix = "t", case = "upper", tail = "none", after = "suffix", number = 1000000000000.0 }
+"{1g}" = { node = "n04", where = "braces", mantissa = "whole", suffix = "g", case = "lower", tail = "none", after = "suffix", number = 1000000000.0 }
+"{1G}" = { node = "n05", where = "braces", mantissa = "whole", suffix = "g", case = "upper", tail = "none", after = "suffix", number = 1000000000.0 }
+"{1meg}" = { node = "n06", where = "braces", mantissa = "whole", suffix = "meg", case = "lower", tail = "none", after = "suffix", number = 1000000.0 }
+"{1MEG}" = { node = "n07", where = "braces", mantissa = "whole", suffix = "meg", case = "upper", tail = "none", after = "suffix", number = 1000000.0 }
+"{1Meg}" = { node = "n08", where = "braces", mantissa = "whole", suffix = "meg", case = "mixed", tail = "none", after = "suffix", number = 1000000.0 }
+"{1k}" = { node = "n09", where = "braces", mantissa = "whole", suffix = "k", case = "lower", tail = "none", after = "suffix", number = 1000.0 }
+"{1K}" = { node = "n10", where = "braces", mantissa = "whole", suffix = "k", case = "upper", tail = "none", after = "suffix", number = 1000.0 }
+"{1m}" = { node = "n11", where = "braces", mantissa = "whole", suffix = "m", case = "lower", tail = "none", after = "suffix", number = 0.001 }
+"{1M}" = { node = "n12", where = "braces", mantissa = "whole", suffix = "m", case = "upper", tail = "none", after = "suffix", number = 0.001 }
+"{1u}" = { node = "n13", where = "braces", mantissa = "whole", suffix = "u", case = "lower", tail = "none", after = "suffix", number = 1e-06 }
+"{1U}" = { node = "n14", where = "braces", mantissa = "whole", suffix = "u", case = "upper", tail = "none", after = "suffix", number = 1e-06 }
+"{1n}" = { node = "n15", where = "braces", mantissa = "whole", suffix = "n", case = "lower", tail = "none", after = "suffix", number = 1e-09 }
+"{1N}" = { node = "n16", where = "braces", mantissa = "whole", suffix = "n", case = "upper", tail = "none", after = "suffix", number = 1e-09 }
+"{1p}" = { node = "n17", where = "braces", mantissa = "whole", suffix = "p", case = "lower", tail = "none", after = "suffix", number = 1e-12 }
+"{1P}" = { node = "n18", where = "braces", mantissa = "whole", suffix = "p", case = "upper", tail = "none", after = "suffix", number = 1e-12 }
+"{1f}" = { node = "n19", where = "braces", mantissa = "whole", suffix = "f", case = "lower", tail = "none", after = "suffix", number = 1e-15 }
+"{1F}" = { node = "n20", where = "braces", mantissa = "whole", suffix = "f", case = "upper", tail = "none", after = "suffix", number = 1e-15 }
+"{1.5}" = { node = "n21", where = "braces", mantissa = "decimal", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.5 }
+"{1.}" = { node = "n22", where = "braces", mantissa = "trailing_dot", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0 }
+"{.5}" = { node = "n23", where = "braces", mantissa = "leading_dot", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 0.5 }
+"{1e3}" = { node = "n24", where = "braces", mantissa = "exponent", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1000.0 }
+"{1E3}" = { node = "n25", where = "braces", mantissa = "exponent_upper", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1000.0 }
+"{1e-3}" = { node = "n26", where = "braces", mantissa = "exponent_signed", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 0.001 }
+"{+1}" = { node = "n27", where = "braces", mantissa = "plus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = 1.0 }
+"{-1}" = { node = "n28", where = "braces", mantissa = "minus", suffix = "none", case = "lower", tail = "none", after = "nothing", number = -1.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_micro_sign"]
 [grid.value-number.cell.items]
-"{1µ}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "utf16le_bom", number = 1e-06, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1µ}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "utf16le_bom", number = 1e-06 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_greek_mu"]
 [grid.value-number.cell.items]
-"{1μ}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf16le_bom", number = { ltspice26 = 1e-06 }, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1μ}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf16le_bom", number = 1e-06 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_mil"]
 [grid.value-number.cell.items]
-"{1mil}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "mil", case = "lower", tail = "none", after = "suffix", number = 2.54e-05, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1MIL}" = { node = "n02", where = "braces", mantissa = "whole", suffix = "mil", case = "upper", tail = "none", after = "suffix", number = 2.54e-05, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1Mil}" = { node = "n03", where = "braces", mantissa = "whole", suffix = "mil", case = "mixed", tail = "none", after = "suffix", number = 2.54e-05, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1mil}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "mil", case = "lower", tail = "none", after = "suffix", number = 2.54e-05 }
+"{1MIL}" = { node = "n02", where = "braces", mantissa = "whole", suffix = "mil", case = "upper", tail = "none", after = "suffix", number = 2.54e-05 }
+"{1Mil}" = { node = "n03", where = "braces", mantissa = "whole", suffix = "mil", case = "mixed", tail = "none", after = "suffix", number = 2.54e-05 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_r"]
 [grid.value-number.cell.items]
-"{1r}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "r", case = "lower", tail = "none", number = 1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
-"{1R}" = { node = "n02", where = "braces", mantissa = "whole", suffix = "r", case = "upper", tail = "none", number = 1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1r}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "r", case = "lower", tail = "none", number = 1.0 }
+"{1R}" = { node = "n02", where = "braces", mantissa = "whole", suffix = "r", case = "upper", tail = "none", number = 1.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_suffix_digits"]
 [grid.value-number.cell.items]
-"{1k5}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "k", case = "lower", after = "suffix_digits", number = 1500.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1k5}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "k", case = "lower", after = "suffix_digits", number = 1500.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_r_digits"]
 [grid.value-number.cell.items]
-"{1r5}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "r", case = "lower", after = "r_digits", number = 1.5, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1r5}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "r", case = "lower", after = "r_digits", number = 1.5 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_letter_digits"]
 [grid.value-number.cell.items]
-"{1V5}" = { node = "n01", where = "braces", mantissa = "whole", after = "letter_digits", number = 1.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1V5}" = { node = "n01", where = "braces", mantissa = "whole", after = "letter_digits", number = 1.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_letters"]
 [grid.value-number.cell.items]
-"{1kV}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "k", case = "lower", tail = "letters", number = 1000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1kV}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "k", case = "lower", tail = "letters", number = 1000.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_ohm_sign"]
 [grid.value-number.cell.items]
-"{1kΩ}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "k", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1000.0, not_established = "No recording shows a number in braces: LTspice's reading of a number inside an expression is not recorded." }
+"{1kΩ}" = { node = "n01", where = "braces", mantissa = "whole", suffix = "k", case = "lower", tail = "ohm_sign", sign = "ohm_sign", encoding = "utf16le_bom", number = 1000.0 }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_underscore"]
 [grid.value-number.cell.items]
-"{1_000}" = { node = "n01", where = "braces", mantissa = "underscore", after = "nothing", not_established = "No recording shows an underscore inside a number; Python's float reads 1_000 as 1000." }
+"{1_000}" = { node = "n01", where = "braces", mantissa = "underscore", after = "nothing", number = 1.0, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses an underscore inside a number, where both builds stop (1_000 is 1)." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses an underscore inside a number, where both builds stop (1_000 is 1)." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_inf"]
 [grid.value-number.cell.items]
-"{inf}" = { node = "n01", where = "braces", mantissa = "inf", after = "nothing", not_established = "No recording shows inf as a value; Python's float reads it as infinity." }
+"{inf}" = { node = "n01", where = "braces", mantissa = "inf", after = "nothing", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on inf or nan in braces as a parameter it has none of (No such parameter defined.)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses inf and nan in braces, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_nan"]
 [grid.value-number.cell.items]
-"{nan}" = { node = "n01", where = "braces", mantissa = "nan", after = "nothing", not_established = "No recording shows nan as a value; Python's float reads it as not a number." }
+"{nan}" = { node = "n01", where = "braces", mantissa = "nan", after = "nothing", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on inf or nan in braces as a parameter it has none of (No such parameter defined.)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses inf and nan in braces, which LTspice 26 refuses and XVII takes as 0." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_overflow"]
 [grid.value-number.cell.items]
-"{1e999}" = { node = "n01", where = "braces", mantissa = "overflow", after = "nothing", not_established = "No recording shows a number past the largest double; Python's float reads 1e999 as infinity." }
+"{1e999}" = { node = "n01", where = "braces", mantissa = "overflow", after = "nothing", number = { ltspice26 = 1e+200, ltspice17 = 9.999999999999998e+307 }, differs = [{ build = "ltspice26", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses a number past a double's range, which LTspice 26 takes as 1e200 and XVII as the largest double." }, { build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses a number past a double's range, which LTspice 26 takes as 1e200 and XVII as the largest double." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/number_grid_braces_nonascii_digit"]
 [grid.value-number.cell.items]
-"{٣}" = { node = "n01", where = "braces", mantissa = "nonascii_digits", suffix = "none", case = "lower", tail = "none", after = "nothing", not_established = "No recording shows a digit that is not ASCII; Python reads ٣ as 3." }
+"{٣}" = { node = "n01", where = "braces", mantissa = "nonascii_digits", suffix = "none", case = "lower", tail = "none", after = "nothing", number = { ltspice17 = 0.0 }, refused = { ltspice26 = "LTspice 26 stops on a digit that is not ASCII in braces (Expected expression here., Unknown parameter)" }, differs = [{ build = "ltspice17", routes = ["values_equal"], reason = "values_equal compares a value it cannot read as a number by its text, so it reports the value and the number LTspice took as two values though LTspice runs them alike: the expression reader refuses a digit that is not ASCII, which LTspice 26 refuses and XVII takes as 0." }] }
 
 # ---------------------------------------------------------------- the expression-value grid
 
@@ -6965,10 +6963,12 @@ item_axis = "expression"
 # Keys of a cell beside its coordinates: the item is the expression as the
 # deck writes it (for a .param, the card's assignment); node, the node whose
 # voltage is what LTspice computed; number, that number, from the recording,
-# or predicted where none is recorded; not_established, why it is a
-# prediction no recording shows the rule of, or why it has none; differs, a
-# route that answers otherwise, with the reason.
-item_keys = ["node", "number", "not_established", "differs"]
+# or predicted where none is recorded (a table by build where the builds
+# differ); refused, by build, the reason the build's log gives for stopping
+# the deck; not_established, why it is a prediction no recording shows the
+# rule of, or why it has none; differs, a route that answers otherwise, with
+# the reason.
+item_keys = ["node", "number", "refused", "not_established", "differs"]
 behaviours = ["deck-semantics", "expression-grid"]
 groups = [
     ["operator", "left", "right"],
@@ -6989,8 +6989,9 @@ groups = [
 operator = { values = ["plus", "minus", "times", "divide"], default = "" }
 left = { values = ["positive", "negative", "zero"], default = "" }
 right = { values = ["positive", "negative", "zero"], default = "" }
-# A power, spelled ** or ^ (evaluate refuses the caret for LTspice), over a
-# base and an exponent of each kind _power tells apart.
+# A power, spelled ** or ^, over a base and an exponent of each kind _power
+# tells apart. LTspice takes no power for the caret: it gives 0 or 1, and for a
+# fractional operand the builds differ, so evaluate refuses it for LTspice.
 power = { values = ["star", "caret"], default = "" }
 base = { values = ["positive", "zero", "negative"], default = "" }
 exponent = { values = ["whole", "negative_whole", "zero", "fraction"], default = "" }
@@ -6998,8 +6999,9 @@ exponent = { values = ["whole", "negative_whole", "zero", "fraction"], default =
 unary = { values = ["minus", "plus"], default = "" }
 operand = { values = ["positive", "negative", "zero"], default = "" }
 # An expression of more than one operator: associativity (a-b-c, a/b/c, two
-# powers, which evaluate refuses), a negated power, a power of a negated name
-# (which evaluate refuses for ngspice), precedence and parentheses.
+# powers, which evaluate refuses), a negated power (LTspice binds the sign to
+# the number before the power), a power of a negated name (which evaluate
+# refuses for ngspice), precedence and parentheses.
 chain = { values = ["minus_minus", "divide_divide", "power_power_star", "power_power_caret", "negated_power_star", "negated_power_caret", "power_negated_name", "precedence", "parentheses"], default = "" }
 # How the expression is written: in braces, in quotes, in braces in braces,
 # with no braces as an element's value, or as a .param's value with no braces
@@ -7061,20 +7063,20 @@ cases = ["deck/expr_grid_arithmetic"]
 "{bpos**eneg}" = { node = "e35", operands = "parameter", power = "star", base = "positive", exponent = "negative_whole", number = 0.25 }
 "{bpos**ezero}" = { node = "e36", operands = "parameter", power = "star", base = "positive", exponent = "zero", number = 1.0 }
 "{bpos**efrac}" = { node = "e37", operands = "parameter", power = "star", base = "positive", exponent = "fraction", number = 1.4142135623730951 }
-"{bzero**ewhole}" = { node = "e38", operands = "parameter", power = "star", base = "zero", exponent = "whole", number = 0.0, not_established = "No recording shows LTspice raise zero to a power." }
-"{bzero**efrac}" = { node = "e39", operands = "parameter", power = "star", base = "zero", exponent = "fraction", number = 0.0, not_established = "No recording shows LTspice raise zero to a power." }
-"{bpos^ewhole}" = { node = "e40", operands = "parameter", power = "caret", base = "positive", exponent = "whole", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bpos^eneg}" = { node = "e41", operands = "parameter", power = "caret", base = "positive", exponent = "negative_whole", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bpos^ezero}" = { node = "e42", operands = "parameter", power = "caret", base = "positive", exponent = "zero", number = 1.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bpos^efrac}" = { node = "e43", operands = "parameter", power = "caret", base = "positive", exponent = "fraction", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bzero^ewhole}" = { node = "e44", operands = "parameter", power = "caret", base = "zero", exponent = "whole", number = 1.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bzero^eneg}" = { node = "e45", operands = "parameter", power = "caret", base = "zero", exponent = "negative_whole", number = 1.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bzero^ezero}" = { node = "e46", operands = "parameter", power = "caret", base = "zero", exponent = "zero", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bzero^efrac}" = { node = "e47", operands = "parameter", power = "caret", base = "zero", exponent = "fraction", number = 1.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bneg^ewhole}" = { node = "e48", operands = "parameter", power = "caret", base = "negative", exponent = "whole", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bneg^eneg}" = { node = "e49", operands = "parameter", power = "caret", base = "negative", exponent = "negative_whole", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bneg^ezero}" = { node = "e50", operands = "parameter", power = "caret", base = "negative", exponent = "zero", number = 1.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
-"{bneg^efrac}" = { node = "e51", operands = "parameter", power = "caret", base = "negative", exponent = "fraction", number = 0.0, not_established = "The caret is predicted as LTspice's exclusive-or of two truth values from deck/caret_power (2^3^2 is 1, (2^3)+5 is 5); no recording shows it on these operands." }
+"{bzero**ewhole}" = { node = "e38", operands = "parameter", power = "star", base = "zero", exponent = "whole", number = 0.0 }
+"{bzero**efrac}" = { node = "e39", operands = "parameter", power = "star", base = "zero", exponent = "fraction", number = 0.0 }
+"{bpos^ewhole}" = { node = "e40", operands = "parameter", power = "caret", base = "positive", exponent = "whole", number = 0.0 }
+"{bpos^eneg}" = { node = "e41", operands = "parameter", power = "caret", base = "positive", exponent = "negative_whole", number = 1.0 }
+"{bpos^ezero}" = { node = "e42", operands = "parameter", power = "caret", base = "positive", exponent = "zero", number = 1.0 }
+"{bpos^efrac}" = { node = "e43", operands = "parameter", power = "caret", base = "positive", exponent = "fraction", number = { ltspice26 = 0.0, ltspice17 = 1.0 } }
+"{bzero^ewhole}" = { node = "e44", operands = "parameter", power = "caret", base = "zero", exponent = "whole", number = 1.0 }
+"{bzero^eneg}" = { node = "e45", operands = "parameter", power = "caret", base = "zero", exponent = "negative_whole", number = 0.0 }
+"{bzero^ezero}" = { node = "e46", operands = "parameter", power = "caret", base = "zero", exponent = "zero", number = 0.0 }
+"{bzero^efrac}" = { node = "e47", operands = "parameter", power = "caret", base = "zero", exponent = "fraction", number = { ltspice26 = 1.0, ltspice17 = 0.0 } }
+"{bneg^ewhole}" = { node = "e48", operands = "parameter", power = "caret", base = "negative", exponent = "whole", number = 1.0 }
+"{bneg^eneg}" = { node = "e49", operands = "parameter", power = "caret", base = "negative", exponent = "negative_whole", number = 0.0 }
+"{bneg^ezero}" = { node = "e50", operands = "parameter", power = "caret", base = "negative", exponent = "zero", number = 0.0 }
+"{bneg^efrac}" = { node = "e51", operands = "parameter", power = "caret", base = "negative", exponent = "fraction", number = { ltspice26 = 1.0, ltspice17 = 0.0 } }
 "{-lpos}" = { node = "e52", operands = "parameter", unary = "minus", operand = "positive", number = -6.0 }
 "{-lneg}" = { node = "e53", operands = "parameter", unary = "minus", operand = "negative", number = 6.0 }
 "{-lzero}" = { node = "e54", operands = "parameter", unary = "minus", operand = "zero", number = -0.0 }
@@ -7085,78 +7087,78 @@ cases = ["deck/expr_grid_arithmetic"]
 "{64/8/2}" = { node = "e59", operands = "literal", chain = "divide_divide", number = 4.0 }
 "{2+3*4}" = { node = "e60", operands = "literal", chain = "precedence", number = 14.0 }
 "{(2+3)*4}" = { node = "e61", operands = "literal", chain = "parentheses", number = 20.0 }
-"{-2^2}" = { node = "e62", operands = "literal", chain = "negated_power_caret", not_established = "No recording shows whether LTspice negates before or after a caret (-2^2)." }
+"{-2^2}" = { node = "e62", operands = "literal", chain = "negated_power_caret", number = 1.0 }
 "psum=lpos+rpos" = { node = "e63", wrap = "param", operands = "parameter", number = 10.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_divide_positive_by_zero"]
 [grid.expression-value.cell.items]
-"{lpos/rzero}" = { node = "e01", operands = "parameter", operator = "divide", left = "positive", right = "zero", not_established = "No recording shows LTspice divide by zero in a parameter expression." }
+"{lpos/rzero}" = { node = "e01", operands = "parameter", operator = "divide", left = "positive", right = "zero", number = { ltspice17 = 1e308 }, refused = { ltspice26 = "Division by zero." } }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_divide_negative_by_zero"]
 [grid.expression-value.cell.items]
-"{lneg/rzero}" = { node = "e01", operands = "parameter", operator = "divide", left = "negative", right = "zero", not_established = "No recording shows LTspice divide by zero in a parameter expression." }
+"{lneg/rzero}" = { node = "e01", operands = "parameter", operator = "divide", left = "negative", right = "zero", number = { ltspice17 = -1e308 }, refused = { ltspice26 = "Division by zero." } }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_divide_zero_by_zero"]
 [grid.expression-value.cell.items]
-"{lzero/rzero}" = { node = "e01", operands = "parameter", operator = "divide", left = "zero", right = "zero", not_established = "No recording shows LTspice divide by zero in a parameter expression." }
+"{lzero/rzero}" = { node = "e01", operands = "parameter", operator = "divide", left = "zero", right = "zero", number = { ltspice17 = -1.0 }, refused = { ltspice26 = "Division by zero." } }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_zero_to_a_negative_power"]
 [grid.expression-value.cell.items]
-"{bzero**eneg}" = { node = "e01", operands = "parameter", power = "star", base = "zero", exponent = "negative_whole", not_established = "No recording shows LTspice raise zero to a negative power." }
+"{bzero**eneg}" = { node = "e01", operands = "parameter", power = "star", base = "zero", exponent = "negative_whole", number = { ltspice26 = 1e200, ltspice17 = 1e308 } }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_zero_to_zero"]
 [grid.expression-value.cell.items]
-"{bzero**ezero}" = { node = "e01", operands = "parameter", power = "star", base = "zero", exponent = "zero", not_established = "No recording shows LTspice's 0**0." }
+"{bzero**ezero}" = { node = "e01", operands = "parameter", power = "star", base = "zero", exponent = "zero", number = 1.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_negative_to_whole"]
 [grid.expression-value.cell.items]
-"{bneg**ewhole}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "whole", not_established = "No recording shows LTspice raise a negative base to a power: its ** may take the power of the magnitude, as ngspice does in some modes." }
+"{bneg**ewhole}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "whole", number = -8.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_negative_to_negative_whole"]
 [grid.expression-value.cell.items]
-"{bneg**eneg}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "negative_whole", not_established = "No recording shows LTspice raise a negative base to a power: its ** may take the power of the magnitude, as ngspice does in some modes." }
+"{bneg**eneg}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "negative_whole", number = 0.25 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_negative_to_zero"]
 [grid.expression-value.cell.items]
-"{bneg**ezero}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "zero", not_established = "No recording shows LTspice raise a negative base to a power: its ** may take the power of the magnitude, as ngspice does in some modes." }
+"{bneg**ezero}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "zero", number = 1.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_negative_to_a_fraction"]
 [grid.expression-value.cell.items]
-"{bneg**efrac}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "fraction", not_established = "No recording shows LTspice raise a negative base to a fractional power." }
+"{bneg**efrac}" = { node = "e01", operands = "parameter", power = "star", base = "negative", exponent = "fraction", number = { ltspice26 = 0.0 }, refused = { ltspice17 = "invalid exponentiation range; Unknown parameter" } }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_negated_power_star"]
 [grid.expression-value.cell.items]
-"{-2**2}" = { node = "e01", operands = "literal", chain = "negated_power_star", not_established = "No recording shows whether LTspice negates before or after a power (-2**2)." }
+"{-2**2}" = { node = "e01", operands = "literal", chain = "negated_power_star", number = 4.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_power_negated_name"]
 [grid.expression-value.cell.items]
-"{bpos**-ewhole}" = { node = "e01", operands = "parameter", chain = "power_negated_name", number = 0.125, not_established = "No recording shows a power whose exponent is a negated name." }
+"{bpos**-ewhole}" = { node = "e01", operands = "parameter", chain = "power_negated_name", number = 0.125 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_quotes"]
 [grid.expression-value.cell.items]
-"'lpos+rpos'" = { node = "e01", wrap = "quotes", operands = "parameter", not_established = "No recording shows a quoted expression as an element's value." }
+"'lpos+rpos'" = { node = "e01", wrap = "quotes", operands = "parameter", number = 10.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_nested_braces"]
 [grid.expression-value.cell.items]
-"{{lpos+rpos}}" = { node = "e01", wrap = "nested_braces", operands = "parameter", not_established = "No recording shows braces inside braces." }
+"{{lpos+rpos}}" = { node = "e01", wrap = "nested_braces", operands = "parameter", number = 10.0 }
 
 [[grid.expression-value.cell]]
 cases = ["deck/expr_grid_bare"]
 [grid.expression-value.cell.items]
-"lpos+rpos" = { node = "e01", wrap = "bare", operands = "parameter", not_established = "No recording shows an expression written as an element's value with no braces." }
+"lpos+rpos" = { node = "e01", wrap = "bare", operands = "parameter", refused = { ltspice26 = "Unknown parameter", ltspice17 = "Unknown parameter" } }
 
 # ---------------------------------------------------------------- the deck-card grid
 

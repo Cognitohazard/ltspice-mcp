@@ -33,7 +33,12 @@ LIB_WORD_READERS = {
 
 #: Calls of ``evaluate`` or ``Environment`` that may name a simulator as a
 #: literal, with the reason.
-LITERAL_SIMULATOR_CALLS: dict[str, str] = {}
+LITERAL_SIMULATOR_CALLS: dict[str, str] = {
+    "lib/netlist_graph.py:_token_number": (
+        "values_equal compares two values as LTspice runs them, so a braced constant "
+        "is read as LTspice computes it"
+    ),
+}
 
 
 def _strip_casefold(node: ast.AST) -> ast.AST:

@@ -59,23 +59,46 @@ def _require_mode(simulator: str, ngbehavior: str | None) -> None:
         )
 
 
-def _power(base: float, exponent: float, simulator: str, ngbehavior: str | None) -> float:
+#: The LTspice builds whose arithmetic is recorded, as ``Naming.read_as``
+#: spells them (``SemanticProfile.ltspice_build``).
+LTSPICE_26 = "LTspice 26"
+LTSPICE_XVII = "LTspice XVII"
+
+
+def _power(
+    base: float,
+    exponent: float,
+    simulator: str,
+    ngbehavior: str | None,
+    ltspice_build: str | None = None,
+) -> float:
     """``base`` raised to ``exponent`` where the reader's value is the one the
     simulator computes, else a refusal saying why.
 
-    A positive base gives the same value in every ngspice mode, and so does a
-    zero base with a positive exponent. A zero base with a zero or negative
-    exponent differs by mode (``0^0`` is 0 under hsa and 1 otherwise, and
-    ``0^-1`` stops native and kiltpsa ngspice where hsa gives 0), and a
-    negative base with a fractional exponent gives a different number in
-    each mode, none of them a real power; both are declined. A negative base
-    with an integer exponent keeps its sign only where ngspice gives it one
-    (``ngspice_compat.signed_power``), and is declined elsewhere: ngspice
-    takes the power of its magnitude there. ngspice's own arithmetic is not
-    modelled.
+    A positive base gives the same value in every ngspice mode and in both
+    recorded LTspice builds, and so does a zero base with a positive exponent
+    and a negative base with a whole exponent where the reader keeps its sign.
+
+    LTspice (recorded: ``deck/expr_grid_*``, ``deck/pow_neg_base_*``): ``0**0``
+    is 1 in both builds. A zero base with a negative exponent gives no power
+    (26 takes 1e200 and XVII 1e308), so it is declined. A negative base with
+    a fractional exponent is 0 in LTspice 26, and XVII refuses the deck
+    ("invalid exponentiation range"); ``ltspice_build`` says which build reads
+    the deck, and with none known it is declined.
+
+    ngspice: a zero base with a zero or negative exponent differs by mode
+    (``0^0`` is 0 under hsa and 1 otherwise, and ``0^-1`` stops native and
+    kiltpsa ngspice where hsa gives 0), and a negative base with a fractional
+    exponent gives a different number in each mode, none of them a real
+    power; both are declined. A negative base with an integer exponent keeps
+    its sign only where ngspice gives it one (``ngspice_compat.signed_power``),
+    and is declined elsewhere: ngspice takes the power of its magnitude there.
+    ngspice's own arithmetic is not modelled.
     """
     if base > 0 or (base == 0 and exponent > 0):
         return base**exponent
+    if simulator == "ltspice":
+        return _ltspice_power(base, exponent, ltspice_build)
     if base == 0:
         raise ValueError(
             "a zero base with a zero or negative exponent is not resolved: ngspice "
@@ -94,6 +117,43 @@ def _power(base: float, exponent: float, simulator: str, ngbehavior: str | None)
     return base**exponent
 
 
+def _ltspice_power(base: float, exponent: float, ltspice_build: str | None) -> float:
+    """LTspice's power of a zero or negative base (``_power``)."""
+    if base == 0 and exponent == 0:
+        return 1.0
+    if base == 0:
+        raise ValueError(
+            "a zero base with a negative exponent has no power: LTspice 26 takes "
+            "1e200 and LTspice XVII 1e308 for it"
+        )
+    if float(exponent).is_integer():
+        return base**exponent
+    if ltspice_build == LTSPICE_26:
+        return 0.0
+    if ltspice_build == LTSPICE_XVII:
+        raise ValueError(
+            "LTspice XVII refuses a negative base with a fractional exponent "
+            "(invalid exponentiation range)"
+        )
+    raise ValueError(
+        "a negative base with a fractional exponent is not resolved for an LTspice "
+        "build that is not known: LTspice 26 takes 0 and LTspice XVII refuses it"
+    )
+
+
+def _parenthesised(source: bytes, node: ast.expr) -> bool:
+    """Whether ``node`` is written inside its own parentheses in ``source``
+    (an ``ast`` column is a byte offset, and leaves its parentheses out)."""
+    return source[: node.col_offset].rstrip()[-1:] == b"("
+
+
+#: An element's value with no braces that is one number or one name, with a
+#: sign or none: any other such value LTspice reads as one parameter name.
+_BARE_VALUE = re.compile(
+    r"[+-]?\s*(?:[^\W\d]\w*|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[^\W\d_]*+\w*)"
+)
+
+
 #: A power operator followed straight by a negated name (``3^-b``), which
 #: ngspice-42 refuses in every mode ("wrongly determined negation"); a negated
 #: number (``3^-1``) and a parenthesised name (``3^(-b)``) it computes.
@@ -107,6 +167,7 @@ def evaluate(
     simulator: str,
     ngbehavior: str | None,
     element_value: bool = False,
+    ltspice_build: str | None = None,
 ) -> float:
     """Interpret finite arithmetic, identifiers and SPICE suffixes under fixed bounds.
 
@@ -115,9 +176,22 @@ def evaluate(
     power gives depends on it (``_power``).
 
     With ``element_value`` the text is an element's value field, where a bare
-    number is read as LTspice reads a value (``1k5`` is 1500, ``9V1`` is 9,
-    recorded). What LTspice makes of those spellings inside an expression is
-    not recorded, so there they are declined.
+    number, alone or alone in braces, is read as LTspice reads a value
+    (``1k5`` and ``{1k5}`` are 1500, ``9V1`` is 9, recorded:
+    ``deck/number_grid_braces_*``). What LTspice makes of those spellings
+    inside a larger expression is not recorded, so there they are declined.
+    An element's value with no braces or quotes that is neither a number nor
+    one name LTspice reads as one parameter name, and refuses (recorded:
+    ``deck/expr_grid_bare``), so the reader declines it too.
+
+    ``ltspice_build`` is the recorded LTspice build that reads the deck
+    (``LTSPICE_26``, ``LTSPICE_XVII``), or None when it is not known: where
+    the builds compute a power differently, it decides (``_power``).
+
+    LTspice binds a unary sign to the number after it before a power:
+    ``-2**2`` is 4 (recorded: ``deck/expr_grid_negated_power_star``,
+    ``deck/pow_neg_base_whole``). A sign before a name or a group raised to a
+    power is not recorded, so it is declined for LTspice.
     """
     _require_mode(simulator, ngbehavior)
     if simulator == "ltspice" and "^" in expression:
@@ -125,11 +199,22 @@ def evaluate(
     if len(expression) > MAX_EXPRESSION_LENGTH:
         raise ValueError(f"expression exceeds {MAX_EXPRESSION_LENGTH} characters")
     text = expression.strip()
-    if element_value and simulator == "ltspice" and _NUMBER.fullmatch(text):
-        value = parse_spice_value(text)
+    alone = text[1:-1].strip() if text[:1] == "{" and text[-1:] == "}" else text
+    if element_value and simulator == "ltspice" and _NUMBER.fullmatch(alone):
+        value = parse_spice_value(alone)
         if not math.isfinite(value):
             raise ValueError("expression is not a finite real number")
         return value
+    if (
+        element_value
+        and simulator == "ltspice"
+        and text[:1] not in ("{", "'")
+        and not _BARE_VALUE.fullmatch(text)
+    ):
+        raise ValueError(
+            f"LTspice reads an element's value with no braces as one parameter "
+            f"name, and refuses '{text}' (Unknown parameter); write {{{text}}}"
+        )
     while len(text) >= 2 and (text[0], text[-1]) in {("{", "}"), ("'", "'")}:
         text = text[1:-1].strip()
     if re.search(r"[^\w\s.()+*/^µμ-]", text):
@@ -142,9 +227,16 @@ def evaluate(
     if len(re.findall(r"\^|\*\*", text)) > 1:
         raise ValueError("multiple power operators have unsupported associativity")
     text = _NUMBER.sub(_number, text)
-    tree = ast.parse(text.replace("^", "**"), mode="eval")
+    source = text.replace("^", "**")
+    tree = ast.parse(source, mode="eval")
+    written = source.encode()
     if sum(1 for _ in ast.walk(tree)) > MAX_EXPRESSION_NODES:
         raise ValueError(f"expression exceeds {MAX_EXPRESSION_NODES} syntax nodes")
+
+    def raised(base: float, exponent: float) -> float:
+        if abs(exponent) > 64:
+            raise ValueError("power exponent exceeds 64")
+        return _power(base, exponent, simulator, ngbehavior, ltspice_build)
 
     def visit(node: ast.AST) -> float:
         if (
@@ -156,15 +248,28 @@ def evaluate(
         elif isinstance(node, ast.Name):
             result = lookup(node.id.casefold())
         elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            result = visit(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
+            sign = -1 if isinstance(node.op, ast.USub) else 1
+            power = node.operand
+            if (
+                simulator == "ltspice"
+                and isinstance(power, ast.BinOp)
+                and isinstance(power.op, ast.Pow)
+                and not _parenthesised(written, power)
+            ):
+                if not isinstance(power.left, ast.Constant) or _parenthesised(written, power.left):
+                    raise ValueError(
+                        "LTspice's reading of a sign before a name or a group raised to "
+                        "a power is not recorded; write (-x)**y or -(x**y)"
+                    )
+                result = raised(sign * visit(power.left), visit(power.right))
+            else:
+                result = visit(node.operand) * sign
         elif isinstance(node, ast.BinOp) and (
             type(node.op) in _BINARY or isinstance(node.op, ast.Pow)
         ):
             left, right = visit(node.left), visit(node.right)
             if isinstance(node.op, ast.Pow):
-                if abs(right) > 64:
-                    raise ValueError("power exponent exceeds 64")
-                result = _power(left, right, simulator, ngbehavior)
+                result = raised(left, right)
             else:
                 result = _BINARY[type(node.op)](left, right)
         else:
@@ -179,8 +284,8 @@ def evaluate(
 class Environment:
     """Lexical environment with caller-evaluated overrides and lazy dependencies.
 
-    ``simulator`` and ``ngbehavior`` are who reads the expressions, as
-    ``evaluate`` takes them: the mode is required for ngspice."""
+    ``simulator``, ``ngbehavior`` and ``ltspice_build`` are who reads the
+    expressions, as ``evaluate`` takes them: the mode is required for ngspice."""
 
     def __init__(
         self,
@@ -188,6 +293,7 @@ class Environment:
         *,
         simulator: str,
         ngbehavior: str | None,
+        ltspice_build: str | None = None,
         parent: Environment | None = None,
         overrides: Mapping[str, NumericFact] | None = None,
         dynamic_reason: str | None = None,
@@ -195,6 +301,7 @@ class Environment:
         _require_mode(simulator, ngbehavior)
         self.simulator = simulator
         self.ngbehavior = ngbehavior
+        self.ltspice_build = ltspice_build
         self.expressions = {key.casefold(): value for key, value in expressions.items()}
         self.parent = parent
         self.overrides = dict(overrides or {})
@@ -244,6 +351,7 @@ class Environment:
                 simulator=self.simulator,
                 ngbehavior=self.ngbehavior,
                 element_value=element_value,
+                ltspice_build=self.ltspice_build,
             )
             return NumericFact(expression, value, unit, "resolved")
         except (ValueError, SyntaxError, ArithmeticError, RecursionError) as exc:
