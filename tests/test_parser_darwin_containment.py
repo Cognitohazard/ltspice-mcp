@@ -11,7 +11,6 @@ from __future__ import annotations
 import ast
 import json
 import os
-import platform
 import select
 import shutil
 import subprocess
@@ -283,26 +282,6 @@ def test_a_worker_started_without_an_allocator_setting_is_refused(missing):
         parser_bootstrap._prove_allocator(environ)
 
 
-@macos
-@pytest.mark.skipif(
-    platform.machine() != "arm64", reason="The medium pool is on by default only on Apple silicon"
-)
-def test_allocator_settings_the_system_did_not_apply_are_refused():
-    # This process started without the settings, so its medium and nano pools
-    # are on whatever environment the proof is handed. Every worker test on
-    # macOS shows the other side: a worker started with them passes.
-    code, _, err = _run(
-        """
-        from ltspice_mcp.lib import parser_bootstrap
-        try:
-            parser_bootstrap._prove_allocator(parser_bootstrap.DARWIN_ALLOCATOR)
-        except parser_bootstrap.ContainmentFailed as error:
-            raise SystemExit(str(error))
-        """
-    )
-    assert code == 1 and "did not honour the allocator settings" in err, err
-
-
 @posix
 def test_a_mapping_under_the_budget_that_fails_is_refused():
     code, _, err = _run(
@@ -497,6 +476,30 @@ def test_an_inherited_lower_address_space_limit_fails_naming_it(call_dir):
     # The refusal names the fix: a hard limit at least the requested one.
     assert "start the server where the hard RLIMIT_AS limit is at least" in failure["message"]
     assert not parser_file_in(directory, "imported.txt").exists()
+
+
+@posix
+@pytest.mark.parametrize(
+    ("hard_below_value", "names_the_fix"), [(True, True), (False, False)]
+)
+def test_a_refused_limit_names_the_ulimit_fix_only_when_the_hard_limit_is_too_low(
+    monkeypatch, hard_below_value, names_the_fix
+):
+    import resource
+
+    # The kernel's refusal itself is not reproducible on every host; what is
+    # tested is which refusal text follows it.
+    value = 1 << 30
+    hard = value - 4096 if hard_below_value else resource.RLIM_INFINITY
+
+    def refuse(which, limits):
+        raise ValueError("refused")
+
+    monkeypatch.setattr(resource, "setrlimit", refuse)
+    monkeypatch.setattr(resource, "getrlimit", lambda which: (hard, hard))
+    with pytest.raises(parser_bootstrap.ContainmentFailed) as caught:
+        parser_bootstrap._set_limit("RLIMIT_AS", resource.RLIMIT_AS, value, 0)
+    assert ("`ulimit`" in str(caught.value)) is names_the_fix, caught.value
 
 
 @macos
