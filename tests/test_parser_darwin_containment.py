@@ -446,14 +446,19 @@ def test_an_inherited_lower_address_space_limit_fails_naming_it(call_dir):
         from ltspice_mcp.lib import parser_bootstrap
         from ltspice_mcp.lib.parser_process import (
             ParserProcessError, ParserProcessLimits, run_parser_sync)
+        # The worker starts with another allocator configuration, so its base is
+        # not this process's; a budget far beyond the inherited headroom cannot
+        # fit under the inherited limit whatever the worker's base is.
         base = parser_bootstrap._darwin_base()
         resource.setrlimit(resource.RLIMIT_AS, (base + (256 << 20), base + (256 << 20)))
         try:
             run_parser_sync({}, work_dir=Path.cwd(), deadline=time.monotonic() + 60,
-                limits=ParserProcessLimits(1 << 30, 65536, 4096, 1024, 5),
+                limits=ParserProcessLimits(64 << 30, 65536, 4096, 1024, 5),
                 _worker_module="parser_fixture")
         except ParserProcessError as error:
             print(json.dumps({"code": error.code, "message": str(error)}))
+        else:
+            print(json.dumps({"code": None, "message": "the worker ran"}))
         """,
         cwd=directory,
     )
