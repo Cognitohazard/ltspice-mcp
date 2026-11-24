@@ -39,7 +39,7 @@ GRID = grid("deck-card")
 #: How many routes answer otherwise than a recorded cell, per build, each
 #: declared on its cell (``differs``, with the routes and the reason). A count
 #: may only fall: a fix lowers it here in the same change.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 33, "ltspice17": 68}
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 17, "ltspice17": 52}
 
 
 def _recorded(build: str, case_id: str) -> bool:
@@ -151,7 +151,7 @@ def test_every_directive_the_lexer_knows_is_a_value_of_the_directive_axis():
     body = source[source.index("def _classify_directive") :]
     body = body[: body.index("\ndef ")]
     kinds = set(re.findall(r'"(\.[a-z]+)"', body))
-    assert kinds == {".model", ".param", ".subckt", ".ends", ".end", ".meas", ".measure"}
+    assert kinds == {".model", ".param", ".params", ".subckt", ".ends", ".end", ".meas", ".measure"}
     written = {cell.item.casefold() for cell in GRID.cells if cell.coordinates["directive"]}
     every = kinds | INCLUDE_HEADS | set(spice_lex._OPAQUE_REGIONS)
     missing = {head for head in every if head not in written and head != ".endc"}
@@ -234,14 +234,6 @@ NGSPICE_DIFFERS: dict[str, str] = {
     "deck/include_end:R2": (
         "ngspice-42 reads an included file's cards past the file's own .end; lex_deck "
         "ends an included file at its .end for every simulator"
-    ),
-    "deck/card_grid_directive_variants_lower:.params": (
-        "ngspice reads .params as .param; the lexer reads it as an unknown directive, "
-        "so no route holds its parameter"
-    ),
-    "deck/card_grid_directive_variants_upper:.PARAMS": (
-        "ngspice reads .params as .param; the lexer reads it as an unknown directive, "
-        "so no route holds its parameter"
     ),
     "deck/card_grid_directive_variants_lower:.opt": (
         "ngspice reads .opt as .options; the lexer names it .opt, and which spellings "

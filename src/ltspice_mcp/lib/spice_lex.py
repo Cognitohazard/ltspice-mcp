@@ -730,7 +730,9 @@ def _classify_directive(head: str) -> CardKind:
     h = head.lower()
     if h == ".model":
         return "model"
-    if h == ".param":
+    # LTspice 26, LTspice XVII and ngspice read ``.params`` as ``.param``
+    # (``deck/card_grid_directive_variants_lower``).
+    if h in (".param", ".params"):
         return "param"
     if h == ".subckt":
         return "subckt"

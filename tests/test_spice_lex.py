@@ -538,6 +538,15 @@ class TestSpiceCardTypedAccessors:
     def test_param_name_with_whitespace_around_equals(self, line: str) -> None:
         assert lex(line + "\n").cards[0].param_name == "Vdd"
 
+    @pytest.mark.parametrize("head", [".params", ".PARAMS"])
+    def test_params_is_a_param_card(self, head: str) -> None:
+        # LTspice 26 and XVII read .params as .param
+        # (deck/card_grid_directive_variants_lower and _upper).
+        card = lex(f"{head} pp=2k\n").cards[0]
+        assert card.kind == "param"
+        assert card.param_name == "pp"
+        assert ParamCard.from_card(card).value == "2k"
+
     def test_param_name_without_equals_is_the_bare_name(self) -> None:
         assert lex(".PARAM Vdd 5\n").cards[0].param_name == "Vdd"
 
