@@ -1855,7 +1855,7 @@ def cut_without_continuation(
     (an integer field :func:`counts_what_was_left_out` names), reported at the
     count.
 
-    Design principle "Every check states what it did not cover" (``docs/DESIGN.md``): a list cut short says
+    Design principle "Every check reports what's not covered" (``docs/DESIGN.md``): a list cut short says
     how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
     holds the declared schemas to the same rule.
     """

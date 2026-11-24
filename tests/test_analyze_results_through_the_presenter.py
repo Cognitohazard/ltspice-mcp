@@ -6,7 +6,7 @@ when it fits its target; a longer one is stored whole and its lists cut, each
 cut named in ``cut`` with the cursor that reads the rest from the stored
 answer. A page evaluates nothing, so it is never refused or emptied because a
 source moved: it carries the snapshot of the sources its answer was computed
-from. "Every check states what it did not cover": a row left out that carries a
+from. "Every check reports what's not covered": a row left out that carries a
 fact is named, with a cursor that starts at it.
 """
 

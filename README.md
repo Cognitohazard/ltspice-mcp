@@ -8,21 +8,21 @@ ltspice-mcp is an MCP server for circuit simulation with LTspice and ngspice. It
 
 ## Functionalities
 
-* Run a circuit, a sweep, a set of corners or a Monte Carlo analysis in one call. Jobs run in the background and across sessions.
-* Well-tested tools for common measurements like gain and phase margins, step response, edge times, distortion, noise, operating points, etc.
-* Plot waveforms in an interactive chart in the chat where the client supports it.
-* Edit schematics in an aesthetic, human-readable form.
-* Co-design with a human in [the same LTspice window](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open) (LTspice 26.1 or later, on Windows).
-* Composable API that can be leveraged for complex custom tasks.
+* Runs a circuit, a sweep, a set of corners or a Monte Carlo analysis in one call. Simulation jobs run in the background and are tracked across sessions.
+* Provides well-tested tools for common measurements like gain and phase margins, step response, edge times, distortion, noise, operating points, etc.
+* Plots waveforms in an interactive chart in the chat where the client supports it.
+* Edits schematics in an aesthetic, human-readable form.
+* Co-designs with a human in [the same LTspice window](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open) (LTspice 26.1 or later, on Windows).
+* Provides a composable API that can be leveraged for complex custom tasks.
 
 ## Design Principles
 
 The tools contain circuit design practice and the recorded behaviour of each simulator. Both are applied in every call, because AI often misses errors that are not directly related to the request.
 
 * Mechanical sanity checks are run automatically without needing human/AI direction, catching errors without extra context bloat.
-* Every check states what it did not cover, so a partial check is not mistaken for a pass.
+* Every check reports what's not covered, so a partial check is not mistaken for a pass.
 * Analyses return measured values with units, so the AI works from a number and does not spend context on raw waveform data.
-* Results are reported as facts without verdicts, leaving the engineering judgement to the AI and the human.
+* Results are reported as facts without conclusions, leaving the engineering judgement to the AI and the human.
 * Schematic layout is directed by the AI, with every edit validated before it is written. There is no auto-router, because auto-routed schematics are hard to read.
 * Simulator and file-format quirks are recorded from real LTspice builds and covered by tests, so the tools do not depend on guesses.
 * Jobs and results are stored on disk and requests are repeatable, so work continues across sessions without re-running simulations.
@@ -91,10 +91,9 @@ MCP config. uvx needs Git on PATH to install from the repository.
 }
 ```
 
-The maintainer runs `master`, which gets each fix before a release. A change
-to the code lands on `master` after the tests pass on Linux and Windows. A
-tool's arguments, its reply fields and the Python API can change between two
-commits.
+The maintainer runs `master` himself and updates it constantly as he finds
+issues during his use. Expect less stability and more back-and-forths when
+running directly from `master`.
 
 uvx fetches `master` again each time the client starts the server, so each
 restart runs the newest commit. To stay on one commit, put its hash

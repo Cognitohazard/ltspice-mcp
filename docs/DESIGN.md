@@ -69,7 +69,7 @@ The server supplies the geometry. `inspect(kind="symbol")` returns the pins and 
 
 An agent asks for the phase margin of a loop. `analyze_results` returns `phase_margin_deg` with the gain margin and the unity-gain frequency. The waveform comes only on request, from the `waveform` recipe or from `plot_waveform`.
 
-A result is a fact with no verdict. A reply can report a crest factor of 8.1 for one stretch of a waveform, and it does not call that stretch a spike. A reply with no finding means that no check fired, and it does not mean "verified".
+A result is a fact with no conclusion. A reply can report a crest factor of 8.1 for one stretch of a waveform, and it does not call that stretch a spike. A reply with no finding means that no check fired, and it does not mean "verified".
 
 `lib/result_observations.py` states the reason in the code. The agent has its own physics knowledge, so a trust label from the server adds no information. A wrong trust label is a false accusation, which a model can repeat or learn to ignore.
 
@@ -93,8 +93,8 @@ Each principle has a short explanation and one case. The first nine are the prin
 
 ### Limits of an answer
 
-- **Every check states what it did not cover, so a partial check is not mistaken for a pass.** A check that did not run is reported as not run. A QSPICE run reports `measurements_coverage: simulator_unsupported`, because the server does not read QSPICE's measure output.
-- **Results are reported as facts without verdicts, leaving the engineering judgement to the AI and the human.** A severity appears only where the simulator wrote one. LTspice XVII calls an ignored model parameter an error on a run that finished, and the reply keeps that word as the simulator's own.
+- **Every check reports what's not covered, so a partial check is not mistaken for a pass.** A check that did not run is reported as not run. A QSPICE run reports `measurements_coverage: simulator_unsupported`, because the server does not read QSPICE's measure output.
+- **Results are reported as facts without conclusions, leaving the engineering judgement to the AI and the human.** A severity appears only where the simulator wrote one. LTspice XVII calls an ignored model parameter an error on a run that finished, and the reply keeps that word as the simulator's own.
 - **The same question gets the same answer from each tool and from the Python API.** One function decides each question, and every reader asks that function. Every reader of a run's measurements gives the same reason when the log could not be read.
 
 ### Contents of a reply

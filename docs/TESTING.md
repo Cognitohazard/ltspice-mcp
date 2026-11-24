@@ -280,7 +280,7 @@ schema, and `tests/test_conformance_hook_armed.py` checks that the hook is live.
 |-|-|
 |Refusals say how to fix the request|`tests/test_validation_errors.py` pins what each argument refusal names; `tests/test_refusals_name_the_fix.py` generates a misspelled, missing and misplaced argument for every tool|
 |A finding gives its place|`tests/conftest.py` (`unplaced_findings`) refuses any reply in the suite whose finding gives no line, coordinates or part reference|
-|Every check states what it did not cover|`tests/test_check_scope_is_stated.py`; `tests/test_capped_lists_say_how_to_continue.py` and `tests/conftest.py` hold a list cut short to saying how to read the rest; `tests/test_analyze_results_signal_listing.py`|
+|Every check reports what's not covered|`tests/test_check_scope_is_stated.py`; `tests/test_capped_lists_say_how_to_continue.py` and `tests/conftest.py` hold a list cut short to saying how to read the rest; `tests/test_analyze_results_signal_listing.py`|
 |One call for one intent|`tests/test_one_call_per_task.py` counts the calls each task takes|
 |Jobs and results are stored on disk and requests are repeatable|`tests/test_short_reply_data_behind_an_id.py`, and the presenter tests (`tests/test_presenter.py`, `tests/test_reply_cuts.py`); `tests/test_argument_names_are_kept.py` holds renamed arguments to one release and to a refusal that names the new name|
 |Simulator and file-format quirks are recorded from real LTspice builds and covered by tests|`tests/test_files_ltspice_reads_are_recorded.py` ties each file the server writes for LTspice to a recording of LTspice reading it|
