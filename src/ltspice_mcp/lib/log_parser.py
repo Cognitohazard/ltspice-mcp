@@ -191,8 +191,10 @@ _NGSPICE_TITLE_PSEUDO_MEAS = "circuit"
 _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
 # A value runs to the next comma or space. A stepped temperature carries its
 # unit after the number: LTspice 24 and later write ``.step temp=-40°``,
-# LTspice XVII ``.step temp=-40°C``.
-_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
+# LTspice XVII ``.step temp=-40°C``. A stepped model parameter is named with
+# its model, ``.step dm(is)=1e-14`` (both builds, recorded:
+# ``raw/step_grid_list_model``), so a name may end in one parenthesised word.
+_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*(?:\([^()=,\s]*\))?)\s*=\s*([^,\s]+)")
 
 
 @dataclass(frozen=True)
