@@ -122,7 +122,13 @@ from ltspice_mcp.lib.spice_lex import (
     unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import without_added_x, without_section_sign
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    RepeatedReference,
+    SubcktCard,
+    global_names,
+    repeated_references,
+)
 from ltspice_mcp.lib.stored_values import (
     OtherReading,
     StoredDeck,
@@ -352,6 +358,10 @@ class NetlistGraph:
     #: Each value of the files read that a recorded LTspice build reads as
     #: another number than the graph holds (``stored_values``).
     readings: tuple[OtherReading, ...] = ()
+    #: Each reference more than one instance card of one scope carries
+    #: (``spice_lex_views.repeated_references``), in the deck's own text (file
+    #: None) or in a subcircuit body of a file it includes (that file).
+    repeated_references: tuple[tuple[str | None, RepeatedReference], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -529,7 +539,8 @@ class GraphComparison:
     """The structured result of :func:`compare_graphs`.
 
     ``equivalent`` is the single-glance verdict: structurally isomorphic *and*
-    no component, value, parameter, anchor, or arity difference.
+    no component, value, parameter, anchor, or arity difference, and no
+    reference on more than one card of one scope.
     ``structurally_equivalent`` is the wiring-only verdict (the 1-WL histogram
     check, ground pinned, anchor labels ignored) — it can be True while
     ``equivalent`` is False when only values or anchor placement differ.
@@ -558,6 +569,13 @@ class GraphComparison:
     unresolved_subckts: list[UnresolvedSubckt] = field(default_factory=list)
     duplicate_subckts: list[DuplicateSubckt] = field(default_factory=list)
     duplicate_params: list[DuplicateParam] = field(default_factory=list)
+    #: Each reference more than one card of one scope carries, with its side
+    #: and, when an included file holds it, that file
+    #: (``NetlistGraph.repeated_references``). Which card stands for which on
+    #: the other side is not known, so ``equivalent`` is not claimed.
+    repeated_references: list[tuple[str, str | None, RepeatedReference]] = field(
+        default_factory=list
+    )
     #: The subcircuit instances both sides expanded, paired (``paired_calls``):
     #: which definition stands for which, for the directive comparison to read.
     #: Not part of the reply.
@@ -605,6 +623,10 @@ class GraphComparison:
                     "values": list(d.values),
                 }
                 for d in self.duplicate_params
+            ],
+            "repeated_references": [
+                {**repeat.as_dict(), "side": side, **({"file": file} if file else {})}
+                for side, file, repeat in self.repeated_references
             ],
         }
 
@@ -817,6 +839,10 @@ def parse_netlist_graph(
         directives=directives,
         definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
         readings=tuple(registry.readings),
+        repeated_references=(
+            *((None, repeat) for repeat in repeated_references(cards)),
+            *registry.repeats,
+        ),
     )
 
 
@@ -846,6 +872,9 @@ class _SubcktRegistry:
     files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
     #: The readings of the values of every file read (``stored_values``).
     readings: list[OtherReading] = field(default_factory=list)
+    #: Each reference repeated in a subcircuit body of an included file, with
+    #: that file (``spice_lex_views.repeated_references``).
+    repeats: list[tuple[str, RepeatedReference]] = field(default_factory=list)
 
     def register(self, definition: SubcktDef, source: str, scope: tuple[str, ...]) -> None:
         self.candidates.append((definition, source, scope))
@@ -1018,6 +1047,16 @@ def _collect_subckts(
                 encoding,
                 file=origin,
             )
+        )
+    if source != _DECK_SOURCE:
+        # The deck's own repeats are read from its cards (``parse_netlist_graph``);
+        # an included file's top-level instances are no part of the graph.
+        registry.repeats.extend(
+            (source, repeat)
+            for repeat in repeated_references(
+                [card for card, at in zip(cards, sections, strict=True) if read.reads(at)]
+            )
+            if repeat.scope
         )
     section = reference.section if reference is not None else None
     wanted = section.casefold() if section is not None else None
@@ -1452,6 +1491,10 @@ def compare_graphs(
     result.anchor_violations.extend(_check_anchors(ref_flat, cand_flat, colors, anchor_set))
 
     # --- per-component diffs, by reference-name matching ----------------------
+    for side, outcome in (("reference", ref), ("candidate", cand)):
+        result.repeated_references.extend(
+            (side, file, r) for file, r in outcome.graph.repeated_references
+        )
     ref_by_ref = {canon_ref(c.ref): c for c in ref_flat.components}
     cand_by_ref = {canon_ref(c.ref): c for c in cand_flat.components}
     cand_by_ref, paired = rekey_across_added_x(ref_by_ref, cand_by_ref)
@@ -1506,6 +1549,7 @@ def compare_graphs(
         and not result.node_partition_mismatches
         and not result.anchor_violations
         and not result.arity_errors
+        and not result.repeated_references
     )
     return result
 

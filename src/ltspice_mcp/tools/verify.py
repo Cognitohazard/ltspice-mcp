@@ -114,7 +114,7 @@ from ltspice_mcp.lib.netlist_diff import (
     Deck,
     circuit_directive_delta,
     connection_delta,
-    definitions_unread,
+    left_uncompared,
     read_deck,
     structural_delta,
 )
@@ -156,6 +156,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
     validate_netlist_duplicate_params,
+    validate_netlist_repeated_references,
 )
 from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
@@ -180,6 +181,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_SHOWN_PROPERTIES,
     PAGE_OF_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
+    REPEATED_REFERENCE_SCHEMA,
     RULES_RUN_SCHEMA,
     STORED_ANSWER_SCHEMA,
     WARNINGS_SCHEMA,
@@ -749,6 +751,19 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
     "required": ["name", "ignored"],
 }
 
+_REPEATED_REFERENCE_SCHEMA: dict[str, Any] = {
+    **REPEATED_REFERENCE_SCHEMA,
+    "properties": {
+        **REPEATED_REFERENCE_SCHEMA["properties"],
+        "side": {"type": "string", "description": "'reference' or 'candidate'."},
+        "file": {
+            "type": "string",
+            "description": "The included file whose definition holds it; absent for the deck.",
+        },
+    },
+    "required": [*REPEATED_REFERENCE_SCHEMA["required"], "side"],
+}
+
 _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
@@ -805,8 +820,8 @@ COMPARISON_SCHEMA: dict[str, Any] = {
                 "The overall verdict. In equivalence mode: structurally isomorphic, "
                 "no component, value, parameter, anchor or arity difference, and the "
                 "same directives. In structural_diff mode: the delta is empty; null "
-                "when a deck could not be parsed or a definition was not compared "
-                "(not_compared), and never a statement about connections."
+                "when a deck could not be parsed or a definition or reference was not "
+                "compared (not_compared), and never a statement about connections."
             ),
         },
         "structurally_equivalent": {
@@ -904,6 +919,15 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             CUT: ITEMS,
             "items": _DUPLICATE_PARAM_SCHEMA,
             "description": "equivalence: cards that give a parameter more than once.",
+        },
+        "repeated_references": {
+            "type": "array",
+            CUT: ITEMS,
+            "items": _REPEATED_REFERENCE_SCHEMA,
+            "description": (
+                "equivalence: a reference more than one card of one scope carries; "
+                "which card stands for which is not known, so 'equivalent' is false."
+            ),
         },
         **STRUCTURAL_DELTA_PROPS,
     },
@@ -1316,8 +1340,9 @@ def _rule_finding(
 ) -> dict[str, Any]:
     """A netlist-validator issue in the shared finding shape.
 
-    Every netlist rule reports ``{line, directive, message, suggestion}``, so the
-    conversion is one function rather than one per rule.
+    Every netlist rule reports ``{line, directive, message, suggestion}``, and
+    may add an ``evidence`` mapping, so the conversion is one function rather
+    than one per rule.
     """
     detail = str(issue.get("message", ""))
     suggestion = issue.get("suggestion")
@@ -1333,7 +1358,11 @@ def _rule_finding(
         severity=severity,
         at=at,
         subject=card or str(path.name),
-        evidence={"detail": detail, "card": card},
+        evidence={
+            "detail": detail,
+            "card": card,
+            **(extra if isinstance(extra := issue.get("evidence"), dict) else {}),
+        },
     )
 
 
@@ -1599,6 +1628,10 @@ def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, A
 #
 # ``duplicate_parameter`` is a fact too: an instance giving a parameter twice
 # is read by the simulator one way or another, and which is not known here.
+#
+# ``shared_reference`` is a warning: a value, probe or draw keyed by the
+# reference names more than one device. The sheet finding of the same name
+# reports two parts of a schematic with one reference.
 _NETLIST_QUALITY_RULES: tuple[tuple[str, str, Any], ...] = (
     ("dangling_node", "observation", validate_netlist_dangling_nodes),
     ("undefined_reference", "warning", validate_netlist_directive_refs),
@@ -1608,6 +1641,11 @@ _NETLIST_QUALITY_RULES: tuple[tuple[str, str, Any], ...] = (
         "observation",
         lambda cards, _reader: validate_netlist_duplicate_params(cards),
     ),
+    (
+        "shared_reference",
+        "warning",
+        lambda cards, _reader: validate_netlist_repeated_references(cards),
+    ),
 )
 
 
@@ -1616,7 +1654,8 @@ def _netlist_quality_findings(
 ) -> list[dict[str, Any]]:
     """Quality findings over a lexed netlist: nodes wired to one terminal,
     directives naming something that exists nowhere, nets with no DC path to
-    ground, and instances giving a parameter more than once."""
+    ground, instances giving a parameter more than once, and one reference on
+    more than one card."""
     findings: list[dict[str, Any]] = []
     for rule_id, severity, validate in _NETLIST_QUALITY_RULES:
         findings.extend(
@@ -2264,7 +2303,7 @@ def _structural_diff(
 ) -> tuple[dict[str, Any], list[str], bool, bool, tuple[OtherReading, ...]]:
     """Added/removed/changed component and directive delta between two netlists.
 
-    Returns ``(delta, warnings, both_parsed, definitions_unread, readings)``,
+    Returns ``(delta, warnings, both_parsed, left_uncompared, readings)``,
     ``readings`` being each side's ``Deck.readings`` (``stored_values``). A deck that could not be parsed is
     diffed as an empty circuit, which makes every component of the other side look
     added or removed — so the caveat rides out as a warning rather than inside the
@@ -2272,9 +2311,10 @@ def _structural_diff(
 
     ``both_parsed`` is reported separately rather than inferred from an empty
     ``warnings`` list, so a future warning of some other kind cannot silently be
-    read as a parse failure. ``definitions_unread`` is whether a definition
-    either deck gives twice in one scope was left out (``read_deck``), which
-    the delta's ``not_compared`` states.
+    read as a parse failure. ``left_uncompared`` is whether a definition
+    either deck gives twice in one scope, or a reference more than one card
+    of one scope carries, was left out (``read_deck``), which the delta's
+    ``not_compared`` states.
     """
     name_a, ref, err_a = _read_side(reference, "the reference netlist text")
     name_b, cand, err_b = _read_side(candidate, "the netlist under test")
@@ -2284,7 +2324,7 @@ def _structural_diff(
         structural_delta(ref, cand),
         warnings,
         both_parsed,
-        definitions_unread(ref, cand),
+        left_uncompared(ref, cand),
         (*ref.readings, *cand.readings),
     )
 
@@ -2328,8 +2368,8 @@ def compare_structural(
     # Keyed on the delta's own difference lists rather than ``any(diff.values())``:
     # a fact the delta carries, such as a rename, must not read as a difference.
     #
-    # Likewise a definition left out of both sides was compared with nothing,
-    # so an empty delta does not say it matches. Connections are never
+    # Likewise a definition or a repeated reference left out of both sides was
+    # compared with nothing, so an empty delta does not say it matches. Connections are never
     # compared here, and the reply's not_compared says so.
     equivalent = (
         not any(diff.get(key) for key in STRUCTURAL_DIFFERENCE_KEYS)
@@ -2340,9 +2380,10 @@ def compare_structural(
     if both_parsed and unread:
         warnings = [
             *warnings,
-            "A subcircuit is defined more than once in one scope, so its definitions "
-            "were not compared and 'equivalent' is null; comparison.not_compared "
-            "names it. Rename or delete all but one definition to compare it.",
+            "A subcircuit defined more than once in one scope, or a reference more "
+            "than one card carries, was not compared, so 'equivalent' is null; "
+            "comparison.not_compared names it. Give each definition and each card "
+            "its own name to compare it.",
         ]
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 

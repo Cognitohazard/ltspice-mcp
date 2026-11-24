@@ -649,6 +649,28 @@ STORED_ANSWER_SCHEMA: dict[str, Any] = {
     },
 }
 
+#: A reference more than one instance card of one scope of a netlist carries
+#: (``spice_lex_views.RepeatedReference.as_dict``).
+REPEATED_REFERENCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reference": {"type": "string", "description": "As its first card writes it."},
+        "subcircuit": {
+            "type": "array",
+            "items": {"type": "string"},
+            CUT: NEVER,
+            "description": "The .subckt bodies it is in, outermost first; absent at the top level.",
+        },
+        "lines": {
+            "type": "array",
+            "items": {"type": "integer"},
+            CUT: NEVER,
+            "description": "The first line of each card that carries it.",
+        },
+    },
+    "required": ["reference", "lines"],
+}
+
 # Output-schema fragment for the optional ``hint`` key: caller guidance a
 # reply carries in its data (see format_response). Sites needing a custom
 # description inline their own dict.

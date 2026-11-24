@@ -49,6 +49,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     may_connect_nodes,
     probe_refs,
     read_instance,
+    repeated_references,
     unread_node_names,
 )
 
@@ -1417,6 +1418,25 @@ def list_rules() -> list[dict[str, object]]:
             "suggestion": r.suggestion,
         }
         for r in _RULES
+    ]
+
+
+def validate_netlist_repeated_references(cards: list[SpiceCard]) -> list[dict[str, object]]:
+    """Flag a reference that more than one instance card of one scope carries
+    (``spice_lex_views.repeated_references``), one issue per reference, on its
+    first card. Which card a simulator keeps, or whether it runs the deck, is
+    recorded only for a top-level repeat in one spelling, so no issue states it;
+    the caller attaches severity. ``evidence`` holds the reference, its lines
+    and its scope, for the finding to carry."""
+    return [
+        {
+            "line": repeat.lines[0],
+            "directive": _card_directive(repeat.first),
+            "message": f"{repeat.describe()}: one reference names more than one card.",
+            "suggestion": "Give each card its own reference.",
+            "evidence": repeat.as_dict(),
+        }
+        for repeat in repeated_references(cards)
     ]
 
 

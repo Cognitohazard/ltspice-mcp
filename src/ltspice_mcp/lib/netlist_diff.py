@@ -84,7 +84,7 @@ from ltspice_mcp.lib.spice_lex import (
     subckt_children,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
+from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance, repeated_references
 from ltspice_mcp.lib.stored_values import OtherReading, StoredDeck, read_stored_deck
 
 # Directive cards whose assignments are a set: ``.param a=1 b=2`` and
@@ -232,12 +232,17 @@ class Scope:
     directive cards. ``definitions`` holds the opener and closer of each
     definition in it, by its name case-folded: they are compared with its
     directives unless that name is not compared (``Deck.unread``).
+    ``repeated`` holds each reference more than one of its cards carries
+    (``spice_lex_views.repeated_references``), keyed and spelled as
+    ``components`` is, with its lines; such a reference is not in
+    ``components``.
     """
 
     names: tuple[str, ...] = ()
     components: dict[str, tuple[str, str]] = field(default_factory=dict)
     directives: list[Directive] = field(default_factory=list)
     definitions: dict[str, list[Directive]] = field(default_factory=dict)
+    repeated: dict[str, tuple[str, tuple[int, ...]]] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -324,6 +329,7 @@ def read_deck(source: str | Path | StoredDeck) -> Deck:
         AS_WRITTEN,
     )
     twice = {answer.key: answer.name for answer in settled if len(answer.members) > 1}
+    repeats = {(r.scope, fold_name(r.reference)): r.lines for r in repeated_references(cards)}
     scopes: dict[ScopeKey, Scope] = {(): Scope()}
     includes = False
 
@@ -347,7 +353,11 @@ def read_deck(source: str | Path | StoredDeck) -> Deck:
                 if (key, bounds[i]) not in twice and (directive := _directive_of(card)):
                     scope.definitions.setdefault(bounds[i], []).append(directive)
             elif card.kind == "instance" and card.name:
-                scope.components[canon_ref(card.name)] = (card.name, instance_signature(card))
+                if (lines := repeats.get((card.scope, fold_name(card.name)))) is not None:
+                    # Which card stands for which on the other side is not known.
+                    scope.repeated.setdefault(canon_ref(card.name), (card.name, lines))
+                else:
+                    scope.components[canon_ref(card.name)] = (card.name, instance_signature(card))
             elif (directive := _directive_of(card)) is not None:
                 scope.directives.append(directive)
                 if card.kind == "directive" and directive_head(card) in INCLUDE_HEADS:
@@ -480,7 +490,8 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     definitions joined with ``/``. ``components_renamed`` lists the
     components matched only across LTspice's added ``X``; it is the one list
     here that is not a difference. ``not_compared`` says what was not
-    compared: a definition either deck gives more than once in one scope, and
+    compared: a definition either deck gives more than once in one scope, a
+    reference more than one card of a scope carries in either deck, and
     included files' cards.
     """
     added: list[str] = []
@@ -489,6 +500,7 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     changed: list[dict[str, str]] = []
     directives_added: list[str] = []
     directives_removed: list[str] = []
+    not_compared: list[str] = []
     # A definition either deck gives more than once in one scope is compared
     # on neither side: which stands for which is not known.
     unread = {key for deck in (baseline, compared) for key, _name in deck.unread}
@@ -501,8 +513,21 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
         assert scope is not None
         suffix = _in(scope)
         where = {"subckt": scope.label} if scope.names else {}
-        a = before.components if before else {}
-        b, paired = rekey_across_added_x(a, after.components if after else {})
+        # A reference more than one card carries is compared on neither side:
+        # which card stands for which is not known.
+        repeated: set[str] = set()
+        for side, held in (("baseline", before), ("compared", after)):
+            for ref, (written, lines) in sorted((held.repeated if held else {}).items()):
+                repeated.add(ref)
+                not_compared.append(
+                    f"{written}{suffix} is the reference of more than one card in the {side} "
+                    f"deck (lines {', '.join(map(str, lines))}), so no card of that reference "
+                    "was compared on either side"
+                )
+        a = {r: v for r, v in (before.components if before else {}).items() if r not in repeated}
+        b, paired = rekey_across_added_x(
+            a, {r: v for r, v in (after.components if after else {}).items() if r not in repeated}
+        )
         added += sorted(b[ref][0] + suffix for ref in b.keys() - a.keys())
         removed += sorted(a[ref][0] + suffix for ref in a.keys() - b.keys())
         renamed += [{"before": a[ref][0], "after": b[ref][0], **where} for ref in paired]
@@ -530,7 +555,7 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     for side, deck in (("baseline", baseline), ("compared", compared)):
         for key, name in deck.unread:
             sides.setdefault(key, ("/".join((*_names(deck, key[:-1]), name)), []))[1].append(side)
-    not_compared = [
+    not_compared += [
         f".subckt {label} is defined more than once in one scope in the "
         f"{' and '.join(where)} deck{'s' if len(where) > 1 else ''}, so no definition of that name there was "
         "compared on either side"
@@ -569,10 +594,14 @@ def _own_directives(scope: Scope | None, key: ScopeKey, unread: set[ScopeKey]) -
     return [*scope.directives, *bounds]
 
 
-def definitions_unread(baseline: Deck, compared: Deck) -> bool:
-    """Whether either deck gives a definition more than once in one scope, so
-    a structural delta between them did not compare it."""
-    return bool(baseline.unread or compared.unread)
+def left_uncompared(baseline: Deck, compared: Deck) -> bool:
+    """Whether a structural delta between the two decks left cards out: a
+    definition either deck gives more than once in one scope, or a reference
+    more than one card of one scope carries (``structural_delta``)."""
+    return any(
+        deck.unread or any(scope.repeated for scope in deck.scopes.values())
+        for deck in (baseline, compared)
+    )
 
 
 def connection_delta(
