@@ -4834,3 +4834,93 @@ every simulator launch in the server to pass an environment, and a check in
 a fresh process requires every loaded spicelib module that holds a
 `run_function` to hold `run_simulator`. The workaround
 can go once `run` takes `env`.
+
+## Bug 46 — `AscEditor` reads an 8-bit sheet in the wrong code page, or refuses it, and writes LF for CRLF (bug)
+
+**Status:** draft for upstream.
+**Affected version:** spicelib 1.5.1 (`spicelib/utils/detect_encoding.py`,
+`detect_encoding`; `spicelib/editor/asc_editor.py`, `AscEditor.__init__`,
+`reset_netlist` and `save_netlist`).
+**Our workaround:** `src/ltspice_mcp/lib/schematic_ops.py`, `_AscEditor.__init__`,
+passes spicelib the codec `lib/encoding.py` decides (`sheet_codec`), which for
+8-bit text is a registered whole-byte Windows-1252 table
+(`encoding.WHOLE_BYTE_CP1252`); `tools/schematic_edit.py` writes the edited
+sheet with the line ending the sheet had (`_SheetEncoding`).
+
+### Summary
+
+`detect_encoding` tries `utf-8`, `utf-16`, `utf_16_le`, `windows-1252`,
+`cp1252`, `cp1250` and `shift_jis` in turn and takes the first that decodes
+the file and matches `^VERSION `. Python's `cp1252` leaves five bytes
+undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D), so a sheet saved in Windows-1252
+that holds any of them fails both cp1252 tries:
+
+- one holding 0x8D decodes as `cp1250`, which reads every other byte above
+  0x7F differently too: `à` (0xE0) becomes `ŕ`, `¥` becomes `Ą`;
+- one holding 0x81 also fails `cp1250`, and decodes as `shift_jis` where the
+  byte after it makes a pair, or is refused with `EncodingDetectError`.
+
+A sheet in a double-byte code page (cp936, cp932) is read the same way, so
+whatever codec matches, its comments are other characters.
+
+Separately, `reset_netlist` opens the sheet with universal newlines and
+`save_netlist` writes `"\n"`, so a CRLF sheet is saved with LF line ends:
+every line of the file changes.
+
+### Affected code
+
+```python
+# spicelib/utils/detect_encoding.py
+for encoding in ('utf-8', 'utf-16', 'utf_16_le', 'windows-1252', 'cp1252', 'cp1250', 'shift_jis'):
+    ...
+
+# spicelib/editor/asc_editor.py
+with open(self.asc_file_path, encoding=self.encoding) as asc_file:   # reset_netlist
+asc.write(f"Version {self.version}" + END_LINE_TERM)                 # save_netlist, END_LINE_TERM = "\n"
+```
+
+### Reproduction
+
+```python
+import re
+from pathlib import Path
+from spicelib.utils.detect_encoding import detect_encoding
+
+Path("a.asc").write_bytes(b"Version 4\nSHEET 1 880 680\nFLAG 0 0 \xe0\nTEXT 0 0 Left 2 ;x\x8d\n")
+enc = detect_encoding("a.asc", r"^VERSION ", re_flags=re.IGNORECASE)
+print(enc, Path("a.asc").read_text(encoding=enc).splitlines()[2])  # cp1250 FLAG 0 0 ŕ
+
+Path("b.asc").write_bytes(b"Version 4\nSHEET 1 880 680\nTEXT 0 0 Left 2 ;x\x81\n")
+detect_encoding("b.asc", r"^VERSION ", re_flags=re.IGNORECASE)  # EncodingDetectError
+```
+
+### Impact
+
+A label or value with an accented letter or a micro sign reads as another
+character, so a net name compared with the netlist or the sheet does not
+match, and saving the sheet writes the wrong character back in place of the
+one LTspice showed. A sheet with byte 0x81 in a comment cannot be opened at
+all. Saving a CRLF sheet rewrites every line ending.
+
+### Proposed fix
+
+Read an 8-bit sheet with no byte order mark as Windows-1252 with the five
+undefined bytes mapped to the control character of the same number (Latin-1
+there), the way Windows' own conversion does, rather than trying further code
+pages; and remember the sheet's line ending in `reset_netlist` (open with
+`newline=""`) and write it in `save_netlist`.
+
+### Suggested upstream test
+
+Write the two sheets above, open each with `AscEditor`, assert that the label
+reads `à` and the comment keeps its byte, save to a new file and assert the
+bytes equal the original's. Write a sheet with CRLF line ends, open and save
+it, and assert that the saved file has CRLF line ends.
+
+### Cross-reference
+
+`tests/test_sheet_text_encoding.py` edits and inspects sheets in cp1252 with
+bytes 0x8D and 0x81, in cp936, in UTF-8 and UTF-16, and with CRLF line ends,
+and checks that `inspect` and `edit_schematic` read the same text and that an
+edit changes only the line it was asked to. The workaround can go once
+`AscEditor` reads 8-bit sheets as above and keeps the line ending.

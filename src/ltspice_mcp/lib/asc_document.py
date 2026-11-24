@@ -682,7 +682,15 @@ def parse_asc_text(text: str, encoding: str = "utf-8", bom: bytes = b"") -> AscD
     change how it reads.
     """
     lines = _LINE.findall(text)
+    return AscDocument(tuple(_read(lines)), encoding=encoding, bom=bom, newline=_newline(lines))
+
+
+def sheet_newline(text: str) -> str:
+    """The line ending a record written into the sheet ``text`` takes: its most common one."""
+    return _newline(_LINE.findall(text))
+
+
+def _newline(lines: list[str]) -> str:
     endings = Counter(line[len(_body(line)) :] for line in lines)
     endings.pop("", None)
-    newline = endings.most_common(1)[0][0] if endings else "\n"
-    return AscDocument(tuple(_read(lines)), encoding=encoding, bom=bom, newline=newline)
+    return endings.most_common(1)[0][0] if endings else "\n"

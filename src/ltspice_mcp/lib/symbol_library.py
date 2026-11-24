@@ -25,6 +25,14 @@ behaviour"):
 - **Nowhere else**: not in the folder the server happens to run in, which is
   no part of the sheet.
 
+Every part of a name, folders included, is matched without regard to letter
+case, on every platform, as Windows matches it, so a sheet drawn there for
+``Amp.asy`` and naming ``amp`` finds the same file on Linux. Where one folder
+holds two names that differ only in case, the one spelled exactly as the sheet
+spells it wins; where neither is, the name is ambiguous (``AmbiguousName``),
+and the reply names every file it could mean. No recording shows which file
+LTspice takes then.
+
 A hierarchical block's own sheet is found beside the block's symbol, else
 beside the sheet being exported, and nowhere else, as both builds find it
 (``export-hierarchical-block``, ``block-sheet-search``; ``find_block_sheet``).
@@ -39,9 +47,8 @@ read.
 from __future__ import annotations
 
 import functools
-import glob
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,29 +66,104 @@ def spellings(symbol: str) -> tuple[str, str]:
     return "/".join(parts), parts[-1] if parts else ""
 
 
+class AmbiguousName(FileNotFoundError):
+    """A name that, without regard to letter case, matches more than one file
+    or folder in one place, none of them spelled exactly as the name is.
+
+    ``said`` names what was looked for ("Symbol 'amp'"); ``files`` are the
+    matches, sorted; ``problem`` says what is wrong in words that follow the
+    name, as ``FoundSymbol.problem`` does.
+    """
+
+    def __init__(self, said: str, files: Sequence[Path]) -> None:
+        self.said = said
+        self.files = tuple(sorted(files, key=lambda path: path.name))
+        listed = ", ".join(path.name for path in self.files)
+        kind = "folders" if self.files[0].is_dir() else "files"
+        self.problem = (
+            f"is ambiguous: {len(self.files)} {kind} differ from it only in letter case "
+            f"({listed}) and none is spelled exactly so; rename all but one"
+        )
+        super().__init__(f"{said} {self.problem}")
+
+
+def _alike(folder: Path, name: str, want_dir: bool) -> list[Path]:
+    """The entries of ``folder`` named ``name`` without regard to letter case,
+    folders or files as ``want_dir`` says."""
+    key = name.casefold()
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    found = [folder / entry for entry in names if entry.casefold() == key]
+    return [path for path in found if (path.is_dir() if want_dir else path.is_file())]
+
+
+def _entry(folder: Path, name: str, want_dir: bool, said: str) -> Path | None:
+    """The entry of ``folder`` that ``name`` means, as a file system that
+    ignores letter case finds it, the way Windows, where LTspice runs, does.
+
+    The entry spelled as ``name`` wins; else the one entry spelled otherwise.
+    Several spelled otherwise make the name ambiguous (``AmbiguousName``,
+    reported for ``said``, what was looked for): a file system that
+    keeps them apart holds no answer to which one LTspice would read.
+    """
+    exact = folder / name
+    if exact.is_dir() if want_dir else exact.is_file():
+        return exact
+    found = _alike(folder, name, want_dir)
+    if len(found) > 1:
+        raise AmbiguousName(said, found)
+    return found[0] if found else None
+
+
+def _walk(folder: Path, relative: str, suffix: str, said: str) -> Path | None:
+    """``relative`` (forward slashes) with ``suffix`` under ``folder``, each
+    part of it matched as ``_entry`` matches a name."""
+    *folders, last = relative.split("/")
+    for part in folders:
+        found = _entry(folder, part, True, said)
+        if found is None:
+            return None
+        folder = found
+    return _entry(folder, f"{last}{suffix}", False, said)
+
+
 def find_beside(folder: Path, symbol: str, suffix: str = ".asy") -> Path | None:
     """``symbol``'s file in ``folder``: where its name says, else under its bare name there.
 
     Never anywhere deeper. This is the whole rule beside a sheet, and the first
-    half of the rule in a library. ``suffix`` is the file's.
+    half of the rule in a library. ``suffix`` is the file's. Letter case is
+    matched as ``_entry`` says, and a name it finds ambiguous raises
+    ``AmbiguousName``.
     """
     for name in dict.fromkeys(spellings(symbol)):
-        candidate = folder / f"{name}{suffix}"
-        if name and candidate.is_file():
-            return candidate
+        found = _walk(folder, name, suffix, f"Symbol '{symbol}'") if name else None
+        if found is not None:
+            return found
     return None
 
 
 def find_in_library(root: Path, symbol: str, suffix: str = ".asy") -> Path | None:
     """``symbol``'s file in the library at ``root``: as ``find_beside``, else under
-    its bare name in any folder of the library."""
+    its bare name in the first folder of the library that has it (``_entry``)."""
     found = find_beside(root, symbol, suffix)
     if found is not None:
         return found
     _relative, bare = spellings(symbol)
     if not bare:
         return None
-    return next(root.rglob(f"{glob.escape(bare)}{suffix}"), None)
+    target = f"{bare}{suffix}"
+    key = target.casefold()
+    for folder, _folders, files in os.walk(root):
+        if target in files:
+            return Path(folder, target)
+        found_here = [Path(folder, name) for name in files if name.casefold() == key]
+        if len(found_here) > 1:
+            raise AmbiguousName(f"Symbol '{symbol}'", found_here)
+        if found_here:
+            return found_here[0]
+    return None
 
 
 def symbol_files(folder: Path, beside_sheet: bool) -> Iterator[Path]:
@@ -134,11 +216,29 @@ def find_block_sheet(symbol: Path, exported_folder: Path | None) -> Path | None:
     symbol search path; a block in the build's own ``sym`` folder is not
     recorded, and is read the same way. The recorder exports with the working
     directory in the exported sheet's folder, so the two are not told apart.
+
+    The sheet's name is matched without regard to letter case, as ``_entry``
+    matches it.
     """
-    candidates = [symbol.with_suffix(".asc")]
-    if exported_folder is not None:
-        candidates.append(exported_folder / f"{symbol.stem}.asc")
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
+    folders = [symbol.parent] if exported_folder is None else [symbol.parent, exported_folder]
+    name = f"{symbol.stem}.asc"
+    said = f"The sheet '{name}' of block '{symbol.stem}'"
+    return next(
+        (found for folder in folders if (found := _entry(folder, name, False, said)) is not None),
+        None,
+    )
+
+
+def block_sheet_named(folder: Path, name: str) -> tuple[Path, ...]:
+    """The sheets in ``folder`` that a block named ``name`` may have as its own:
+    the one ``find_block_sheet`` takes there, or, where the name is ambiguous,
+    each one it could mean. What a copy of the folder must hold for LTspice to
+    read the block's sheet from it."""
+    try:
+        found = _entry(folder, f"{name}.asc", False, f"The sheet '{name}.asc'")
+    except AmbiguousName as ambiguous:
+        return ambiguous.files
+    return () if found is None else (found,)
 
 
 def _folder_key(path: Path) -> str:
@@ -184,7 +284,22 @@ ParseCache = FileCache[tuple[SymbolFile, str]]
 #: included. Shared by every resolver of one
 #: ``SymbolLibrary``: that library is the LTspice install, which does not
 #: change while the server runs.
-StockLookups = dict[str, Path | None]
+StockLookups = dict[str, Path | AmbiguousName | None]
+
+
+def _answer(search: Callable[[], Path | None]) -> Path | AmbiguousName | None:
+    """``search``'s answer, an ``AmbiguousName`` it raises kept as the answer."""
+    try:
+        return search()
+    except AmbiguousName as ambiguous:
+        return ambiguous
+
+
+def _given(answer: Path | AmbiguousName | None) -> Path | None:
+    """A kept answer as the search gave it: an ``AmbiguousName`` raised again."""
+    if isinstance(answer, AmbiguousName):
+        raise AmbiguousName(answer.said, answer.files)
+    return answer
 
 
 def _read(path: Path) -> tuple[SymbolFile, str]:
@@ -242,7 +357,7 @@ class SymbolResolver:
         # sheet loads (``for_sheet``).
         self._exported_dir = local_dir if exported_dir is None else exported_dir
         self._given = (tuple(project_paths), tuple(stock_paths))
-        self._resolved: dict[tuple[str, str], Path | None] = {}
+        self._resolved: dict[tuple[str, str], Path | AmbiguousName | None] = {}
         self._found: dict[str, FoundSymbol | None] = {}
         self._parse_cache: ParseCache = FileCache() if parse_cache is None else parse_cache
         self._session_lookups = stock_lookups
@@ -313,46 +428,54 @@ class SymbolResolver:
     def _lookup(self, name: str) -> Path | None:
         """``find_symbol`` for ``name`` beside the sheet, then beside the sheet
         being exported, then in the configured libraries, then in the stock
-        library, each answer kept as the class says."""
+        library, each answer kept as the class says. A name found ambiguous
+        raises ``AmbiguousName``, every time it is asked."""
         key = (".asy", name)
         if key not in self._resolved:
-            # A block's own sheet searches its own folder first, alone; then one
-            # search of the last folder beside a sheet and the libraries, which
-            # is the whole search for a sheet that is not a block's.
-            *first, last = self._beside or [None]
-            found = next(
-                (path for folder in first if (path := find_symbol(name, folder, ())) is not None),
-                None,
-            )
-            if found is None:
-                found = find_symbol(name, last, self._project)
-            if found is None and self._stock:
-                if name not in self._stock_lookups:
-                    self._stock_lookups[name] = find_symbol(name, None, self._stock)
-                found = self._stock_lookups[name]
-            self._resolved[key] = found
-        return self._resolved[key]
+            self._resolved[key] = _answer(lambda: self._search(name))
+        return _given(self._resolved[key])
+
+    def _search(self, name: str) -> Path | None:
+        # A block's own sheet searches its own folder first, alone; then one
+        # search of the last folder beside a sheet and the libraries, which is
+        # the whole search for a sheet that is not a block's.
+        *first, last = self._beside or [None]
+        found = next(
+            (path for folder in first if (path := find_symbol(name, folder, ())) is not None),
+            None,
+        )
+        if found is None:
+            found = find_symbol(name, last, self._project)
+        if found is None and self._stock:
+            if name not in self._stock_lookups:
+                self._stock_lookups[name] = _answer(lambda: find_symbol(name, None, self._stock))
+            found = _given(self._stock_lookups[name])
+        return found
 
     def resolve(self, symbol: str) -> Path | None:
         """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.
 
         ``symbol_library.find_symbol`` is the rule, with the sheet's own folder
         first and every other root a library: the rule the schematic editor's
-        pin geometry follows too.
+        pin geometry follows too. Raises ``AmbiguousName`` for a name that
+        could mean more than one file.
         """
         return self._lookup(symbol)
 
     def block_sheet(self, symbol: str) -> Path | None:
         """The own sheet of the block whose symbol the sheet names ``symbol``
         (``find_block_sheet``). ``None`` for a name no symbol is found for, and
-        for a block with no sheet."""
+        for a block with no sheet; ``AmbiguousName`` for a symbol or a sheet
+        whose name could mean more than one file."""
         key = ("block", symbol)
         if key not in self._resolved:
             placed = self.resolve(symbol)
             self._resolved[key] = (
-                None if placed is None else find_block_sheet(placed, self._exported_dir)
+                None
+                if placed is None
+                else _answer(lambda: find_block_sheet(placed, self._exported_dir))
             )
-        return self._resolved[key]
+        return _given(self._resolved[key])
 
     def listing(self) -> Iterator[tuple[Path, str, Iterator[Path]]]:
         """Each folder searched, in order, with its tier and the symbol files in
@@ -366,10 +489,18 @@ class SymbolResolver:
     def load(self, symbol: str) -> FoundSymbol | None:
         """Resolve and read ``symbol``; ``None`` when no file of that name is found.
 
-        A file that is found and cannot be used comes back with its ``problem``.
+        A file that is found and cannot be used comes back with its ``problem``,
+        and so does a name that could mean more than one file (``AmbiguousName``),
+        with the first of them as its path and nothing read.
         """
         if symbol not in self._found:
-            path = self.resolve(symbol)
+            try:
+                path = self.resolve(symbol)
+            except AmbiguousName as ambiguous:
+                self._found[symbol] = FoundSymbol(
+                    spellings(symbol)[1], ambiguous.files[0], SymbolFile(), ambiguous.problem
+                )
+                return self._found[symbol]
             found = None
             if path is not None:
                 file, problem = self._parse_cache.get(path, _read)

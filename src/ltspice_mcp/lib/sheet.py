@@ -129,9 +129,15 @@ class SheetPart:
         return self.record.rotation
 
     @property
+    def problem(self) -> str:
+        """Why the part has no usable symbol, as words that follow the symbol's
+        name ("not found"); empty when it has one."""
+        return "not found" if self.symbol is None else self.symbol.problem
+
+    @property
     def usable(self) -> bool:
         """True when the symbol was found and can be used."""
-        return self.symbol is not None and not self.symbol.problem
+        return not self.problem
 
     def attribute(self, name: str) -> str | None:
         """The value of attribute ``name``; the last one when the part repeats it."""
@@ -322,8 +328,7 @@ class Sheet:
                 f"'{reference}' could be on either. Give the pin's coordinate instead."
             )
         ((index, part),) = named
-        problem = "not found" if part.symbol is None else part.symbol.problem
-        pin = placed_pin(part.pins, part.reference, part.symbol_name, pin_name, problem)
+        pin = placed_pin(part.pins, part.reference, part.symbol_name, pin_name, part.problem)
         order = next(order for order, one in enumerate(part.pins) if one is pin)
         return next(one for one in self.net_pins if (one.part, one.order) == (index, order))
 

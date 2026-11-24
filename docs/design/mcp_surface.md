@@ -2519,7 +2519,9 @@ cursors where listed:
     one spelling reads as its last copy), and `repeated_params` for a
     parameter the card gives more than once, compared without case: every
     copy as `key=value`, in card order. Which copy a simulator reads is not
-    established
+    established. On a .asc, a part whose symbol has no pins to place says
+    why in `symbol_problem` at either detail: `"not found"`, or a name that
+    two files or folders differing only in letter case could mean, both named
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice"|"ltspice:<name>", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
     selecting a subtree, and `prefix` is the `components` rule applied to

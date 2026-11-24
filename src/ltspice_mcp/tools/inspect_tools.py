@@ -1991,6 +1991,10 @@ def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:
     }
     if attributes:
         row["attributes"] = attributes
+    # A part with no usable symbol has no pins, and says why at every detail,
+    # so it is never shown pinless without a word.
+    if part.problem:
+        row["symbol_problem"] = part.problem
     if detail == "full":
         row["symbol"] = part.symbol_name
         row["position"] = {"x": part.at[0], "y": part.at[1]}

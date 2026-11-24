@@ -109,6 +109,53 @@ _WINDOWS_1252_OVER_LATIN_1 = {
 }
 
 
+#: The name the table above is registered under as a Python codec, so a reader
+#: that opens a file by codec name (spicelib's schematic editor) reads and
+#: writes 8-bit text byte for byte as the decoders here do. The standard
+#: ``cp1252`` codec refuses the five undefined bytes.
+WHOLE_BYTE_CP1252 = "ltspice_mcp_cp1252"
+
+
+def _whole_byte_cp1252(name: str) -> codecs.CodecInfo | None:
+    if name != WHOLE_BYTE_CP1252:
+        return None
+
+    def encode(text: str, errors: str = "strict") -> tuple[bytes, int]:
+        return codecs.charmap_encode(text, errors, _WINDOWS_1252_BYTES)
+
+    def decode(data: bytes, errors: str = "strict") -> tuple[str, int]:
+        return codecs.charmap_decode(data, errors, _WINDOWS_1252)
+
+    class IncrementalEncoder(codecs.IncrementalEncoder):
+        def encode(self, input: str, final: bool = False) -> bytes:
+            return encode(input, self.errors)[0]
+
+    class IncrementalDecoder(codecs.IncrementalDecoder):
+        def decode(self, input: bytes, final: bool = False) -> str:
+            return decode(input, self.errors)[0]
+
+    class StreamWriter(codecs.StreamWriter):
+        def encode(self, input: str, errors: str = "strict") -> tuple[bytes, int]:
+            return encode(input, errors)
+
+    class StreamReader(codecs.StreamReader):
+        def decode(self, input: bytes, errors: str = "strict") -> tuple[str, int]:
+            return decode(input, errors)
+
+    return codecs.CodecInfo(
+        name=WHOLE_BYTE_CP1252,
+        encode=encode,
+        decode=decode,
+        incrementalencoder=IncrementalEncoder,
+        incrementaldecoder=IncrementalDecoder,
+        streamwriter=StreamWriter,
+        streamreader=StreamReader,
+    )
+
+
+codecs.register(_whole_byte_cp1252)
+
+
 _LATIN_1_OVER_WINDOWS_1252 = {ord(char): byte for byte, char in _WINDOWS_1252_OVER_LATIN_1.items()}
 
 
@@ -171,6 +218,48 @@ def decode_spice_bytes_strictly(raw: bytes) -> tuple[str, str]:
     8-bit file is refused: every byte of one has a character.
     """
     return _decode(raw, "strict")
+
+
+def sheet_codec(raw: bytes) -> str | None:
+    """The codec a reader that opens a sheet by codec name opens ``raw`` with,
+    so it reads the text ``decode_spice_bytes_strictly`` does; None where the
+    schematic editor does not read the sheet.
+
+    A UTF-16 sheet behind a mark is opened as ``utf-16``, which reads past the
+    mark, and an 8-bit sheet with the whole-byte table (``WHOLE_BYTE_CP1252``).
+    The editor reads no sheet behind a UTF-8 or UTF-32 mark, which neither
+    LTspice build reads either, and none whose text does not start with its
+    ``Version`` line.
+    """
+    try:
+        text, encoding = decode_spice_bytes_strictly(raw)
+    except UnicodeError:
+        return None
+    if not text[:8].upper().startswith("VERSION "):
+        return None
+    if encoding == "cp1252":
+        return WHOLE_BYTE_CP1252
+    if encoding in ("utf-16-le", "utf-16-be") and bom_of(raw):
+        return "utf-16"
+    if encoding in ("utf-8-sig", "utf-32-le", "utf-32-be"):
+        return None
+    return encoding
+
+
+def eight_bit_reading_note(raw: bytes, codec: str) -> str | None:
+    """What a reply says of a sheet read as 8-bit text with bytes above 0x7F, or None.
+
+    Such a sheet names no code page, and these bytes read as Windows-1252
+    here. Where they were written in another code page, the characters shown
+    are not the ones written, though an edit keeps their bytes.
+    """
+    if codec != WHOLE_BYTE_CP1252 or raw.isascii():
+        return None
+    return (
+        "The sheet is 8-bit text with bytes above 0x7F and names no code page; "
+        "they are shown as Windows-1252 reads them. Text written in another code "
+        "page (Japanese, Chinese) reads differently here, and an edit keeps its bytes."
+    )
 
 
 #: The codecs a rewritten deck keeps. Each is ASCII-compatible, so every
