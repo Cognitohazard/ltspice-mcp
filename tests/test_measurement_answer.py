@@ -972,3 +972,31 @@ def test_the_build_a_log_names_on_its_first_line(build: str):
         assert named == rec.manifest(build)["reported_build"]
         assert table["printed_by"] == named
     assert "printed_by" not in cast(Any, answered_measurements(table, _UNKNOWN))
+
+
+@pytest.mark.parametrize(
+    ("case_id", "name"),
+    [
+        ("log/meas_grid_dc_step_value", "trig_targ_v"),
+        ("log/meas_grid_ac_step_step_outcomes", "max_sf"),
+    ],
+)
+async def test_a_failed_step_of_a_table_with_bounds_reads_on_every_route(
+    case_id: str, name: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 prints a step that failed in a table whose header names a
+    ``FROM`` and a ``TO`` column as ``failed`` alone, with no bound beside it
+    (``     2\tfailed`` under ``step\ttrig_targ_v\tFROM\tTO``). The step reads
+    as failed and the one before it as its number, on every route, and the
+    run's other measurements read too."""
+    text = read_log_text(rec.recorded("ltspice26", f"{case_id}.log"))
+    lines = text.splitlines()
+    header = lines.index(f"Measurement: {name}")
+    assert lines[header + 1].split("\t")[-2:] == ["FROM", "TO"]
+    assert lines[header + 3].split("\t") == ["     2", "failed"]
+    routes = await _every_route("ltspice26", case_id, state_no_sim, work_dir)
+    for route, answers in routes.items():
+        assert set(answers) == set(printed_measurements(text)), (route, answers)
+        first, second = answers[name]
+        assert isinstance(first, float), (route, answers[name])
+        assert second is None, (route, answers[name])

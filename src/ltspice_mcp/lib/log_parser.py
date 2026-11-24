@@ -1748,13 +1748,47 @@ _RE_FOURIER_NAN = re.compile(
 )
 
 
+# LTspice 26 prints a step that failed in a stepped measurement table as
+# ``failed`` alone, even when the table's header names a FROM and a TO column
+# (the recorded log/meas_grid_dc_step_value: ``     2\tfailed`` under
+# ``  step\ttrig_targ_v\tFROM\tTO``). spicelib indexes every row to the
+# header's width and fails on the whole log.
+_RE_MEAS_TABLE = re.compile(
+    r"^Measurement: [^\r\n]*\r?\n(?P<header>[ \t]*step\t[^\r\n]*)\r?\n"
+    r"(?P<rows>(?:[ \t]*\d+\t[^\r\n]*(?:\r?\n|$))*)",
+    re.MULTILINE,
+)
+_RE_TABLE_ROW = re.compile(r"^(?P<row>[ \t]*\d+\t[^\r\n]*)(?=\r?\n|\Z)", re.MULTILINE)
+
+
+def _pad_failed_table_rows(content: str) -> str:
+    """Fill a stepped table's row that is shorter than its header with
+    ``failed``, the word the row already gives for the step's value, so the
+    bounds beside it read as failed too."""
+
+    def _table(match: re.Match[str]) -> str:
+        width = len(match["header"].split("\t"))
+
+        def _row(row: re.Match[str]) -> str:
+            cells = row["row"].split("\t")
+            if len(cells) >= width or cells[-1].strip().lower() != "failed":
+                return row["row"]
+            return "\t".join(cells + ["failed"] * (width - len(cells)))
+
+        rows = _RE_TABLE_ROW.sub(_row, match["rows"])
+        return match[0][: match.start("rows") - match.start()] + rows
+
+    return _RE_MEAS_TABLE.sub(_table, content)
+
+
 def _sanitize_log_for_reader(content: str) -> str:
-    """Replace ``-nan``/``inf`` THD/PHD lines with ``0.0%`` so spicelib parses."""
+    """Replace ``-nan``/``inf`` THD/PHD lines with ``0.0%`` and fill a failed
+    step's short table row, so spicelib parses."""
 
     def _sub(match: re.Match[str]) -> str:
         return f"{match.group(1)}: 0.0%"
 
-    return _RE_FOURIER_NAN.sub(_sub, content)
+    return _pad_failed_table_rows(_RE_FOURIER_NAN.sub(_sub, content))
 
 
 def _preprocess_ngspice_log(content: str) -> str | None:
@@ -1779,8 +1813,10 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
     """Build an LTSpiceLogReader, sanitizing known crash patterns on retry.
 
     Spicelib's Fourier-block parser crashes on ``-nan``/``inf`` THD values
-    — common when the analysed signal is identically zero. We retry once
-    with a sanitized copy in a temp file before giving up.
+    — common when the analysed signal is identically zero — and its
+    stepped-table reader on a failed step's row that is shorter than the
+    table's header. We retry with a sanitized copy in a temp file before
+    giving up.
 
     Also preprocesses ngspice logs whose preamble trips up spicelib's
     start-of-file regex.

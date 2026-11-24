@@ -1,0 +1,1 @@
+On LTspice 26, a stepped run in which a measurement printed with its FROM and TO bounds failed at one step no longer makes the whole log unreadable: the other steps and the run's other measurements read, and the failed step reads as failed.

@@ -4834,3 +4834,88 @@ every simulator launch in the server to pass an environment, and a check in
 a fresh process requires every loaded spicelib module that holds a
 `run_function` to hold `run_simulator`. The workaround
 can go once `run` takes `env`.
+
+## Bug 46 — `LTSpiceLogReader` fails on a stepped table row shorter than its header (bug)
+
+**Status:** open; draft for an upstream issue. Measured on LTspice 26 logs
+(the recorded `log/meas_grid_dc_step_value` and
+`log/meas_grid_{ac,dc,noise,tran}_step_step_outcomes`).
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepped-table loop).
+**Our workaround:** `src/ltspice_mcp/lib/log_parser.py`,
+`_pad_failed_table_rows`, which `_sanitize_log_for_reader` applies to the copy
+`make_log_reader` retries with: a row shorter than its table's header whose
+last cell is `failed` is filled with `failed` to the header's width. Pinned by
+`tests/test_measurement_answer.py::test_a_failed_step_of_a_table_with_bounds_reads_on_every_route`.
+
+### Summary
+
+LTspice 26 prints a step at which a measurement failed as the step number and
+`failed` alone, even when the table's header names a `FROM` and a `TO`
+column:
+
+```
+Measurement: trig_targ_v
+  step	trig_targ_v	FROM	TO
+     1	3	1	4
+     2	failed
+```
+
+The reader keeps each data row as `tokens[1:]` and then indexes every row to
+the header's width, so the short row raises `IndexError: list index out of
+range` and the whole log fails to load: every measurement of the run, and its
+other sections, are lost with it.
+
+### Affected code
+
+```python
+# spicelib/log/ltsteps.py, LTSpiceLogReader.__init__
+meas = tokens[1:]  # remove the first token
+measurements.append(try_convert_value(meas))
+...
+for k, title in enumerate(headers):
+    self.dataset[title.lower()] = [measure[k] for measure in measurements]
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import LTSpiceLogReader
+
+Path("short.log").write_text(
+    "Circuit: * short\n\n"
+    ".step v=1\n.step v=2\n\n"
+    "Measurement: m\n"
+    "  step\tm\tFROM\tTO\n"
+    "     1\t3\t1\t4\n"
+    "     2\tfailed\n\n"
+    "Total elapsed time: 0.01 seconds.\n"
+)
+LTSpiceLogReader("short.log")  # IndexError: list index out of range
+```
+
+### Impact
+
+A stepped run in which any TRIG/TARG measurement (or any measurement printed
+with its bounds) fails at one step cannot be read at all: the caller sees the
+log as unreadable instead of the values of the steps that succeeded.
+
+### Proposed fix
+
+Pad a short row to the header's width with the row's own last value, which
+is `failed`, so its bounds read as failed too:
+
+```python
+meas = tokens[1:]
+width = len(headers)
+if len(meas) < width and meas and meas[-1].strip().lower() == "failed":
+    meas = meas + ["failed"] * (width - len(meas))
+measurements.append(try_convert_value(meas))
+```
+
+### Suggested upstream test
+
+Read the log in the reproduction and assert that `get_measure_value("m", 0)`
+is 3, that the value at step 1 is `"failed"`, and that `m_from` and `m_to`
+hold `"failed"` at step 1.
