@@ -106,14 +106,33 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
     ("f", 1e-15),
 ]
 
-# A number followed by a tail that starts with a letter. The micro sign (µ,
-# U+00B5) is how LTspice's exporter spells 'u' in a netlist, and the Greek mu
-# (μ, U+03BC) is what a keyboard produces; both are folded to 'u' before the
-# suffix table is read.
-_MANTISSA = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
-_NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ].*)$")
+# A number: ASCII digits only, as both LTspice builds read one (a digit of
+# another script stops either build, recorded: deck/number_grid_nonascii_*).
+# The exponent is possessive, so '1e3%' is the number 1e3 followed by '%',
+# never the number 1 followed by the letters 'e3%'.
+_MANTISSA = r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?+"
+_PLAIN_NUMBER_RE = re.compile(_MANTISSA)
+# A number followed by a tail that starts with a letter, of any script: both
+# builds read a letter that is no scale as a unit, so '10Ω' is 10 (recorded:
+# deck/ohm_utf8, deck/ohm_utf16le_bom, deck/number_grid_utf16le), as is a
+# Greek letter a cp1253 deck stores as a byte cp1252 reads as 'ì'
+# (deck/ohm_cp1253, deck/number_grid_cp1253). The micro sign (µ, U+00B5) is
+# how LTspice's exporter spells 'u' in a netlist, and the Greek mu (μ, U+03BC)
+# is what a keyboard produces; both are folded to 'u' before the suffix table
+# is read.
+_LETTER = r"[^\W\d_]"
+_NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})({_LETTER}.*)$")
+# The numbers whose digits after a suffix both builds read alike (recorded:
+# deck/number_grid_mantissa_digits, deck/number_grid_signed): a whole number,
+# unsigned or with '+', takes them as its fraction ('1k5', '+1k5' 1500); a
+# number with a point and digits on one side of it only drops them ('1.k5'
+# 1000, '.5k5' 500). For any other number the builds differ ('1.5k5' is 1500
+# on XVII and 2000 on LTspice 26; '-1k5' -1500 and -500; '1e3k5' 1.5e6 and
+# 1000500), so such a value is refused.
+_WHOLE_RE = re.compile(r"\+?[0-9]+")
+_POINT_ONE_SIDE_RE = re.compile(r"[0-9]+\.|\.[0-9]+")
 # A number followed by letters only, for the plain reading.
-_LETTER_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ]+)$")
+_LETTER_TAIL_RE = re.compile(rf"^({_MANTISSA})({_LETTER}+)$")
 # A number with at most a scale suffix and nothing after it.
 _SCALED_NUMBER_RE = re.compile(
     rf"{_MANTISSA}(?:{'|'.join(suffix for suffix, _ in _SCALE_FACTORS)})?", re.IGNORECASE
@@ -171,18 +190,25 @@ def parse_spice_value(s: str) -> float:
 
     A value is one token. A field of several, such as a source's ``5V AC 1``
     (its DC value and its AC magnitude), is not read by its leading number.
+    A closing parenthesis or a comma at the end of the token is no part of
+    the number, which ends before it: '1e3)' and '1e3,' are 1000, as '1k)'
+    is. Both builds read the last argument of a source function so
+    (recorded: raw/compress_1mv, where ``PWL(0 0 1u 1m)`` charges its RC to
+    1 mV).
 
     Raises:
-        ValueError: If ``s`` does not start with a number, the number is
-            followed by something other than a letter (``8%``), or ``s`` holds
-            more than one token.
+        ValueError: If ``s`` does not start with a number written in ASCII
+            digits, the number is followed by something other than a letter
+            (``8%``, ``1_000``), it is out of a double's range
+            (``1e999``), its digits after a suffix are read differently by
+            the LTspice builds (``1.5k5``, ``-1k5``, ``1e3k5``), or ``s``
+            holds more than one token. ``inf`` and ``nan`` are no numbers:
+            LTspice 26 refuses them and XVII takes 0.
     """
-    s = s.strip()
+    s = s.strip().rstrip("),")
 
-    try:
-        return float(s)
-    except ValueError:
-        pass
+    if _PLAIN_NUMBER_RE.fullmatch(s):
+        return _finite(s)
 
     if len(s.split()) > 1:
         raise ValueError(
@@ -209,9 +235,29 @@ def parse_spice_value(s: str) -> float:
     )
     rest = tail[len(suffix) :]
     digits = rest[: len(rest) - len(rest.lstrip("0123456789"))]
-    if digits and mantissa.isdigit():
-        return float(f"{mantissa}.{digits}") * multiplier
-    return float(mantissa) * multiplier
+    if digits and suffix:
+        if _WHOLE_RE.fullmatch(mantissa):
+            return _finite(f"{mantissa}.{digits}", multiplier)
+        if not _POINT_ONE_SIDE_RE.fullmatch(mantissa):
+            raise ValueError(
+                f"Cannot read '{s}' as one SPICE value: LTspice builds read the digits "
+                f"after the suffix of '{mantissa}' differently; write the number whole "
+                "(1.55k, not 1.5k5)"
+            )
+    return _finite(mantissa, multiplier)
+
+
+def _finite(number: str, scale: float = 1.0) -> float:
+    """A number written in ASCII, times ``scale``, as a float, refusing one
+    past a double's range: LTspice 26 and XVII take '1e999' as two different
+    numbers (recorded: deck/number_grid_overflow)."""
+    value = float(number) * scale
+    if not math.isfinite(value):
+        raise ValueError(
+            f"Cannot read '{number}' as a SPICE value: it is no finite number, and LTspice "
+            "26 takes it as 1e200 where XVII takes it as infinity"
+        )
+    return value
 
 
 #: How far apart two numbers may be, relative to the larger, and still be one
@@ -256,16 +302,14 @@ def parse_plain_value(s: str) -> float:
         ValueError: If ``s`` is not written that way.
     """
     s = s.strip()
-    try:
-        return float(s)
-    except ValueError:
-        pass
+    if _PLAIN_NUMBER_RE.fullmatch(s):
+        return _finite(s)
     m = _LETTER_TAIL_RE.match(s)
     if m is not None:
         tail = fold_micro_sign(m.group(2)).lower()
         for suffix, scale in _SCALE_FACTORS:
             if tail.startswith(suffix):
-                return float(m.group(1)) * scale
+                return _finite(m.group(1), scale)
     raise ValueError(f"Cannot read '{s}' as a number with a scale suffix")
 
 

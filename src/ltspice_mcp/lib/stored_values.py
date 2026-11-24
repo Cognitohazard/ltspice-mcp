@@ -8,13 +8,14 @@ whatever that build makes of the stored bytes, which the recordings show
 differs by build and by encoding (``deck-encoding`` in ``inputs/cases.toml``):
 
 - LTspice 26 reads a micro sign stored as cp1252, UTF-8 (with and without a
-  byte order mark) or UTF-16, and a Greek mu stored as UTF-8, as micro: the
-  same text the server reads.
-- LTspice XVII reads a micro sign stored as cp1252 or UTF-16 as micro, but a
-  micro sign or a Greek mu stored as UTF-8 (with or without a mark) as the
-  two cp1252 characters of its bytes (``1Âµ``), neither of them a scale, so
-  it takes the bare number (``deck/micro_utf8``, ``deck/micro_utf8_bom``,
-  ``deck/greek_mu_utf8``).
+  byte order mark) or UTF-16, and a Greek mu stored as UTF-8 (with and
+  without a mark) or UTF-16, as micro: the same text the server reads.
+- LTspice XVII reads a micro sign stored as cp1252 or UTF-16, and a Greek mu
+  stored as UTF-16, as micro, but a micro sign or a Greek mu stored as UTF-8
+  (with or without a mark) as the two cp1252 characters of its bytes
+  (``1Âµ``), neither of them a scale, so it takes the bare number
+  (``deck/micro_utf8``, ``deck/micro_utf8_bom``, ``deck/greek_mu_utf8``,
+  ``deck/number_grid_utf8_bom``, ``deck/number_grid_utf16le``).
 
 This module is the one answer to "which recorded builds read this stored
 value as another number than the server does". It holds no tool's rules: a
@@ -87,6 +88,14 @@ _RECORDED: dict[tuple[str, str], dict[str, tuple[_Decoding, tuple[str, ...]]]] =
     ("μ", "utf-8"): {
         "LTspice 26": ("same", ("deck/greek_mu_utf8",)),
         "LTspice XVII": ("cp1252", ("deck/greek_mu_utf8",)),
+    },
+    ("μ", "utf-8-sig"): {
+        "LTspice 26": ("same", ("deck/number_grid_utf8_bom",)),
+        "LTspice XVII": ("cp1252", ("deck/number_grid_utf8_bom",)),
+    },
+    ("μ", "utf-16-le"): {
+        "LTspice 26": ("same", ("deck/number_grid_suffixes", "deck/number_grid_utf16le")),
+        "LTspice XVII": ("same", ("deck/number_grid_suffixes", "deck/number_grid_utf16le")),
     },
 }
 

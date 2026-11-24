@@ -109,6 +109,7 @@ from ltspice_mcp.lib.format import (
     parse_spice_value,
     same_value,
 )
+from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.spice_lex import (
     Definition,
     SpiceCard,
@@ -657,9 +658,23 @@ def values_equal(a: str | None, b: str | None, rtol: float) -> bool:
     )
 
 
+def _no_names(name: str) -> float:
+    raise ValueError(f"{name} names a parameter")
+
+
+def _token_number(token: str) -> float:
+    """The number a value token names as LTspice runs it: a bare value as
+    ``parse_spice_value`` reads it, a braced constant (``{1k}``) as the
+    expression reader computes it. Raises ValueError for anything else, a
+    parameter included."""
+    if token.startswith("{") and token.endswith("}"):
+        return evaluate(token, _no_names, simulator="ltspice", ngbehavior=None, element_value=True)
+    return parse_spice_value(token)
+
+
 def _tokens_equal(a: str, b: str, rtol: float) -> bool:
     try:
-        va, vb = parse_spice_value(a), parse_spice_value(b)
+        va, vb = _token_number(a), _token_number(b)
     except ValueError:
         return a.lower() == b.lower()
     return same_value(va, vb, rtol)

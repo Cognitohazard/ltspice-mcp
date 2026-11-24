@@ -121,13 +121,17 @@ class TestAValueOrAName:
     def test_an_infinite_value_equals_only_itself(self):
         """The comparison asks ``format.same_value``, whose tolerance is a
         share of the larger magnitude: of an infinity, that share is infinite,
-        and every finite value used to fall inside it."""
+        and every finite value used to fall inside it. Neither build reads
+        ``inf`` or ``nan`` as a number (the value-number grid in the recorded
+        inputs), so each is compared as text: equal to its own spelling and
+        to no number."""
         from ltspice_mcp.lib.netlist_graph import values_equal
 
         assert values_equal("inf", "inf", 1e-6)
         assert not values_equal("inf", "1k", 1e-6)
         assert not values_equal("-inf", "inf", 1e-6)
-        assert not values_equal("nan", "nan", 1e-6)
+        assert values_equal("nan", "nan", 1e-6)
+        assert not values_equal("nan", "0", 1e-6)
 
 
 class TestParseSpiceCaseSensitivity:
@@ -645,7 +649,9 @@ class TestExtractOperatingPointCaseInsensitive:
 class TestValueRecipeRejectsNaNInf:
     """np.searchsorted treats NaN as greater than everything and returns the
     last index, which looks like a valid answer and is not — so a non-finite
-    ``at`` is refused before the lookup rather than snapped to the sweep end."""
+    ``at`` is refused before the lookup rather than snapped to the sweep end.
+    Neither build reads ``inf`` or ``nan`` as a number, so the refusal is the
+    value parser's."""
 
     @pytest.mark.parametrize("spelling", ["nan", "inf"])
     async def test_non_finite_at_rejected(self, state_no_sim, work_dir, spelling):
@@ -657,7 +663,7 @@ class TestValueRecipeRejectsNaNInf:
 
         raw_file = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
 
-        with pytest.raises(ResultError, match="finite"):
+        with pytest.raises(ResultError, match="Invalid 'at' value: Cannot parse"):
             await value(
                 _source(state_no_sim, raw_file.name),
                 ValueRecipe(key="v", metric="value", expr="V(out)", at=spelling),

@@ -567,9 +567,9 @@ async def test_a_sheet_with_no_micro_sign_is_stated_nothing_on_any_route(
 
 def test_a_reading_no_recording_shows_is_stated_as_not_established():
     """A micro sign in braces or in a directive, read by XVII as letters,
-    takes a number no recording shows; a Greek mu stored as UTF-16 is
-    recorded on no build. Each is stated, with established false, never
-    assumed alike or otherwise."""
+    takes a number no recording shows, so it is stated, with established
+    false, never assumed alike or otherwise. A Greek mu stored as UTF-16 is
+    recorded on both builds (the value-number grid), so it is no reading."""
     braces = readings_of_bytes(
         "* t\nR1 a 0 {1µ}\n.param p=1µ\n.end\n".encode(), root=True, file="d.cir"
     )
@@ -578,18 +578,12 @@ def test_a_reading_no_recording_shows_is_stated_as_not_established():
         ("LTspice XVII", 3, "1Âµ", False),
     ]
     utf16 = readings_of_bytes("* t\nR1 a 0 1μ\n.end\n".encode("utf-16"), root=True, file="u.cir")
-    assert [(r.build, r.build_reads, r.established) for r in utf16] == [
-        ("LTspice 26", None, False),
-        ("LTspice XVII", None, False),
-    ]
+    assert utf16 == ()
     stated = summaries((*braces, *utf16), {L26: None, XVII: None})
     assert [
         (s["build"], s["reading"], s["count"], [(f["file"], f["count"]) for f in s["by_file"]])
         for s in stated
-    ] == [
-        (L26, "not_established", 1, [("u.cir", 1)]),
-        (XVII, "not_established", 3, [("d.cir", 2), ("u.cir", 1)]),
-    ]
+    ] == [(XVII, "not_established", 2, [("d.cir", 2)])]
 
 
 def test_a_sign_outside_an_instances_own_value_is_not_established():
