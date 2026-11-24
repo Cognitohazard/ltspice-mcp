@@ -1,0 +1,20 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\card_grid_directives_upper.cir
+Start Time: Thu Jan 15 00:00:00 2026
+Options:tnom=17
+solver = Normal
+Maximum thread count: 1
+tnom = 17
+temp = 27
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 4
+
+Files loaded:
+C:\recording\card_grid_directives_upper.cir
+C:\recording\card_grid_include.inc
+C:\recording\card_grid_lib.lib
+
+m08: V(n08)=1000 at 2000

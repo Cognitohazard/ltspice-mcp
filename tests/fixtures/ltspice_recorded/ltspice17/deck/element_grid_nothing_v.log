@@ -1,0 +1,21 @@
+Circuit: * a V card with nothing after its nodes
+
+WARNING: Less than two connections to node V_B.  This node is used by VN.
+Vn: Missing value, assumed 0V @ DC
+.OP point found by inspection.
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 0
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+

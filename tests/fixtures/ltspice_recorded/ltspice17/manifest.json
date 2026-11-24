@@ -2780,6 +2780,833 @@
         ".raw"
       ]
     },
+    "deck/card_grid_control_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_control_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_control_lower.cir": "be27e1bfa66089a6d1a521ce2c6069b107b9074bbffa65d9637e0ba7bc0b3e1f",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_control_lower.log": {
+          "bytes": 475,
+          "sha256": "781e9b875527ca1c0275a60c59b81bd5f9eda54d31b20dfb67a714967aacf185"
+        },
+        "deck/card_grid_control_lower.raw": {
+          "bytes": 722,
+          "sha256": "d4af787e99c550f7942f2e9b50744b9138b490759fbf1974a6c08d31eacc8d51"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_control_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_control_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_control_upper.cir": "c0883ab1d60ba43bc018e7ad4f071df5cae19e2fdbafcd8800a2bccd240c83ea",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_control_upper.log": {
+          "bytes": 475,
+          "sha256": "8b9957fe231b3b0dc973a421fecdb9d6b60135dd45b881fffb54feb8f74b8638"
+        },
+        "deck/card_grid_control_upper.raw": {
+          "bytes": 722,
+          "sha256": "70a159fa824615e9b9612cf68b921ff3ddb2f6716975d91351b315c06c250a36"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_cr": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_cr.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_cr.cir": "5e06234aa748c4e3d480414a2a096d4eb7cd3ae6d8d6e9e63648316e5c253063",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_cr.log": {
+          "bytes": 134,
+          "sha256": "3d02e60a43d5cfd98f76319209d1e2f93ba242d8f325bb2251cb6b7ff5318e65"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_directive_variants_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directive_variants_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directive_variants_lower.cir": "e087b90dd06cbbd6b7ea4897722266727b13dd176f3eae0d614ce56d1669175c",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directive_variants_lower.log": {
+          "bytes": 498,
+          "sha256": "65f2b4b83b19345d5e3eaa498c9115c957efbdb3f43ee73fdfa799212d2a8348"
+        },
+        "deck/card_grid_directive_variants_lower.raw": {
+          "bytes": 1196,
+          "sha256": "fc073dd514cd3e0913a504a940b63babb59132503c27f2ce64b5299885343f62"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directive_variants_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directive_variants_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directive_variants_upper.cir": "a8e9f9cfe0f608ded50cef43c90eab966574b4e0297ef4986cdce33594592c58",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directive_variants_upper.log": {
+          "bytes": 498,
+          "sha256": "018e9e59c5dfb193d04da605f8892d02c69d485462483d0ef0f41d7edc46966a"
+        },
+        "deck/card_grid_directive_variants_upper.raw": {
+          "bytes": 1196,
+          "sha256": "18b83d07180f4414019c98279560887138f6be5def85fb2e138a62a299280d1d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directives_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directives_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directives_lower.cir": "55fcd6fef3a4dd2d006605329e8a6942594ffe28c20f95aeabf22863d438a427",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directives_lower.log": {
+          "bytes": 403,
+          "sha256": "0663b1f30046ba00260c028593737c8b42c59174caaa6247a1d126d78d44b03a"
+        },
+        "deck/card_grid_directives_lower.raw": {
+          "bytes": 2648,
+          "sha256": "1c20f04cb6fbf0d9f3cf80a715158a1fcaabac4e28a0a62db29d59b2c7f81439"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directives_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directives_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directives_upper.cir": "8a16f3fec22a997535cdab7f269612b179a2be984da45595e23458ec84271349",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directives_upper.log": {
+          "bytes": 403,
+          "sha256": "bf63902632e36b10607626c37976a7cd7e11608ed72cae825f8803dcc4027226"
+        },
+        "deck/card_grid_directives_upper.raw": {
+          "bytes": 2648,
+          "sha256": "2474ee09c3b68ecd2201384638e699a7f7a62472aa0bdd899c7fd422e48d52a9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_end_in_subckt": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_end_in_subckt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_end_in_subckt.cir": "1e72b2f65e2c27c46a6afb47629fe5e4d364758b173c1184234260b752c0b0ef",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_end_in_subckt.log": {
+          "bytes": 409,
+          "sha256": "b46a252d6bec6027f89bc6766d925c2bec5b77b04cd376ec51d91097a04ee4e2"
+        },
+        "deck/card_grid_end_in_subckt.raw": {
+          "bytes": 726,
+          "sha256": "c0f1ebf171e1b5bbfd0d3d2cfedfa46a45267355be44001783b83d6255d8bedd"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_ends_absent": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_ends_absent.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_ends_absent.cir": "68afc4b0da2ba6cce6408884581ba58655478cc9d515c0ed28114fba89e6c66d",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_ends_absent.log": {
+          "bytes": 395,
+          "sha256": "fb75b8294451680375db7dcd8b2667f61f25564813b498f8f072a155e9f994e9"
+        },
+        "deck/card_grid_ends_absent.raw": {
+          "bytes": 702,
+          "sha256": "30a056870ea02cb0cc8892baf1e290fdfa2fea85b68b4efc96751af49374451d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_ends_differs": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_ends_differs.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_ends_differs.cir": "47a266fa6ba72df23ee9c7f7cecab5b1df675873ae9f01b05226b3cd1d09ed73",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_ends_differs.log": {
+          "bytes": 383,
+          "sha256": "cb7fafc1ac2a8a03e3c5abaa7c87703e55a0b6939108b505a8c389e87e28c090"
+        },
+        "deck/card_grid_ends_differs.raw": {
+          "bytes": 734,
+          "sha256": "14b02d32cc12e07dff7aed93b2fd688bf886e5b75f8f3160e4ebf9403675838f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_ends_orphan": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_ends_orphan.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_ends_orphan.cir": "a773b3cda7572fc9e854242f2a0c86edc4e84e0c035d5869b454a30463dc3b04",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_ends_orphan.log": {
+          "bytes": 403,
+          "sha256": "fe5fdf769a7bb0238602914cc6d4840ba0783e27371a20c6e588111a76a9c911"
+        },
+        "deck/card_grid_ends_orphan.raw": {
+          "bytes": 666,
+          "sha256": "181b33787a03abbf657f4ebe0dffb7dc7847b60b2ac1d9ffef4fee2f9419d061"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_form_feed": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_form_feed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_form_feed.cir": "c263fe4e9a9bf226d699e67d69ff12ab8f76ab9360c9b64d7f437f7385d26b3b",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_form_feed.log": {
+          "bytes": 457,
+          "sha256": "56dd649f01b10c260cf7889e5e858eebbee9574ba305742098f0883344bab45a"
+        },
+        "deck/card_grid_form_feed.raw": {
+          "bytes": 686,
+          "sha256": "1aab75fd88871a52bb6c7511880e85f7740f9b35ecb4cd6989ca17e7fc203161"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_libfile_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_libfile_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_libfile_lower.cir": "2b8cbd966d5d2f60758987cfbf10b57b7c9284c278dc6f67655aaea9c6441ce2",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_libfile_lower.log": {
+          "bytes": 389,
+          "sha256": "4afc1b5f025e2c252c04e03541c7c44b684b6ca97a5c90a1ba9d9eb9b864ddc6"
+        },
+        "deck/card_grid_libfile_lower.raw": {
+          "bytes": 690,
+          "sha256": "c830627692e86863cd2a678ca25973f9e0bfcffb4531a965fb549faf2fd31998"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_libfile_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_libfile_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_libfile_upper.cir": "235f69348f87aaebb1bb881f4addeb7cd736fe6ddd9ff36a1773569c56d5a353",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_libfile_upper.log": {
+          "bytes": 389,
+          "sha256": "84be68645a83b9ab18c47db10ba28a33a4e060747063f465bfbcb01be3e0ed93"
+        },
+        "deck/card_grid_libfile_upper.raw": {
+          "bytes": 690,
+          "sha256": "bb77a6a75be4a87691a88cf5be731c10fc9a268efbbbc9f2428621af7717d359"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_lines": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_lines.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_lines.cir": "36f94d88383d466db8de970823e6b5c695a029eb623fba13a088cf297a884e1a",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_lines.log": {
+          "bytes": 450,
+          "sha256": "637d8c9af908ae3ce2041a49b0c6120270db4202b03630493186685f429c7a09"
+        },
+        "deck/card_grid_lines.raw": {
+          "bytes": 1420,
+          "sha256": "9ae3f7b734535807c74325cf405a9d3aa0a17dca2347ee2a08d543a3d584f120"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_path_\u00e9": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_path_\u00e9.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_path_\u00e9.cir": "64ba60b81ec49ad87dcd9bd64e403fcab32c71205226800b7ec6295137168757",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_path_\u00e9.log": {
+          "bytes": 381,
+          "sha256": "b726305f3947a1bf281cb3f7f924b481169796aa9f7c5f084cce6fcc793a2ac5"
+        },
+        "deck/card_grid_path_\u00e9.raw": {
+          "bytes": 674,
+          "sha256": "628fafdb08ddb3627667020fecb5311054285149bec6aeee566aa03f1af231f5"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_plus_first": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_plus_first.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.cir": "dc37930a7c7cea45678bdb6d13c931fdcc1fffb802f019873bd5d5b16c5cf287",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_plus_first.log": {
+          "bytes": 393,
+          "sha256": "269263c1387a5073db9091c0d0521b1b7d6b61d6afd4bdc214a830d31ee7a1fd"
+        },
+        "deck/card_grid_plus_first.raw": {
+          "bytes": 698,
+          "sha256": "5ca1d66e9fd377a1295595d6719965462623ccf99680113bf35cfe244bb52546"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".inc",
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_plus_first_in_include": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_plus_first_in_include.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_plus_first_in_include.cir": "d5250dff7e7cf6312fd432c864de1ca8b01eaf29b273957362352ecf75ea7b10"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_plus_first_in_include.log": {
+          "bytes": 464,
+          "sha256": "9a29120ca07f0209cba341355e8c48b8c78b1b164dd2481ea3c4b33605bbf971"
+        },
+        "deck/card_grid_plus_first_in_include.raw": {
+          "bytes": 700,
+          "sha256": "54008f8602b422fabe3094d468959d7a0f3aa054749dc0790218e280c9973f38"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_save_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_save_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_save_lower.cir": "dbdb0e5e251f1f14f90675afefd4d0093ea80b3c82979d117ca59326fa677402"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_save_lower.log": {
+          "bytes": 381,
+          "sha256": "901e9b5564e64f66f32cf23a5445c5b1049e5200d54e81938abfc89b6837e9a9"
+        },
+        "deck/card_grid_save_lower.raw": {
+          "bytes": 566,
+          "sha256": "1651c4a4385532baf9f46317c018d24b663bda8545c573718a4a96b6592ed33a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_save_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_save_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_save_upper.cir": "fc795cc8ab149eac95a011e5274720545f0c1daa5befd747e06a55e88b062ffa"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_save_upper.log": {
+          "bytes": 381,
+          "sha256": "fe01a2d451fd5761d521c175202d51d2d6c2b074f7cb217456cecc7daaa61e3d"
+        },
+        "deck/card_grid_save_upper.raw": {
+          "bytes": 566,
+          "sha256": "7702935fb62054ba70a535525aa566881f96cf4aceb4457265af1efe31b59bc1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_semicolon_in_braces": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_semicolon_in_braces.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_semicolon_in_braces.cir": "2e8e3ab7049617a03844d74ceab64e18f632e35ba454c6eff199676064510775"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_semicolon_in_braces.log": {
+          "bytes": 407,
+          "sha256": "1b7bbcf116a74a06b1747f0278273ff793308007fe0c3fd25cf19fd04e961229"
+        },
+        "deck/card_grid_semicolon_in_braces.raw": {
+          "bytes": 726,
+          "sha256": "18bdbe8c37f1bc470484289920fc2191d2fd8cf184ee18d5485e0369ee7b8d19"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_semicolon_in_quotes": {
+      "behaviour": "card-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_semicolon_in_quotes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_semicolon_in_quotes.cir": "acb5c3c844b60b517bd94c2e4b62d6e3c39af09f85a202ad8c5aae5c21a972c6"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_semicolon_in_quotes.log": {
+          "bytes": 106,
+          "sha256": "daf2b3a783e26de88858e6e4e8feb8f7b8713dbb1fcb7be8b1c4071aa289862f"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "deck/caret_power": {
       "behaviour": "deck-semantics",
       "command": [
@@ -3027,6 +3854,134 @@
         "deck/crlf.raw": {
           "bytes": 660,
           "sha256": "b1d69e939f6a431376d7be222c4e0f640817db3cd1d18a95c61d8fea13bce19b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_model": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_model.cir": "eaf80bfad930bc49808b3a4e3ade6e7d8306435a425b17c3c8399beac7fc27f2"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_model.log": {
+          "bytes": 2199,
+          "sha256": "03b71017082aaf7814cdc5d16fb26ca2a3208101b44bd56189df897c07eb71fc"
+        },
+        "deck/decl_grid_model.raw": {
+          "bytes": 2264,
+          "sha256": "c44e0955e77d8337f865e2ad3530b5aec5eadcc960c96032fd0b905f55ed7380"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_param": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_param.cir": "74243cd9376b6cb355f9b26abbf589641e3721279c37fd9ee5553d5298d36b1d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_param.log": {
+          "bytes": 945,
+          "sha256": "ce11df90ffb939ed0af00a23d7ed5f4f399b8c6ea7ffe7a3e669d66f691d0d1a"
+        },
+        "deck/decl_grid_param.raw": {
+          "bytes": 1270,
+          "sha256": "7abc5e5a4807f5ebc878f961665bd171265b146ea41a46eb64361947a9b0cd97"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_param_quotes": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_param_quotes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_param_quotes.cir": "a60652c245bc5606ded2e44026a1ed55d2454e31ac95968201b38bd8f4a7bc1b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_param_quotes.log": {
+          "bytes": 452,
+          "sha256": "14d5c6c5b2583cb98b4c00ffaa7f14c072dec2a81cbba1269e0b117e86010b5e"
+        },
+        "deck/decl_grid_param_quotes.raw": {
+          "bytes": 612,
+          "sha256": "c50ba9b0c27a8193c5120a61d7298dfa400930a647cf86f695217514bb076e62"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_subckt": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_subckt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_subckt.cir": "30148be8d91e77ab85d464896049c9ba91ce79cb3c59d3bb29a3bbbbff084f7f"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_subckt.log": {
+          "bytes": 427,
+          "sha256": "c1f6a3e19bd84bf38639013abd0a1aacd0a0dd1e36f1e35feb200fe88a15268d"
+        },
+        "deck/decl_grid_subckt.raw": {
+          "bytes": 922,
+          "sha256": "37a479f4298268ca710f8d9b4538304fef81a594a5397f9c1c27c90e3b405e9d"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",
@@ -3313,6 +4268,466 @@
       "stopped": false,
       "written": [
         ".log"
+      ]
+    },
+    "deck/element_grid_cswitch_off": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_cswitch_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_cswitch_off.cir": "a34f21067b0d314b238f41e81e5328df2ade9d91b29d7debae7c969ffd5f2c61"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_cswitch_off.log": {
+          "bytes": 412,
+          "sha256": "238c5db1b5be808e95697166fbdcebf258f89c33417cab4af59d9ee3045abeba"
+        },
+        "deck/element_grid_cswitch_off.raw": {
+          "bytes": 974,
+          "sha256": "8684405e684149a5dc355614ec5028ed209a2697b0343e7900a0508b43a75ce5"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_cswitch_on": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_cswitch_on.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_cswitch_on.cir": "2a499f379756e95603620c7f371e2c81b215fe0101a7caf29f5106b393a4fb33"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_cswitch_on.log": {
+          "bytes": 412,
+          "sha256": "9415bf6b543afee3b19e3d923dd5bbe66d49485400ff8f7a180d5869234e575f"
+        },
+        "deck/element_grid_cswitch_on.raw": {
+          "bytes": 974,
+          "sha256": "8684405e684149a5dc355614ec5028ed209a2697b0343e7900a0508b43a75ce5"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_digital": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_digital.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_digital.cir": "1270f57f77abf17ad6d2f08d91f0f285eb410643f2217dcd2cc1a9f97c59787a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_digital.log": {
+          "bytes": 969,
+          "sha256": "62e13f5a830514dcd621c2f9a39d64d6f1a5d32d4afb168e58385dedfda2f27b"
+        },
+        "deck/element_grid_digital.raw": {
+          "bytes": 1158,
+          "sha256": "795836e14f2ef3a2ffe2aa8d25319512c89d812c410e48176a508eadceb1dd6b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_keyed": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_keyed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_keyed.cir": "e1f78eb2ee592c0c52607cfc39a2e9cf5d199d7952451cc6855398097b859ea6"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_keyed.log": {
+          "bytes": 481,
+          "sha256": "d31b6eed2c3836ddbc201a3b7c7dfa3abc3c01e4963fd399cf22fa541626a8fc"
+        },
+        "deck/element_grid_keyed.raw": {
+          "bytes": 1464,
+          "sha256": "8f68582283d72db7a2bb7677b8285da0925ca2cd48f31cf1b5bdc5cdb789cb79"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_models": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_models.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_models.cir": "d63b1c95e66e14102b497c969a0f86dbe29627e279a54677f7705585b86060f5"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_models.log": {
+          "bytes": 1625,
+          "sha256": "5922ef37ded6fbd14abbbdad784cd794271fd420a2878fd5195b445d2d38c029"
+        },
+        "deck/element_grid_models.raw": {
+          "bytes": 3060,
+          "sha256": "d2f0780536f2ac4dd1dc2803525bfd9a8bf446834392528d71cb94d2b1033005"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_node_counts": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_node_counts.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_node_counts.cir": "91777ad24a730879ae338fdf0bd224eb35ba3a7ea1c04cbec968251cdc16bf8c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_node_counts.log": {
+          "bytes": 1309,
+          "sha256": "d9437e746483a0030b967e159ded976036eab55c702b9a5b9b6667fd04eccfca"
+        },
+        "deck/element_grid_node_counts.raw": {
+          "bytes": 1654,
+          "sha256": "2fe6f3b490d0afa684e8c5d49a37226be38bdd7805ade7f675d0873329c7e4ee"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_nothing_c": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_c.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_c.cir": "bd9f153623ceefeb7d6ffe5ee60d31c16d6e224bfe7e46da5e3175fc6f693939"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_c.log": {
+          "bytes": 188,
+          "sha256": "5903a0a8ea2bfeb9b9c85a3ad3823eba47e02c63f9a0439c389ce4b7292e467c"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_i": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_i.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_i.cir": "1fdca012896e14b9ec5a49ae8e85aab94327be45bbfb19cf85a9dbabda15d661"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_i.log": {
+          "bytes": 190,
+          "sha256": "7e681185935d477c44208af89f0d8cc8ec50e257e83556b26116da27f6322c86"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_l": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_l.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_l.cir": "bf839697f3ebae079b051223e1a99c6dbc1debd857321bd27b9a51efa56d8e95"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_l.log": {
+          "bytes": 196,
+          "sha256": "b66099e9d75992db38179fd117cb87657c51a0cc47c5793f20cdee126dfd1266"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_r": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_r.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_r.cir": "37d6981433018395c08d3880ef8bdf01eee38f0ea38c1402dbeaf086cc8c9989"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_r.log": {
+          "bytes": 188,
+          "sha256": "ae96c3e12befc03ab47c79f62d360d6f386206063c8b3783a726a655dd62295a"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_v": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_v.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_nothing_v.cir": "9739d8826758386cb85816c92297b5c51217f4475e58cb2de1daf53b15ecc30b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_v.log": {
+          "bytes": 401,
+          "sha256": "0ccbbe821971d31d8e4e79a044faa5ce06ff3c4134c00cdc556d45a4213d28f0"
+        },
+        "deck/element_grid_nothing_v.raw": {
+          "bytes": 716,
+          "sha256": "860095eb0a55d8f3df601069d8da136ddce0b64618e7ef55d8f27ad8a6b0ae25"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_params_upper": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_params_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_params_upper.cir": "05170d97f66bb3af67443401e89e13b6a5a3db05a48b8913f636307aa4477991"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_params_upper.log": {
+          "bytes": 388,
+          "sha256": "47837eba82c6904d1a005639074b54a57cfbd355cc7d4b0431c2c8c50abe678e"
+        },
+        "deck/element_grid_params_upper.raw": {
+          "bytes": 740,
+          "sha256": "bea51bfad645da8b8fe6535604bcf4f96b971bbdb6bd0b61b8037f530c78acc8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_switch_off": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_switch_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_switch_off.cir": "01fe2fb7bde5b653562005d8caf8af8142e6622a686955c9debbeeb22cd1239d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_switch_off.log": {
+          "bytes": 412,
+          "sha256": "aa7193ce02b1b5b2fe0c8ee6dd2031b9ac0b9063a62662d6703e6b11b774430d"
+        },
+        "deck/element_grid_switch_off.raw": {
+          "bytes": 1018,
+          "sha256": "5bb072280e92c7de8cc80db0218cc3ee6e2cdb3362890bc6ff40c5019e8607bb"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_switch_on": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_switch_on.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_switch_on.cir": "bac4c1118e063c847104fef89bfe487b336dbf6e159b20fe3ae67c99e707a699"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_switch_on.log": {
+          "bytes": 412,
+          "sha256": "fbd1be0bdfcf10f8f9000a1e94845a9df65d4ec0aa9e55520678245e18633d01"
+        },
+        "deck/element_grid_switch_on.raw": {
+          "bytes": 1018,
+          "sha256": "5bb072280e92c7de8cc80db0218cc3ee6e2cdb3362890bc6ff40c5019e8607bb"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_values": {
+      "behaviour": "element-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_values.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_values.cir": "8663234660512f72de4f70ec8c32752d0faf81919f0354b716be50e49a03c94e"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_values.log": {
+          "bytes": 566,
+          "sha256": "fadd4dd0ed779af983b86c9af0c7030b5591242c44062780cfedddbf5cbd5db3"
+        },
+        "deck/element_grid_values.raw": {
+          "bytes": 3782,
+          "sha256": "3c6501bf9ed084b32084f7b85f71ba44e643e76b59eb4061340aedf32458abb9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
       ]
     },
     "deck/element_o": {
@@ -4420,6 +5835,90 @@
         ".log"
       ]
     },
+    "deck/lib_whole_sectioned_rff": {
+      "behaviour": "lib-whole-sectioned",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/lib_whole_sectioned_rff.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/lib_whole_sectioned_rff.cir": "01f813fe870c981e976e0b0ba0cbda77e06dd63a8ba459834c83a1031f231a47",
+        "deck/sections.lib": "7f50ec10f3b5413252a7d9b36ea2bb22c3785347b9d1b632a5059f9b5d1936ca"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/lib_whole_sectioned_rff.log": {
+          "bytes": 92,
+          "sha256": "3f86e861966325eb182c8170af3226e1c3acc4e2423419ea740d63274e15ea68"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/lib_whole_sectioned_rout": {
+      "behaviour": "lib-whole-sectioned",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/lib_whole_sectioned_rout.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/lib_whole_sectioned_rout.cir": "4caf3e15edc5efeaaa4c1447dc37597dfecfa212eb2bf645cb09c60eacaeb5c6",
+        "deck/sections.lib": "7f50ec10f3b5413252a7d9b36ea2bb22c3785347b9d1b632a5059f9b5d1936ca"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/lib_whole_sectioned_rout.log": {
+          "bytes": 92,
+          "sha256": "3f86e861966325eb182c8170af3226e1c3acc4e2423419ea740d63274e15ea68"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/lib_whole_sectioned_rtt": {
+      "behaviour": "lib-whole-sectioned",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/lib_whole_sectioned_rtt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/lib_whole_sectioned_rtt.cir": "2278dcc0d973be34a683b28c2d8dd46c50cbb0054459c6169917d2abd86a036b",
+        "deck/sections.lib": "7f50ec10f3b5413252a7d9b36ea2bb22c3785347b9d1b632a5059f9b5d1936ca"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/lib_whole_sectioned_rtt.log": {
+          "bytes": 92,
+          "sha256": "3f86e861966325eb182c8170af3226e1c3acc4e2423419ea740d63274e15ea68"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "deck/meas_function_group_delay": {
       "behaviour": "deck-forms",
       "command": [
@@ -5048,6 +6547,38 @@
         "deck/no_end.raw": {
           "bytes": 634,
           "sha256": "af432f87b11a3f5bebcb46f46251f54ab18825619cdee96377cd3b9a2bb47ae4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/node_name_nonascii_case": {
+      "behaviour": "node-name-nonascii-case",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/node_name_nonascii_case.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/node_name_nonascii_case.cir": "441b7dba123d303d9c0065852d5ce0f715caeb37b69a928bf1fef2a730dece86"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/node_name_nonascii_case.log": {
+          "bytes": 668,
+          "sha256": "4bef0249f79edc8775b58853995f715ae151d696a4f7546d906b50ac24a3ee07"
+        },
+        "deck/node_name_nonascii_case.raw": {
+          "bytes": 918,
+          "sha256": "5b7abfc4692f7f1961a6b0f53787f49394b62e0e640e9ba9892ef040589be16c"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",
@@ -6727,6 +8258,39 @@
         "deck/save_split_include.raw": {
           "bytes": 938,
           "sha256": "2bb8e063f68c5d7a5e462fc68e1a5cf462388d3e7619c74c5a2b01cd22ba9439"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/save_subckt_dotted": {
+      "behaviour": "save-subckt-dotted",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_subckt_dotted.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_subckt_dotted.cir": "e9873d5e44381ad484e9e07ae77c6c5d562dac0cac9ddce21c6ea7a4e0afd5f0"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_subckt_dotted.log": {
+          "bytes": 452,
+          "sha256": "c57f4e879b725f8b7ebce180d09a12b236ea5fa31d9127e98e7b36f2baa109ae"
+        },
+        "deck/save_subckt_dotted.raw": {
+          "bytes": 730,
+          "sha256": "a349c7837e1a4c21a26e71e95ddd1599eee679ae7509605da0301f438811493b"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

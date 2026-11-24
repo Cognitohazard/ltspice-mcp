@@ -2730,6 +2730,802 @@
         ".raw"
       ]
     },
+    "deck/card_grid_control_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_control_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_control_lower.cir": "be27e1bfa66089a6d1a521ce2c6069b107b9074bbffa65d9637e0ba7bc0b3e1f",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_control_lower.log": {
+          "bytes": 218,
+          "sha256": "78f19eaccfa37ad9fc3e60058b5709cbdcd31b8556423f7060c741ea4650fa40"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_control_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_control_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_control_upper.cir": "c0883ab1d60ba43bc018e7ad4f071df5cae19e2fdbafcd8800a2bccd240c83ea",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_control_upper.log": {
+          "bytes": 218,
+          "sha256": "dda57e71a3f75a6583976b685ff3e44a35e955b260e1fe80f1f45dadbe939a34"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_cr": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_cr.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_cr.cir": "5e06234aa748c4e3d480414a2a096d4eb7cd3ae6d8d6e9e63648316e5c253063",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_cr.log": {
+          "bytes": 340,
+          "sha256": "39ededbadbffa5890b4d68bc8be4906708c2b969c9f7004538cafdbabc2bbb7d"
+        },
+        "deck/card_grid_cr.raw": {
+          "bytes": 648,
+          "sha256": "6291bbbba4dd209334afdfbac91601d0aa73f853631e4f1a0028d0ff2e0936aa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directive_variants_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directive_variants_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directive_variants_lower.cir": "e087b90dd06cbbd6b7ea4897722266727b13dd176f3eae0d614ce56d1669175c",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directive_variants_lower.log": {
+          "bytes": 457,
+          "sha256": "1fb6954dda9fbeba2e62ad7c2270327a5c6e3791fc79e9979c1138b4f37e7de1"
+        },
+        "deck/card_grid_directive_variants_lower.raw": {
+          "bytes": 1142,
+          "sha256": "d3f0766f2751c53c931966aac2ec46c3f7356725f4c9ad317cf0ad9cf36db459"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directive_variants_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directive_variants_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directive_variants_upper.cir": "a8e9f9cfe0f608ded50cef43c90eab966574b4e0297ef4986cdce33594592c58",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directive_variants_upper.log": {
+          "bytes": 457,
+          "sha256": "48e9f97d834fa5653087d87867c024cb80afe4907791a9db819358f4c40536ce"
+        },
+        "deck/card_grid_directive_variants_upper.raw": {
+          "bytes": 1142,
+          "sha256": "f8cd3c40afa83ce6b44c9c1590d30dc1661c816c798dffefcec269e8a2516203"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directives_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directives_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directives_lower.cir": "55fcd6fef3a4dd2d006605329e8a6942594ffe28c20f95aeabf22863d438a427",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directives_lower.log": {
+          "bytes": 538,
+          "sha256": "e35b3dfe5011ece3dd494bad1848f301af050bdda42a6655bc471ee634228234"
+        },
+        "deck/card_grid_directives_lower.raw": {
+          "bytes": 2700,
+          "sha256": "5d99ff552e2d9e07cca30d34418c9f2b6f5c3fcccad9aadc6b3ae89a8eb30b8f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_directives_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_directives_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_directives_upper.cir": "8a16f3fec22a997535cdab7f269612b179a2be984da45595e23458ec84271349",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_directives_upper.log": {
+          "bytes": 538,
+          "sha256": "995a75fbcb0462e81c43154942d0dd03ebe2b664a5d2822e85dd1addda1d7cac"
+        },
+        "deck/card_grid_directives_upper.raw": {
+          "bytes": 2700,
+          "sha256": "554e431d6a7fa0a968b0988ae9ffa4f7ccacade38e047b73c323ff0aa38fa485"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_end_in_subckt": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_end_in_subckt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_end_in_subckt.cir": "1e72b2f65e2c27c46a6afb47629fe5e4d364758b173c1184234260b752c0b0ef",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_end_in_subckt.log": {
+          "bytes": 114,
+          "sha256": "52f0bca86dc27e2c10a1c332438eedc262528e39dde930e8caaadb0f142137bd"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_ends_absent": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_ends_absent.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_ends_absent.cir": "68afc4b0da2ba6cce6408884581ba58655478cc9d515c0ed28114fba89e6c66d",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_ends_absent.log": {
+          "bytes": 358,
+          "sha256": "c33450b56a8fa93695a455c31d9243431a5c343468a6bcba135d081aeef12695"
+        },
+        "deck/card_grid_ends_absent.raw": {
+          "bytes": 666,
+          "sha256": "a0ee49e47068130f3d36ddba21130a2c0bceff3090ec821e573020b1485c3874"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_ends_differs": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_ends_differs.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_ends_differs.cir": "47a266fa6ba72df23ee9c7f7cecab5b1df675873ae9f01b05226b3cd1d09ed73",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_ends_differs.log": {
+          "bytes": 360,
+          "sha256": "09b562fc9b81bdfed33994d437b464102cbb7c2fb1826a68d654194ecab59b9a"
+        },
+        "deck/card_grid_ends_differs.raw": {
+          "bytes": 768,
+          "sha256": "5ffaa66a801680eb76ff61375ff101a3c8c2e9dcb22c380ef25c5b3863921e05"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_ends_orphan": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_ends_orphan.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_ends_orphan.cir": "a773b3cda7572fc9e854242f2a0c86edc4e84e0c035d5869b454a30463dc3b04",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_ends_orphan.log": {
+          "bytes": 104,
+          "sha256": "3465d57b3c13deab5c25557b5a03a837480718763881a1238f1585a2e20641df"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_form_feed": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_form_feed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_form_feed.cir": "c263fe4e9a9bf226d699e67d69ff12ab8f76ab9360c9b64d7f437f7385d26b3b",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_form_feed.log": {
+          "bytes": 111,
+          "sha256": "66203d464b57f90c5ff5ed11109dfd975643d5b91298c8eba3b6399b094fa714"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_libfile_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_libfile_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_libfile_lower.cir": "2b8cbd966d5d2f60758987cfbf10b57b7c9284c278dc6f67655aaea9c6441ce2",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_libfile_lower.log": {
+          "bytes": 123,
+          "sha256": "1bed26a994aa7ee9164f6a6f4c2340f98ea487abb24bdca960c48373c924690b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_libfile_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_libfile_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_libfile_upper.cir": "235f69348f87aaebb1bb881f4addeb7cd736fe6ddd9ff36a1773569c56d5a353",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_libfile_upper.log": {
+          "bytes": 123,
+          "sha256": "8e97029366cdc19e272628934736e857d6bb23b57afdc2ec327ebef82b2c5e6a"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_lines": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_lines.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_lines.cir": "36f94d88383d466db8de970823e6b5c695a029eb623fba13a088cf297a884e1a",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_lines.log": {
+          "bytes": 346,
+          "sha256": "1def5c8ff6069ae10bf5fa8718a32e7ee61b1f7cda2139442215232d91ae3842"
+        },
+        "deck/card_grid_lines.raw": {
+          "bytes": 1350,
+          "sha256": "49746321b37f3f989da0ccc803c4a5720f3488476a0217d949408cdca2e70c02"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_path_\u00e9": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_path_\u00e9.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_path_\u00e9.cir": "64ba60b81ec49ad87dcd9bd64e403fcab32c71205226800b7ec6295137168757",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_path_\u00e9.log": {
+          "bytes": 350,
+          "sha256": "a7ad637562435a45ffdf7c1061dc4a77c05f70f9324f42fc0080f32b5ace7f40"
+        },
+        "deck/card_grid_path_\u00e9.raw": {
+          "bytes": 656,
+          "sha256": "fcc10c8be03c663363f776e18d6448c7a9d2965457bb6a51c519bebfe66aebfd"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_plus_first": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_plus_first.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.cir": "dc37930a7c7cea45678bdb6d13c931fdcc1fffb802f019873bd5d5b16c5cf287",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_plus_first.log": {
+          "bytes": 86,
+          "sha256": "8194bc66cab485e43540c2ea05559167402c6fe06831185ffa6df821f711877b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".inc",
+        ".log"
+      ]
+    },
+    "deck/card_grid_plus_first_in_include": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_plus_first_in_include.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_plus_first_in_include.cir": "d5250dff7e7cf6312fd432c864de1ca8b01eaf29b273957362352ecf75ea7b10"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_plus_first_in_include.log": {
+          "bytes": 121,
+          "sha256": "80ce24f985121e9b202b2781ef126cb7794b18a62eaed9d70d63721a959e48ea"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/card_grid_save_lower": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_save_lower.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_save_lower.cir": "dbdb0e5e251f1f14f90675afefd4d0093ea80b3c82979d117ca59326fa677402"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_save_lower.log": {
+          "bytes": 356,
+          "sha256": "4c766377e61e74ff18a95ad24fc20b7ef62c37ab59359fd89f28fcf7f53582ba"
+        },
+        "deck/card_grid_save_lower.raw": {
+          "bytes": 556,
+          "sha256": "50798398db0364ae5fcc2601c804c39cc794fbd332233760ad2b1c51f84f8120"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_save_upper": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_save_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_save_upper.cir": "fc795cc8ab149eac95a011e5274720545f0c1daa5befd747e06a55e88b062ffa"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_save_upper.log": {
+          "bytes": 356,
+          "sha256": "7242ae66786ff0cd27f612050c3458b2441cf6d4e100ab306c4c722d2b64b68f"
+        },
+        "deck/card_grid_save_upper.raw": {
+          "bytes": 556,
+          "sha256": "817217301fb3688a549c04d877890899acdedb66a6971772ca5d9e37f02d5c0c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_semicolon_in_braces": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_semicolon_in_braces.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_semicolon_in_braces.cir": "2e8e3ab7049617a03844d74ceab64e18f632e35ba454c6eff199676064510775"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_semicolon_in_braces.log": {
+          "bytes": 374,
+          "sha256": "787e549ce6ab816f5282a98a74d8d4ed64e6d6e9e7e2213b7e2c033eef8e60e0"
+        },
+        "deck/card_grid_semicolon_in_braces.raw": {
+          "bytes": 682,
+          "sha256": "4ad93e9630a1b4db18748f370d3994b3aa5a4379b885ca808a706cf1b0ac999c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/card_grid_semicolon_in_quotes": {
+      "behaviour": "card-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/card_grid_semicolon_in_quotes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/card_grid;quoted.inc": "72ac023de27ed4e2f2950cb00b0ac3a893d87e508d3a76b600a726d1ae73ef60",
+        "deck/card_grid_inc.inc": "ac1197544a4899b988977f2033af451982e78f37bd5fc1ca7e267f70d0a2b771",
+        "deck/card_grid_include.inc": "064cc94e849c5991a45255bca7969ffb268e4823ca1ee89e55239e96ccff3fc3",
+        "deck/card_grid_lib.lib": "c0b63734721aa4c63e15e69c768ecd7c7a7bfed340627e687c75fc1afb63b3d4",
+        "deck/card_grid_libfile.lib": "e6c77433bbfc351468180fb445c8590784ec54d2727b71583ec77f8c20d64faf",
+        "deck/card_grid_plus_first.inc": "8a7fd8cabffe93c7fab9cbcda3cb23e7469f4fdcf53e5e29c41b7a58e9a8e7e9",
+        "deck/card_grid_semicolon_in_quotes.cir": "acb5c3c844b60b517bd94c2e4b62d6e3c39af09f85a202ad8c5aae5c21a972c6"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/card_grid_semicolon_in_quotes.log": {
+          "bytes": 408,
+          "sha256": "0aabf871ec374be83e78a1b263caf26fa7f6f6ab26b893f052024d946ae6d896"
+        },
+        "deck/card_grid_semicolon_in_quotes.raw": {
+          "bytes": 682,
+          "sha256": "dc802aa797030cc9bc94667123633a9a7acd6e533cecb9c66eee1b879b76ca08"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/caret_power": {
       "behaviour": "deck-semantics",
       "command": [
@@ -2977,6 +3773,134 @@
         "deck/crlf.raw": {
           "bytes": 624,
           "sha256": "6d578856cdd08b99646bb2d55e7a086bcc38197515a71ed22a0a150af7ee9848"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_model": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_model.cir": "eaf80bfad930bc49808b3a4e3ade6e7d8306435a425b17c3c8399beac7fc27f2"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_model.log": {
+          "bytes": 1218,
+          "sha256": "cebe5c5136eca585f53327cba33ae91b03793ecd8ffa41f87bb3043fe0b173fc"
+        },
+        "deck/decl_grid_model.raw": {
+          "bytes": 2134,
+          "sha256": "b278d37388c3c16f89aa401d0cb7cdfbb458243b2cbfc1e6b301f3dd58c58acf"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_param": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_param.cir": "74243cd9376b6cb355f9b26abbf589641e3721279c37fd9ee5553d5298d36b1d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_param.log": {
+          "bytes": 346,
+          "sha256": "c1274960aa37a9689767a023077d4b483bcae352f3ffe8458da476dcdb1b9ae6"
+        },
+        "deck/decl_grid_param.raw": {
+          "bytes": 1174,
+          "sha256": "f60372de96c8deb2aa5e4ef46fb7527477455f16f206e7171f34cf1a8825d529"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_param_quotes": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_param_quotes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_param_quotes.cir": "a60652c245bc5606ded2e44026a1ed55d2454e31ac95968201b38bd8f4a7bc1b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_param_quotes.log": {
+          "bytes": 360,
+          "sha256": "31c9e29b8355e1866d2711f0817c8fe0a9e86b3825d0175c44b9f41f6ce7adef"
+        },
+        "deck/decl_grid_param_quotes.raw": {
+          "bytes": 614,
+          "sha256": "1d498472f8eec937eb9362b55e7a1faa4e66cac5c0915fde818159b6f684f119"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/decl_grid_subckt": {
+      "behaviour": "declaration-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/decl_grid_subckt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/decl_grid_subckt.cir": "30148be8d91e77ab85d464896049c9ba91ce79cb3c59d3bb29a3bbbbff084f7f"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/decl_grid_subckt.log": {
+          "bytes": 348,
+          "sha256": "54545e54f47b4042ea15ca81b66fa0b24df4087d3643ecd7a8279a1b5aa01a78"
+        },
+        "deck/decl_grid_subckt.raw": {
+          "bytes": 908,
+          "sha256": "a52f5c3028db95a6e12bd61212c9805f48c758dab4b8209144627b84791b8ae5"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -3262,6 +4186,471 @@
         "deck/element_fra.raw": {
           "bytes": 726,
           "sha256": "a588a27330d4125eeb3ba9022b10224f1ab89e3775af1fe72aa7d0201df6933a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_cswitch_off": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_cswitch_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_cswitch_off.cir": "a34f21067b0d314b238f41e81e5328df2ade9d91b29d7debae7c969ffd5f2c61"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_cswitch_off.log": {
+          "bytes": 364,
+          "sha256": "ddcf4ac44422f370ea69d29244296a9b5c5f48e89d5f1aa0da87ec05c4d07c8b"
+        },
+        "deck/element_grid_cswitch_off.raw": {
+          "bytes": 910,
+          "sha256": "33075169553310f2a5e4918034d242f748ecccaea7080d3db44ed3040891829f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_cswitch_on": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_cswitch_on.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_cswitch_on.cir": "2a499f379756e95603620c7f371e2c81b215fe0101a7caf29f5106b393a4fb33"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_cswitch_on.log": {
+          "bytes": 362,
+          "sha256": "f09c5ab9e5ba0a59d4792f687140d39cf1d48049f34a11898301be575b884da8"
+        },
+        "deck/element_grid_cswitch_on.raw": {
+          "bytes": 908,
+          "sha256": "158cb47f8f908670563afd16b3dbd85ec5dc25a0e2fb7fde604c8b9d4b7af3bf"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_digital": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_digital.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_digital.cir": "1270f57f77abf17ad6d2f08d91f0f285eb410643f2217dcd2cc1a9f97c59787a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_digital.log": {
+          "bytes": 481,
+          "sha256": "1490cf0fdd6182f7396c791990fc3882a2f59d9fa4ae8b8c513e2ac5043fa381"
+        },
+        "deck/element_grid_digital.raw": {
+          "bytes": 1222,
+          "sha256": "271cfdd59043496840b5e08dbe6a9713ba86648d85a1eb5a3dbe9205842bd417"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_keyed": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_keyed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_keyed.cir": "e1f78eb2ee592c0c52607cfc39a2e9cf5d199d7952451cc6855398097b859ea6"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_keyed.log": {
+          "bytes": 352,
+          "sha256": "057805ed34616b4cba50a7e4960c046d26e6b64ce5f09f6b954266f598292776"
+        },
+        "deck/element_grid_keyed.raw": {
+          "bytes": 1404,
+          "sha256": "2fb7bac113a0b8d346116d44b3592742c76bf5758ca55c35f4122adb5b7b860b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_models": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_models.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_models.cir": "d63b1c95e66e14102b497c969a0f86dbe29627e279a54677f7705585b86060f5"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_models.log": {
+          "bytes": 354,
+          "sha256": "72fc1ca09f18275d3ed992180337d94aa0f7ef5578deba3649c985f81350cf39"
+        },
+        "deck/element_grid_models.raw": {
+          "bytes": 3142,
+          "sha256": "b4e0727d76d8c3bc866ff5e5c40c6e30bab06f4dbe48ce85d5ae3663605fdb28"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_node_counts": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_node_counts.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_node_counts.cir": "91777ad24a730879ae338fdf0bd224eb35ba3a7ea1c04cbec968251cdc16bf8c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_node_counts.log": {
+          "bytes": 232,
+          "sha256": "754d3f7e13893b7784a80280b58312c357c6cd0eb0e819b9606e3b4ad730dc4e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_c": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_c.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_c.cir": "bd9f153623ceefeb7d6ffe5ee60d31c16d6e224bfe7e46da5e3175fc6f693939"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_c.log": {
+          "bytes": 115,
+          "sha256": "282f126a1716247d71084249f4e91b6c6c50367d95bcc3d52509331f1e3a5c61"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_i": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_i.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_i.cir": "1fdca012896e14b9ec5a49ae8e85aab94327be45bbfb19cf85a9dbabda15d661"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_i.log": {
+          "bytes": 331,
+          "sha256": "f0dd83bdf5b6861e98c7f5b6619ca7b5fa89a87d0cae7df5553ae22c19422c8b"
+        },
+        "deck/element_grid_nothing_i.raw": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_nothing_l": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_l.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_nothing_l.cir": "bf839697f3ebae079b051223e1a99c6dbc1debd857321bd27b9a51efa56d8e95"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_l.log": {
+          "bytes": 360,
+          "sha256": "58a0c8ec83423439761f3a654546ab85222242418f4ee77c54ed257d80b266de"
+        },
+        "deck/element_grid_nothing_l.raw": {
+          "bytes": 758,
+          "sha256": "899a2a4adfece4d507019ead5fd82208e7347ce891f68d0d6da9e768276dbd76"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_nothing_r": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_r.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/element_grid_nothing_r.cir": "37d6981433018395c08d3880ef8bdf01eee38f0ea38c1402dbeaf086cc8c9989"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_r.log": {
+          "bytes": 104,
+          "sha256": "95aa4592b70b4ab93387371d935bfe390aa222e78558d0ccf559450ef8ccef2e"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/element_grid_nothing_v": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_nothing_v.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_nothing_v.cir": "9739d8826758386cb85816c92297b5c51217f4475e58cb2de1daf53b15ecc30b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_nothing_v.log": {
+          "bytes": 460,
+          "sha256": "e3ce6aa1c946e6793dd2ed42a4f55f7c2352636cd74d2ae538f2adbb731a9024"
+        },
+        "deck/element_grid_nothing_v.raw": {
+          "bytes": 706,
+          "sha256": "e9d903c58574372aef390c7ea82834f0148194afe5b7f469aec973a3132f787f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_params_upper": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_params_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_params_upper.cir": "05170d97f66bb3af67443401e89e13b6a5a3db05a48b8913f636307aa4477991"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_params_upper.log": {
+          "bytes": 366,
+          "sha256": "b9fc9e840aab929b54d77779637a50b3d83cbe23053b7fd71d5f0a973bf2c474"
+        },
+        "deck/element_grid_params_upper.raw": {
+          "bytes": 776,
+          "sha256": "600d1dcc1ab5d1852592112db0f9969d614ba213a9d131e090d68e1abc7ba824"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_switch_off": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_switch_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_switch_off.cir": "01fe2fb7bde5b653562005d8caf8af8142e6622a686955c9debbeeb22cd1239d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_switch_off.log": {
+          "bytes": 362,
+          "sha256": "8654a62e4392596cf87d4ee06c4c70939347b5d192c18450261c89b52bf21062"
+        },
+        "deck/element_grid_switch_off.raw": {
+          "bytes": 952,
+          "sha256": "e120675e2e6ff6fea5fdd3240e653fe733b42e913fb0b6c18f6b20a4235e9f53"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_switch_on": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_switch_on.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_switch_on.cir": "bac4c1118e063c847104fef89bfe487b336dbf6e159b20fe3ae67c99e707a699"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_switch_on.log": {
+          "bytes": 360,
+          "sha256": "dda5dd116e3df17f0d9b703388898f452bee1ed078de8594d8e9ef03576c675d"
+        },
+        "deck/element_grid_switch_on.raw": {
+          "bytes": 950,
+          "sha256": "8f0c5cae36178f72ac741af120d4809b91da1ee39e604b04d4728e83fa1e8046"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/element_grid_values": {
+      "behaviour": "element-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/element_grid_values.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/element_grid_values.cir": "8663234660512f72de4f70ec8c32752d0faf81919f0354b716be50e49a03c94e"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/element_grid_values.log": {
+          "bytes": 354,
+          "sha256": "9c22a99b9526c31bd9ebcffa728850c53ac436ad0de586190513dab9795ae547"
+        },
+        "deck/element_grid_values.raw": {
+          "bytes": 3838,
+          "sha256": "eea36979b74201751ff9762563ecc1079fd9ca8c9bdf836566b755ef22f92368"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -4357,6 +5746,90 @@
         ".log"
       ]
     },
+    "deck/lib_whole_sectioned_rff": {
+      "behaviour": "lib-whole-sectioned",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/lib_whole_sectioned_rff.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/lib_whole_sectioned_rff.cir": "01f813fe870c981e976e0b0ba0cbda77e06dd63a8ba459834c83a1031f231a47",
+        "deck/sections.lib": "7f50ec10f3b5413252a7d9b36ea2bb22c3785347b9d1b632a5059f9b5d1936ca"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/lib_whole_sectioned_rff.log": {
+          "bytes": 308,
+          "sha256": "9cd0d5367d66651fcd1f390ee00bcb9af3fa80bad169bca4f98b89ee32848bdb"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/lib_whole_sectioned_rout": {
+      "behaviour": "lib-whole-sectioned",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/lib_whole_sectioned_rout.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/lib_whole_sectioned_rout.cir": "4caf3e15edc5efeaaa4c1447dc37597dfecfa212eb2bf645cb09c60eacaeb5c6",
+        "deck/sections.lib": "7f50ec10f3b5413252a7d9b36ea2bb22c3785347b9d1b632a5059f9b5d1936ca"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/lib_whole_sectioned_rout.log": {
+          "bytes": 308,
+          "sha256": "9cd0d5367d66651fcd1f390ee00bcb9af3fa80bad169bca4f98b89ee32848bdb"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/lib_whole_sectioned_rtt": {
+      "behaviour": "lib-whole-sectioned",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/lib_whole_sectioned_rtt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/lib_whole_sectioned_rtt.cir": "2278dcc0d973be34a683b28c2d8dd46c50cbb0054459c6169917d2abd86a036b",
+        "deck/sections.lib": "7f50ec10f3b5413252a7d9b36ea2bb22c3785347b9d1b632a5059f9b5d1936ca"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/lib_whole_sectioned_rtt.log": {
+          "bytes": 308,
+          "sha256": "9cd0d5367d66651fcd1f390ee00bcb9af3fa80bad169bca4f98b89ee32848bdb"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "deck/meas_function_group_delay": {
       "behaviour": "deck-forms",
       "command": [
@@ -4976,6 +6449,38 @@
         "deck/no_end.raw": {
           "bytes": 628,
           "sha256": "fc04aab13d4a72e3f944544e8853d2ee760615e69f1d9df75a56f8ce11d75ff5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/node_name_nonascii_case": {
+      "behaviour": "node-name-nonascii-case",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/node_name_nonascii_case.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/node_name_nonascii_case.cir": "441b7dba123d303d9c0065852d5ce0f715caeb37b69a928bf1fef2a730dece86"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/node_name_nonascii_case.log": {
+          "bytes": 362,
+          "sha256": "0b57cafe32307e527b612f9bdac5d9232bd09c5d87922aaa2bc474d2d4a322d7"
+        },
+        "deck/node_name_nonascii_case.raw": {
+          "bytes": 810,
+          "sha256": "2f6f8532f836df1019e5efcc70b5e6a8d88b584c66c0348840d58c5a8e6dabde"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -6618,6 +8123,40 @@
       "reported_build": "LTspice 26.1.1 for Windows",
       "stopped": false,
       "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/save_subckt_dotted": {
+      "behaviour": "save-subckt-dotted",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_subckt_dotted.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_subckt_dotted.cir": "e9873d5e44381ad484e9e07ae77c6c5d562dac0cac9ddce21c6ea7a4e0afd5f0"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_subckt_dotted.log": {
+          "bytes": 488,
+          "sha256": "351757bb622bb3acc2843db4ee8ca1ab5a32d92c3fb02b9e48fe1b997effe7ee"
+        },
+        "deck/save_subckt_dotted.raw": {
+          "bytes": 2018,
+          "sha256": "292ace4cd015d81345254e4f15ae6ebca112eb82a4ce06ae844dc6d70b5a6ac0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
         ".log",
         ".op.raw",
         ".raw"

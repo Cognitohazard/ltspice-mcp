@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\element_grid_node_counts.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\element_grid_node_counts.cir(11): Node or model name expected.
+Mm m_d m_g m_s mmod
+                   ^

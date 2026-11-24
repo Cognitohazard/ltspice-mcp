@@ -1,0 +1,12 @@
+C:\recording\sections.lib(3): File not found.
+.lib tt
+     ^^
+C:\recording\sections.lib(5): This directive requires a preceding ".lib".
+.endl tt
+^^^^^^^^
+C:\recording\sections.lib(6): File not found.
+.lib ff
+     ^^
+C:\recording\sections.lib(8): This directive requires a preceding ".lib".
+.endl ff
+^^^^^^^^

@@ -1,0 +1,80 @@
+Circuit: * a .model card's parameters in parentheses and bare, and its level as a number and computed
+
+Error on line 22 : .model mcomp nmos(level= 8  kp=100u vto=1)
+	* Unrecognized parameter "kp" -- ignored
+	* Unrecognized parameter "vto" -- ignored
+Error on line 21 : .model mlit nmos(level=8 kp=100u vto=1)
+	* Unrecognized parameter "kp" -- ignored
+	* Unrecognized parameter "vto" -- ignored
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Direct Newton iteration for .op point succeeded.
+Semiconductor Device Operating Points:
+                        --- MOSFET Transistors ---
+Name:          m1
+Model:        mone
+Id:          5.00e-05
+Vgs:         2.00e+00
+Vds:         4.50e+00
+Vbs:         0.00e+00
+Vth:         1.00e+00
+Vdsat:       1.00e+00
+Gm:          1.00e-04
+Gds:         0.00e+00
+Gmb:         0.00e+00
+Cbd:         0.00e+00
+Cbs:         0.00e+00
+Cgsov:       0.00e+00
+Cgdov:       0.00e+00
+Cgbov:       0.00e+00
+Cgs:         0.00e+00
+Cgd:         0.00e+00
+Cgb:         0.00e+00
+
+                        --- BSIM3 MOSFETS ---
+Name:        m3          m2
+Model:      mcomp       mlit
+Id:        1.87e-06    1.87e-06
+Vgs:       2.00e+00    2.00e+00
+Vds:       4.98e+00    4.98e+00
+Vbs:       0.00e+00    0.00e+00
+Vth:       1.76e+00    1.76e+00
+Vdsat:     1.43e-01    1.43e-01
+Gm:        1.41e-05    1.41e-05
+Gds:       6.82e-08    6.82e-08
+Gmb        9.57e-06    9.57e-06
+Cbd:       0.00e+00    0.00e+00
+Cbs:       0.00e+00    0.00e+00
+Cgsov:     1.40e-15    1.40e-15
+Cgdov:     1.40e-15    1.40e-15
+Cgbov:     0.00e+00    0.00e+00
+dQgdVgb:   4.87e-14    4.87e-14
+dQgdVdb:  -1.40e-15   -1.40e-15
+dQgdVsb:  -3.38e-14   -3.38e-14
+dQddVgb:  -1.58e-14   -1.58e-14
+dQddVdb:   1.40e-15    1.40e-15
+dQddVsb:   2.46e-14    2.46e-14
+dQbdVgb:  -9.90e-15   -9.90e-15
+dQbdVdb:  -3.18e-20   -3.18e-20
+dQbdVsb:  -2.92e-14   -2.92e-14
+
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 5
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 13
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
