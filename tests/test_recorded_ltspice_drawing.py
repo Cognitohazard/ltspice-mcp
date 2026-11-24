@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,11 @@ import pytest
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_scene import (
-    GND_DEPTH,
-    GND_HALF_W,
     NetFlag,
     Scene,
     build_scene,
+    drawn_text_extent,
+    ground_polygon,
     line_height,
     sheet_view,
 )
@@ -35,10 +36,8 @@ from tests.ltspice_recorder import INPUTS
 #: index 2, and half the base and the depth of the ground triangle at that size.
 DEFAULT_FONT = 28
 GROUND_TRIANGLE = (18, 18)
-#: The triangle the server draws and holds text against, which no build drew.
-GROUND_TRIANGLE_SMALLER_ON_THE_SERVER_ONLY = (6, 10)
 #: A value as the server keeps it, and as both builds draw it.
-DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY = {"66u": "66µ"}
+DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY = {"66u": "66µ", "20u": "20µ", "100u": "100µ"}
 #: What a symbol draws of its own that the layout check says it does not read
 #: (``verify.LAYOUT_COVERAGE``): the symbol's TEXT line and its pin names.
 SYMBOL_TEXT_AND_PIN_NAMES = {"CELL", "IN", "OUT"}
@@ -46,9 +45,6 @@ SYMBOL_TEXT_AND_PIN_NAMES = {"CELL", "IN", "OUT"}
 #: units shorter than the scene estimates: the scene sets size 0 at a 10-unit
 #: font where a build's text runs as if at about 9.5.
 DRAWN_SHORTER_BY_LTSPICE_AT_SIZE_0 = {"AC 22", "Rser=22"}
-#: The values U1 and U2 take from their symbol (``draw/attribute_defaults``):
-#: both builds draw them, and the scene lays out only a part's own values.
-DRAWN_FROM_THE_SYMBOL_BY_LTSPICE_ONLY = {"draw/attribute_defaults": ["DEFMOD", "DEFMOD", "LT1001"]}
 #: How far a drawn point may lie from the sheet's in sheet units: an image's
 #: coordinates are whole numbers, at a scale of a few to the sheet unit.
 NEAR = 1
@@ -139,10 +135,57 @@ def test_a_ground_flag_is_a_triangle_at_the_text_size(
             )
 
 
-def test_the_servers_ground_triangle_is_smaller_than_either_build_draws_it():
-    """The render draws this triangle and ``attribute_text_overlap`` holds text
-    against it, so text over the outer part of a flag's triangle is not reported."""
-    assert (GND_HALF_W, GND_DEPTH) == GROUND_TRIANGLE_SMALLER_ON_THE_SERVER_ONLY
+#: Every recorded sheet with a ground the scene draws, at the default text size.
+#: The sheet at ``SchFontSize=40`` is left out: the scene lays a sheet out at the
+#: default size, its text as its grounds.
+SHEETS_WITH_GROUNDS = [
+    "draw/ground_flags",
+    "draw/gnd_and_zero_flags",
+    "draw/suite_nmos4_mirrored",
+    "draw/suite_nmos_mirror_labelled",
+    "draw/suite_two_stage_opamp_drawn",
+    "draw/suite_two_stage_opamp_labelled",
+    "draw/suite_two_stage_opamp_moved",
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SHEETS_WITH_GROUNDS)))
+def test_the_scenes_ground_triangle_is_the_one_ltspice_draws(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Every ground triangle the scene lays out has the size and the turn of
+    the triangle the build drew there: each corner, taken from the triangle's
+    centre, lies on a drawn one. The render draws the scene's triangle and the
+    layout check holds text against it, so both cover what LTspice draws.
+
+    Corners are compared from the centre because the scale taken from a
+    sheet's wires can place a whole drawing a unit or two off (the suite
+    sheets), which moves a triangle without changing its size. A drawn point
+    is a whole number of image units, so each corner and the centre may each
+    lie half an image unit off along an axis: the tolerance is one image unit
+    in sheet units, and never less than ``NEAR``."""
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    near = max(NEAR, 1 / scale.per_unit)
+    grounds = [flag for flag in _scene(build, case_id, tmp_path).flags if flag.is_ground]
+    assert grounds
+    for flag in grounds:
+        corners = _from_centre(_triangle(drawn, scale, flag))
+        assert len(corners) == 3, flag
+        for x, y in _from_centre(ground_polygon(flag)):
+            assert any(abs(x - a) <= near and abs(y - b) <= near for a, b in corners), (
+                f"{flag}: no drawn corner at ({x}, {y}) from the centre among {sorted(corners)}"
+            )
+
+
+def _from_centre(
+    corners: Iterable[tuple[float, float]],
+) -> set[tuple[float, float]]:
+    """Each corner less the mean of the corners."""
+    points = list(corners)
+    cx = sum(x for x, _ in points) / len(points)
+    cy = sum(y for _, y in points) / len(points)
+    return {(x - cx, y - cy) for x, y in points}
 
 
 def _cell(text: dict[str, Any], scale: _Scale) -> tuple[float, float, float, float]:
@@ -233,15 +276,13 @@ def test_the_scene_lays_out_every_attribute_a_build_draws_where_it_draws_it(
     """Each name, value, Value2, SpiceLine, SpiceLine2 and SpiceModel a build
     draws, and nothing else, each where the build draws it: through a window
     at an offset or at the symbol's origin, at size 2 or size 0, and turned
-    with its part. A value written as "" draws nothing, and hides the symbol's
-    (V3's, R3's). A value a part takes from its symbol is drawn by both builds
-    and not laid out (``DRAWN_FROM_THE_SYMBOL_BY_LTSPICE_ONLY``)."""
+    with its part, and from the symbol when the part gives no value of its own
+    (U1's value and model, U2's model). A value written as "" draws nothing,
+    and hides the symbol's (V3's, R3's)."""
     drawn = rec.drawing(build, case_id)
     scale = _scale(case_id, drawn)
     laid_out = _laid_out(build, case_id, tmp_path)
-    left_out = Counter(t["text"] for t in drawn["texts"]) - Counter(t for t, _box in laid_out)
-    assert sorted(left_out.elements()) == DRAWN_FROM_THE_SYMBOL_BY_LTSPICE_ONLY.get(case_id, [])
-    assert not Counter(t for t, _box in laid_out) - Counter(t["text"] for t in drawn["texts"])
+    assert Counter(t for t, _box in laid_out) == Counter(t["text"] for t in drawn["texts"])
     for text, box in laid_out:
         # The drawing of that text nearest the box, for a text two parts draw.
         shown = min(
@@ -471,3 +512,101 @@ def test_where_a_net_labels_text_goes_mid_span_and_at_a_corner(build: str, tmp_p
     assert escapement == 900 and x1 == pytest.approx(x, abs=NEAR)
     assert (y0 + y1) / 2 == pytest.approx(y, abs=NEAR)
     assert box.x1 == x and box.y1 < y < box.y2
+
+
+#: Eight of the suite's own sheets drawn by both builds with the suite's
+#: stand-in symbols beside them, as the findings snapshot reads them.
+SUITE_SHEETS = [c for c in rec.cases_of("sheet-drawing-other-text") if c.startswith("draw/suite_")]
+#: A label at a corner where a wire comes in from the left and one from above:
+#: both builds centre its text below the point, and the scene puts it to the
+#: right, the side its fallback for a corner picks.
+CORNER_LABEL_DRAWN_BELOW_BY_LTSPICE_AND_TO_THE_RIGHT_BY_THE_SCENE = {
+    ("draw/suite_nmos4_mirrored", "SRC", 240, 144)
+}
+#: These sheets are wide, so a build draws them at under one image unit to the
+#: sheet unit, where its font hinting sets text up to a sixth shorter, and up
+#: to four units off its base, than at the size the other draw cases use. A
+#: text is where a build draws it when the scene's box and the drawn one share
+#: at least this much of their area: every text drawn where the scene puts it
+#: shares 0.57 or more, the corner label below shares 0.13, and a label on the
+#: other side of its point shares nothing.
+SHARED_AREA = 0.5
+
+
+def _shared(ours: BBox, theirs: BBox) -> float:
+    """The area two boxes share, over the area of the two together."""
+    x = max(0, min(ours.x2, theirs.x2) - max(ours.x1, theirs.x1))
+    y = max(0, min(ours.y2, theirs.y2) - max(ours.y1, theirs.y1))
+    both = ours.width * ours.height + theirs.width * theirs.height - x * y
+    return x * y / both if both else 0.0
+
+
+def _glyphs(cell: BBox, ours: BBox) -> BBox:
+    """A drawn text's cell cut to the glyphs' height the scene estimates, at
+    the cell's base: a cell holds the line's leading too."""
+    if ours.width >= ours.height:
+        return BBox(cell.x1, cell.y2 - ours.height, cell.x2, cell.y2)
+    return BBox(cell.x2 - ours.width, cell.y1, cell.x2, cell.y2)
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUITE_SHEETS)))
+def test_every_text_on_the_suite_sheets_lies_where_ltspice_draws_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Every part text, a value taken from the symbol included, and every net
+    label the scene lays out on these sheets is where the build draws it. A
+    label on a part's pin with no wire faces out of the part, on the side of
+    the symbol's box the pin lies on, turned with the part."""
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    scene = _scene(build, case_id, tmp_path)
+    texts = [(t.text, t.x, t.y, drawn_text_extent(t)) for s in scene.symbols for t in s.texts]
+    texts += [(text, x, y, box) for x, y, text, box in scene.sheet_text_extents()]
+    away = []
+    for text, x, y, ours in texts:
+        shown = DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY.get(text, text)
+        cells = [BBox(*map(round, _cell(t, scale))) for t in drawn["texts"] if t["text"] == shown]
+        assert cells, f"{text} is laid out and not drawn"
+        best = max(_shared(ours, _glyphs(cell, ours)) for cell in cells)
+        if best < SHARED_AREA:
+            away.append((case_id, text, x, y))
+    expected = CORNER_LABEL_DRAWN_BELOW_BY_LTSPICE_AND_TO_THE_RIGHT_BY_THE_SCENE
+    assert set(away) == {key for key in expected if key[0] == case_id}
+    # And the build draws each text as many times as the scene lays it out, a
+    # value from the symbol included.
+    shown = Counter(DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY.get(t, t) for t, *_ in texts)
+    assert Counter(t["text"] for t in drawn["texts"] if t["text"]) == shown
+
+
+#: The suite sheets with a ground on a part's pin and no wire there.
+SUITE_SHEETS_WITH_GROUNDS = [
+    "draw/suite_nmos4_mirrored",
+    "draw/suite_nmos_mirror_labelled",
+    "draw/suite_two_stage_opamp_drawn",
+    "draw/suite_two_stage_opamp_labelled",
+    "draw/suite_two_stage_opamp_moved",
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUITE_SHEETS_WITH_GROUNDS)))
+def test_every_ground_on_the_suite_sheets_points_where_ltspice_draws_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """A ground on a part's pin with no wire points out of the part, on the
+    side its pin faces (``symbol_geometry.pin_side``), as a label's text goes."""
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    grounds = [flag for flag in _scene(build, case_id, tmp_path).flags if flag.is_ground]
+    assert grounds
+    for flag in grounds:
+        # The apex is the corner whose other two, the base's ends, lie level or
+        # upright: within a few units, at these sheets' coarse scale.
+        corners = _triangle(drawn, scale, flag)
+        ((x, y),) = [
+            (cx, cy)
+            for cx, cy in corners
+            if len(base := sorted(corners - {(cx, cy)})) == 2
+            and min(abs(base[0][0] - base[1][0]), abs(base[0][1] - base[1][1])) <= 3
+        ]
+        way = ("right" if x > 0 else "left") if abs(x) > abs(y) else ("down" if y > 0 else "up")
+        assert way == flag.orientation, (flag.x, flag.y)

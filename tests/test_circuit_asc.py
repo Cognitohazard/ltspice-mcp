@@ -1118,16 +1118,27 @@ class TestMirroredQuarterTurnsMatchLTspice:
     async def test_verify_circuit_finds_nothing_floating_or_dangling(
         self, asc_state: SessionState, sheet: Path
     ):
+        """Nothing floats or dangles. The layout scan finds only each part's
+        NMOS, the value its symbol gives, drawn across a wire, as both builds
+        draw it (``draw/suite_nmos4_mirrored``)."""
         data = await run_verify_circuit(
             asc_state, path=str(sheet), checks=["symbols", "layout"], render=False
         )
         assert data["checks_run"] == ["symbols", "layout"]
-        assert "findings" not in data
+        assert [(f["rule_id"], f["subject"]) for f in data["findings"]] == [
+            ("attribute_text_overlap", "M1"),
+            ("attribute_text_overlap", "M2"),
+        ]
 
     async def test_post_op_warnings_find_no_floating_pin(
         self, asc_state: SessionState, sheet: Path
     ):
-        assert structured_warnings(load_editor(asc_state, sheet)) == []
+        """As above: only the two values drawn across a wire."""
+        rows = structured_warnings(load_editor(asc_state, sheet))
+        assert [(row["kind"], row["ref"]) for row in rows] == [
+            ("attribute_text_overlap", "M1"),
+            ("attribute_text_overlap", "M2"),
+        ]
 
 
 # Canonical device archetypes the schematic-build path MUST handle, beyond the
@@ -2341,7 +2352,10 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert "No matching wire" in data["results"][0]["error"]
+        assert data["results"][0]["error"] == (
+            "No wire to remove: no wire has an end at (0,0) or (16,0). To see the wires of "
+            'a net with their ends, call inspect(kind="net", at=[x, y]) on a point of it.'
+        )
 
     async def test_remove_net_label_no_match_raises(self, asc_state: SessionState, work_dir: Path):
 
@@ -2354,7 +2368,10 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert "No net label found" in data["results"][0]["error"]
+        assert data["results"][0]["error"] == (
+            "No net label at (999,999), and nothing else is there. To see the labels of a "
+            'net with their points, call inspect(kind="net", at=[x, y]) on a point of it.'
+        )
 
     async def test_remove_directive_round_trip(self, asc_state: SessionState, work_dir: Path):
 
@@ -2540,7 +2557,7 @@ class TestReplaceDirective:
     """replace_directive changes one text and keeps its record: place, size,
     justification and kind."""
 
-    def _apply(self, sheet: Path, instruction: str, text: str, **at: int) -> dict:
+    def _apply(self, sheet: Path, instruction: str, text: str, **at: Any) -> dict:
         """Apply the op to the sheet and save it; a refusal raises before the save."""
         from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
 
@@ -2550,7 +2567,7 @@ class TestReplaceDirective:
         editor.save_netlist(sheet)
         return result
 
-    def _refused(self, sheet: Path, instruction: str, text: str, **at: int) -> str:
+    def _refused(self, sheet: Path, instruction: str, text: str, **at: Any) -> str:
         """The refusal's message, after checking the editor holds the texts it
         held: a refused op changes nothing, so a dry run's later ops see none."""
         from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
@@ -2867,7 +2884,7 @@ class TestMoveRemoveOpWarnings:
             stop_on_error=True,
         )
         op = res["results"][0]
-        assert op["deleted_wires"] >= 1
+        assert op["removed_wires"] == [{"from": {"x": 200, "y": 248}, "to": {"x": 200, "y": 352}}]
         assert "warnings" not in op
         assert _loose_wire_ends(res) == []
 
@@ -4143,7 +4160,11 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 1
+        assert result["removed_wires"] == [{"from": {"x": 96, "y": 292}, "to": {"x": 96, "y": 340}}]
+        assert [kept["joins"] for kept in result["kept_wires"]] == [
+            ["R2.1", "R3.1"],
+            ["R2.1", "R3.1"],
+        ]
         records = _records(asc)
         assert "WIRE 16 196 96 196" in records
         assert "WIRE 96 196 176 196" in records
@@ -4157,7 +4178,10 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 1
+        assert result["removed_wires"] == [{"from": {"x": 96, "y": 196}, "to": {"x": 96, "y": 148}}]
+        assert result["kept_wires"] == [
+            {"wire": {"from": {"x": 96, "y": 292}, "to": {"x": 288, "y": 292}}, "joins": ["R4.1", "R5.1"]}
+        ]
         assert "WIRE 96 292 288 292" in _records(asc)
         assert await _net_pins(asc_state, asc, "R4.1") == {"R4.1", "R5.1"}
 
@@ -4282,7 +4306,10 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 0
+        assert "removed_wires" not in result
+        assert result["kept_wires"] == [
+            {"wire": {"from": {"x": 96, "y": 196}, "to": {"x": 288, "y": 196}}, "joins": ["R2.1", "label '0'"]}
+        ]
         assert "WIRE 96 196 288 196" in _records(asc)
 
     async def test_cleanup_keeps_a_wire_between_labels_of_one_name(
@@ -4299,7 +4326,8 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         result = apply_one(
             asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
         )
-        assert result["deleted_wires"] == 0
+        assert "removed_wires" not in result and "removed_labels" not in result
+        assert len(result["kept_wires"]) == 2
         records = _records(asc)
         assert "WIRE 16 196 96 196" in records and "WIRE 96 196 176 196" in records
 

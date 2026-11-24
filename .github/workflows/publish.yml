@@ -25,7 +25,8 @@ jobs:
   # Release gate: runs the exact same reusable checks workflow as CI
   # (lint + pyright + the real-ngspice e2e tier + dependency audit),
   # so the release gate and the CI gate cannot drift. The release tier adds
-  # the macOS job, which no landing runs.
+  # the macOS jobs, which a landing runs only when it changes the result
+  # parser's process containment.
   checks:
     uses: ./.github/workflows/checks.yml
     with:

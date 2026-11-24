@@ -32,20 +32,29 @@ validate the extension and raise NetlistError for a non-.asc file.
 """
 
 import asyncio
+import heapq
 import importlib
 import math
 import re
 import traceback
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Callable, Container, Iterable, Mapping, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import (
+    AsyncIterator,
+    Callable,
+    Container,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import CodeType
-from typing import Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
-from pydantic import Field
+from pydantic import Field, StringConstraints, model_validator
 from spicelib import AscEditor, SpiceEditor
 from spicelib.editor.asc_editor import LTSPICE_ATTRIBUTES, LTSPICE_PARAMETERS
 from spicelib.editor.asy_reader import AsyReader
@@ -94,7 +103,7 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
-from ltspice_mcp.lib.nets import LabelAt, Member, PinAt, Segment, net_change
+from ltspice_mcp.lib.nets import LabelAt, Member, Nets, PinAt, Segment, net_change
 from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
@@ -129,7 +138,7 @@ from ltspice_mcp.lib.sheet import (
     placed_pin,
     references_named,
 )
-from ltspice_mcp.lib.sheet_findings import Part, SheetView
+from ltspice_mcp.lib.sheet_findings import Part, SheetView, label_connects
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -872,20 +881,6 @@ def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, i
     return set() if geo is None else {(p["x"], p["y"]) for p in geo["pins"]}
 
 
-def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tuple[int, int]]:
-    """Union of pin coordinates for every component except ``exclude_ref``.
-
-    Used by remove_component's wire cleanup: a wire ending on another
-    component's pin is that component's wire, and stays.
-    """
-    coords: set[tuple[int, int]] = set()
-    for ref in editor.get_components():
-        if ref == exclude_ref:
-            continue
-        coords.update(_component_pin_coords(editor, ref))
-    return coords
-
-
 def sheet_nets(
     editor: AscEditor,
     extra_segments: Sequence[tuple[int, int, int, int]] = (),
@@ -1497,15 +1492,200 @@ def _refuse_unrunnable_directive(text: str) -> None:
         raise NetlistError(f"Refusing directive {text!r}: {err.message} ({err.suggestion})")
 
 
+def _listed(items: Sequence[str], sep: str = ", ", shown: int = 10) -> str:
+    """Items for a refusal; past ``shown`` it says how many more there are."""
+    more = len(items) - shown
+    return sep.join(items[:shown]) + (f"{sep}and {more} more" if more > 0 else "")
+
+
 def _listed_texts(texts: Sequence[Text], shown: int = 10) -> str:
-    """The texts, each with its anchor, for a refusal; past ``shown`` it says how
-    many more there are."""
-    listed = "; ".join(
-        f"{_shown_text(text.text)!r} at ({int(text.coord.X)}, {int(text.coord.Y)})"
-        for text in texts[:shown]
+    """The texts, each with its anchor, for a refusal."""
+    return _listed(
+        [f"{_shown_text(t.text)!r} at ({int(t.coord.X)}, {int(t.coord.Y)})" for t in texts],
+        "; ",
+        shown,
     )
-    more = len(texts) - shown
-    return f"{listed}; and {more} more" if more > 0 else listed
+
+def _text_place(text: Text) -> dict[str, Any]:
+    return {"kind": _text_kind(text), "x": int(text.coord.X), "y": int(text.coord.Y)}
+
+
+def _named_text(editor: AscEditor, instruction: str, x: int | None, y: int | None) -> Text:
+    """The one text ``instruction`` names, as remove_directive names texts,
+    picked by its anchor when ``x``, ``y`` are given; refused unless exactly one."""
+    named = _text_matcher(instruction)
+    matched = [text for text in editor.directives if named(text)]
+    if not matched:
+        raise _no_text_matched(instruction)
+    if x is not None:
+        there = [text for text in matched if _xy(text.coord) == (x, y)]
+        if not there:
+            raise NetlistError(
+                f"None of the texts {instruction!r} names is anchored at "
+                f"({x}, {y}); they are {_listed_texts(matched)}."
+            )
+        matched = there
+    if len(matched) > 1:
+        place = " at that anchor" if x is not None else ""
+        fix = (
+            "Move one of them first: texts on one anchor cannot be told apart."
+            if x is not None
+            else "Give the x and y of the one to change."
+        )
+        raise NetlistError(
+            f"replace_directive changes one text, and {instruction!r} names "
+            f"{len(matched)}{place}: {_listed_texts(matched)}. {fix}"
+        )
+    return matched[0]
+
+
+def _write_replaced_text(text: Text, new: str) -> None:
+    """Give ``text`` the words ``new``, as it reads, after the checks of
+    ``_check_replaced_text``."""
+    _check_replaced_text(text, new)
+    text.text = _text_record_body(new)
+
+
+def _check_replaced_text(text: Text, new: str) -> None:
+    """Refuse ``new`` as the words of ``text`` unless it passes the checks
+    every replace_directive makes of a new text: not empty, and for a
+    directive, runnable. A comment is not checked."""
+    if not new.strip():
+        raise NetlistError(
+            f"replace_directive would leave the text at ({int(text.coord.X)}, "
+            f"{int(text.coord.Y)}) empty; use remove_directive to remove a text."
+        )
+    if _text_kind(text) == "directive":
+        _refuse_unrunnable_directive(new)
+
+
+def _reads(words: str) -> str:
+    """Words as a text reads them: a line break, however it is typed, as one ``\\n``."""
+    return words.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _occurrences(shown: str, find: str) -> list[int]:
+    """Where ``find`` starts in ``shown``, overlapping occurrences included."""
+    found: list[int] = []
+    at = shown.find(find)
+    while at >= 0:
+        found.append(at)
+        at = shown.find(find, at + 1)
+    return found
+
+
+def _line_column(shown: str, at: int) -> str:
+    line = shown.count("\n", 0, at) + 1
+    column = at - shown.rfind("\n", 0, at)
+    return f"{line}:{column}"
+
+
+def _lines_through(words: str, first: int, end: int) -> str:
+    """The lines of ``words`` from line ``first`` (0-based) through the one
+    holding character ``end - 1``, or ``first`` alone when ``end`` is at its start."""
+    last = max(words.count("\n", 0, max(end, 0)), first)
+    return "\n".join(words.split("\n")[first : last + 1])
+
+
+def _replace_found_words(editor: AscEditor, op: "OpReplaceDirective", find: str) -> dict[str, Any]:
+    """Change the words ``find`` names, found exactly once in the texts searched:
+    the one ``instruction`` names, else those anchored at ``x``, ``y``, else
+    every directive and comment on the sheet."""
+    find = _reads(find)
+    if op.instruction is not None:
+        searched = [_named_text(editor, op.instruction, op.x, op.y)]
+    elif op.x is not None:
+        searched = [text for text in editor.directives if _xy(text.coord) == (op.x, op.y)]
+        if not searched:
+            raise NetlistError(f"No directive or comment is anchored at ({op.x}, {op.y}).")
+    else:
+        searched = list(editor.directives)
+    holding = [text for text in searched if find in _shown_text(text.text)]
+    if not holding:
+        raise _words_not_found(find, searched, named=op.instruction is not None)
+    if len(holding) > 1:
+        fix = (
+            "move one of them first: texts on one anchor cannot be told apart"
+            if op.x is not None
+            else "give instruction, or x and y"
+        )
+        raise NetlistError(
+            f"{find!r} is in {len(holding)} texts: {_listed_texts(holding)}. "
+            f"replace_directive changes one; {fix}."
+        )
+    (text,) = holding
+    shown = _shown_text(text.text)
+    places = _occurrences(shown, find)
+    if len(places) > 1:
+        at = _listed([_line_column(shown, place) for place in places])
+        raise NetlistError(
+            f"{find!r} occurs {len(places)} times in {shown!r} at "
+            f"({int(text.coord.X)}, {int(text.coord.Y)}), at line:column {at}; "
+            "make find longer, taking in neighbouring words."
+        )
+    (at,) = places
+    words = _reads(op.text)
+    new = shown[:at] + words + shown[at + len(find) :]
+    _write_replaced_text(text, new)
+    first = shown.count("\n", 0, at)
+    was = _lines_through(shown, first, at + len(find))
+    now = _lines_through(new, first, at + len(words))
+    result: dict[str, Any] = {
+        "op": "replace_directive",
+        "text": {**_text_place(text), "line": first + 1, "was": was, "now": now},
+    }
+    try:
+        # The undo writes the old words back, so it is given only when the
+        # check every write makes would accept them.
+        _check_replaced_text(text, shown)
+    except NetlistError as refused:
+        result["undo_refused"] = str(refused)
+    else:
+        result["undo"] = _undo_found_words(editor, text, shown, was, now)
+    return result
+
+
+def _undo_found_words(editor: AscEditor, text: Text, shown: str, was: str, now: str) -> dict[str, Any]:
+    """The replace_directive op that gives ``text`` back the words ``shown`` it
+    had: ``now`` as ``find`` when it is found once on the text's anchor, else
+    the whole new text as ``instruction`` (a pattern of its record when it
+    begins with ``regex:``) with the old as ``text``. A whole-text edit strips
+    its ``text``, so when the old text begins or ends with a space or a line
+    break the op also gives the whole new text as ``find``, whose ``text`` is
+    written as given."""
+    x, y = _xy(text.coord)
+    if now and sum(
+        len(_occurrences(_shown_text(other.text), now))
+        for other in editor.directives
+        if _xy(other.coord) == (x, y)
+    ) == 1:
+        return {"op": "replace_directive", "x": x, "y": y, "find": now, "text": was}
+    new = _shown_text(text.text)
+    instruction = f"regex:^{re.escape(text.text)}\\Z" if new.startswith("regex:") else new
+    undo = {"op": "replace_directive", "x": x, "y": y, "instruction": instruction}
+    if shown != shown.strip():
+        undo["find"] = new
+    return {**undo, "text": shown}
+
+
+def _words_not_found(find: str, searched: Sequence[Text], *, named: bool) -> NetlistError:
+    """The refusal of a find in no text searched; it names the text when one was
+    named, and the reading form when find is in the record's own spelling."""
+    if named:
+        where = f"the text {_shown_text(searched[0].text)!r}"
+    elif searched:
+        where = "any directive or comment searched"
+    else:
+        where = "any directive or comment: the sheet has none"
+    message = f"{find!r} is not in {where}."
+    reading = "\n".join(decode_text_lines(find))
+    if reading != find and any(reading in _shown_text(text.text) for text in searched):
+        message += (
+            " It is written as the record spells it, a line break as \\n and a "
+            f"backslash doubled; as the text reads it is {reading!r}."
+        )
+    return NetlistError(message)
+
 
 
 # ---------------------------------------------------------------------------
@@ -1802,41 +1982,111 @@ def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     return dropped
 
 
-def _drop_dangling_wires_at(editor: AscEditor, points: set[tuple[int, int]]) -> int:
-    """Remove the wires a removed part left dangling at ``points``, its pins;
-    return how many went.
+def _drop_dangling_wires_at(
+    editor: AscEditor, freed: set[tuple[int, int]], stacked: Mapping[tuple[int, int], str]
+) -> dict[str, list[dict[str, Any]]]:
+    """Take away the wiring a removed part left joining nothing; return what
+    went and what stayed by the reply's fields (``removed_wires``,
+    ``removed_labels``, ``kept_wires``), each left out when empty.
 
-    A wire with an end on one of the points is left dangling when taking it
-    away parts nothing from anything by wire (``nets.net_change``): its other
-    end and what lies along it reach no pin or label that something else does
-    not join them to. Two wires that met at the pin still meet each other
-    there, so they stay, as does a wire that joins pins or labels along it.
-    Called with the part already removed, one wire at a time, so wires that
-    were joined only to each other go together. ``points`` leave out a pin
-    point another part's pin shares: a wire ending there is still on that pin,
-    so the removal did not leave it dangling.
+    Called with the part already removed. ``freed`` are its pin points no other
+    part's pin is on; ``stacked`` names, for each of its pin points another
+    part's pin shares, that pin: a wire ending there is still on it, so the walk
+    does not start there.
 
-    Unlike every other edit's question, this one is asked of the wiring alone
-    (``folded=False``): a wire between two labels of one name still joins them
-    on the sheet, though the name joins them too, so it is not dangling.
-    Pinned by ``test_cleanup_keeps_a_wire_between_labels_of_one_name``.
+    The walk takes, until nothing changes, each wire with an end on a freed
+    point whose taking parts nothing from anything by wiring
+    (``nets.net_change``), all copies of a wire drawn twice together; each end
+    of a taken wire that holds no pin and no label is freed in turn. A label or
+    ground flag on a freed point, or on a taken wire, goes too when nothing is
+    left under it (``sheet_findings.label_connects``). Nothing the walk does not
+    reach is touched, and wires are visited by place, so the order of the
+    sheet's records changes nothing.
+
+    The question is asked of the wiring alone (``folded=False``): a wire
+    between two labels of one name still joins them on the sheet, though the
+    name joins them too, so it stays.
     """
     geometry = collect_component_geometry(editor)
-    kept = list(editor.wires)
-    for wire in list(kept):
-        if _xy(wire.V1) not in points and _xy(wire.V2) not in points:
+    pin_points = {(pin["x"], pin["y"]) for entry in geometry for pin in entry["pins"]}
+    label_points = {_xy(lbl.coord) for lbl in editor.labels}
+    copies: dict[tuple[tuple[int, int], tuple[int, int]], list[Any]] = defaultdict(list)
+    for wire in editor.wires:
+        copies[_segment_key(_xy(wire.V1), _xy(wire.V2))].append(wire)
+
+    def nets_of(keys: Iterable[tuple[tuple[int, int], tuple[int, int]]]) -> Nets:
+        segments = [(*a, *b) for a, b in keys]
+        return sheet_nets(editor, geometry=geometry, wires=segments).nets
+
+    freed = set(freed)
+    kept = set(copies)
+    by_end: dict[tuple[int, int], list[tuple[tuple[int, int], tuple[int, int]]]] = defaultdict(list)
+    for key in copies:
+        for end in key:
+            by_end[end].append(key)
+    # A worklist of the wires at a freed point, smallest first, so each wire is
+    # asked once: taking wires never makes a wire that would split a net safe
+    # to take, since what it would cut off is still joined only through it.
+    queue = sorted({key for end in freed for key in by_end[end]})
+    heapq.heapify(queue)
+    asked: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    current = nets_of(kept)
+    while queue:
+        key = heapq.heappop(queue)
+        if key in asked:
             continue
-        without = [w for w in kept if w is not wire]
-        change = net_change(
-            sheet_nets(editor, geometry=geometry, wires=_segments(kept)).nets,
-            sheet_nets(editor, geometry=geometry, wires=_segments(without)).nets,
-            folded=False,
-        )
-        if not change.split:
-            kept = without
-    dropped = len(editor.wires) - len(kept)
-    editor.wires = kept
-    return dropped
+        asked.add(key)
+        after = nets_of(kept - {key})
+        if net_change(current, after, folded=False).split:
+            continue
+        kept.discard(key)
+        current = after
+        for end in key:
+            if end not in pin_points and end not in label_points and end not in freed:
+                freed.add(end)
+                for other in by_end[end]:
+                    if other not in asked:
+                        heapq.heappush(queue, other)
+    taken = sorted(set(copies) - kept)
+
+    kept_wires: list[dict[str, Any]] = []
+    for key in sorted(kept):
+        entry: dict[str, Any] = {"wire": segment_json((*key[0], *key[1]))}
+        if on_pin := next((stacked[end] for end in key if end in stacked), None):
+            entry["on_pin"] = on_pin
+        if key[0] in freed or key[1] in freed:
+            after = nets_of(kept - {key})
+            change = net_change(current, after, folded=False)
+            # Each piece as net_change gives it, in the order the sheet's nets
+            # list their members, named by its first member.
+            entry["joins"] = [
+                _members_text(piece[:1]) for split in change.split for piece in split
+            ]
+        if len(entry) > 1:
+            kept_wires.append(entry)
+
+    left = [seg for key in sorted(kept) for seg in [(*key[0], *key[1])] * len(copies[key])]
+    on_something = label_connects(pin_points, [((s[0], s[1]), (s[2], s[3])) for s in left])
+    gone_under = build_on_wire_predicate(taken)
+    labels_kept, removed_labels = [], []
+    for lbl in editor.labels:
+        point = _xy(lbl.coord)
+        if (point in freed or gone_under(point)) and not on_something(point):
+            removed_labels.append({"text": lbl.text, "x": point[0], "y": point[1]})
+        else:
+            labels_kept.append(lbl)
+    removed_wires = [
+        segment_json(seg)
+        for seg in sorted((*_xy(w.V1), *_xy(w.V2)) for key in taken for w in copies[key])
+    ]
+    editor.wires = [w for w in editor.wires if _segment_key(_xy(w.V1), _xy(w.V2)) in kept]
+    editor.labels = labels_kept
+    found = {
+        "removed_wires": removed_wires,
+        "removed_labels": sorted(removed_labels, key=lambda label: (label["x"], label["y"], label["text"])),
+        "kept_wires": kept_wires,
+    }
+    return {name: items for name, items in found.items() if items}
 
 
 def _segments(wires: Iterable[Any]) -> list[tuple[int, int, int, int]]:
@@ -2444,15 +2694,16 @@ class OpSetComponentAttribute(StrictModel):
 
 
 class OpRemoveComponent(StrictModel):
-    """Delete a component, optionally taking its dangling wires with it."""
+    """Delete a component, optionally taking the wiring it leaves joining nothing."""
 
     op: Literal["remove_component"]
     reference: str = Field(description=_REFERENCE_DESCRIPTION)
     cleanup_wires: bool = Field(
         default=False,
         description=(
-            "Also delete wires left dangling at the removed component's pins: those "
-            "joining nothing else once it is gone. There is no undo."
+            "Also delete the wires and labels left joining nothing, walking out from the "
+            "removed part's pins; a wire or label that still joins two pins or labels "
+            "stays. The reply lists what was removed and what stayed, and why."
         ),
     )
 
@@ -2635,14 +2886,40 @@ class OpRemoveDirective(StrictModel):
     )
 
 
+#: A string kept as given: its space around the words is part of what it says.
+_ExactText = Annotated[str, StringConstraints(strip_whitespace=False)]
+
+
 class OpReplaceDirective(StrictModel):
-    """Change one text; its place, size, justification and kind stay."""
+    """Change one text, whole or the part ``find`` names; its place, size,
+    justification and kind stay."""
 
     op: Literal["replace_directive"]
-    instruction: str = Field(description="Names one text, as remove_directive names them.")
-    text: str = Field(description="The new text.")
-    x: int | None = Field(default=None, description="With y, picks the named text anchored there.")
+    instruction: str | None = Field(
+        default=None,
+        description="Names one text, as remove_directive names them. Required without find.",
+    )
+    find: Annotated[_ExactText, StringConstraints(min_length=1)] | None = Field(
+        default=None,
+        description=(
+            "Words to change, as the text reads, found once in the texts searched; "
+            "text replaces only them."
+        ),
+    )
+    text: _ExactText = Field(description="The new text, or with find the words that replace it.")
+    x: int | None = Field(
+        default=None, description="With y, picks the text anchored there."
+    )
     y: int | None = None
+
+    @model_validator(mode="after")
+    def _names_a_text(self) -> "OpReplaceDirective":
+        if self.instruction is None and self.find is None:
+            raise ValueError(
+                "replace_directive takes instruction, naming the text to replace whole, "
+                "or find, the words in a text to change."
+            )
+        return self
 
 
 class PlotPaneSpec(StrictModel):
@@ -2769,8 +3046,11 @@ KEEPS_WIRING = frozenset(
 
 # The keys of an op's result that report what applying it found on the sheet:
 # the segments a route found already drawn, the junctions it made, how much a
-# removal took. A value or attribute change reports what it changed. The rest
-# of a result restates the op or carries geometry a surface reports through
+# removal took and, for a removal whose target an earlier op of the batch took,
+# which op that was. ``remove_component`` names each wire and label its cleanup
+# took, and each wire the cleanup reached and kept with why. A value or
+# attribute change reports what it changed, and a ``find`` edit of a text the
+# op that puts its words back. The rest of a result restates the op or carries geometry a surface reports through
 # views of its own. A route's ``wire_count`` is not one: ``already_present``
 # names the segments it did not draw, and relaying the count would put a line
 # per route on every build. ``remove_directive``'s ``removed_texts`` names each
@@ -2780,11 +3060,11 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "set_component_value": ("changed",),
     "set_component_attribute": ("changed",),
     "wire_pins": ("already_present", "junctions"),
-    "remove_wire": ("removed",),
-    "remove_net_label": ("removed",),
+    "remove_wire": ("removed", "already_removed_by"),
+    "remove_net_label": ("removed", "already_removed_by"),
     "remove_directive": ("removed_texts",),
-    "replace_directive": ("text",),
-    "remove_component": ("deleted_wires",),
+    "replace_directive": ("text", "undo", "undo_refused"),
+    "remove_component": ("removed_wires", "removed_labels", "kept_wires"),
     "replace_component": ("was", "wires", "left_at", "unpaired_pins"),
     "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
@@ -3074,13 +3354,16 @@ def apply_op_inplace(
     op: SchematicOp,
     asc_path: Path,
     plot: SheetPlotSettings | None = None,
+    removals: "BatchRemovals | None" = None,
 ) -> dict[str, object]:
     """Apply one schematic op against ``editor`` in place, return its result.
 
     Skips the load / save / lock dance: the batch runner's caller holds the
     edit guard and saves once, after every op in the batch has applied.
     ``set_plot_panes`` changes ``plot`` instead, which the caller commits
-    beside the sheet; a batch holding one must pass it.
+    beside the sheet; a batch holding one must pass it. ``removals`` is what
+    the batch's earlier removal ops took: a removal whose target one of them
+    took says which, where it would otherwise be refused.
 
     Raises ``NetlistError`` on any per-op validation failure; the caller
     decides whether to abort or continue based on ``stop_on_error``.
@@ -3172,16 +3455,27 @@ def apply_op_inplace(
 
     if isinstance(op, OpRemoveComponent):
         reference = part_reference(editor, op.reference)
-        target_only = _component_pin_coords(editor, reference) - _other_components_pin_coords(
-            editor, reference
-        )
+        own: set[tuple[int, int]] = set()
+        others: dict[tuple[int, int], str] = {}
+        if op.cleanup_wires:
+            geometry = collect_component_geometry(editor)
+            own = {
+                (pin["x"], pin["y"])
+                for entry in geometry
+                if entry["ref"] == reference
+                for pin in entry["pins"]
+            }
+            for pin in sheet_nets(editor, without=reference, geometry=geometry).nets.pins:
+                if pin.point in own:
+                    name = pin.qualified_name
+                    others[pin.point] = min(others.get(pin.point, name), name)
         editor.remove_component(reference)
         rm_result: dict[str, object] = {"op": "remove_component", "reference": reference}
         # A wire it leaves on nothing is the finished sheet's to say
         # (dangling_wire_end), so a later op of the batch that removes or
         # reconnects it leaves nothing said.
-        if op.cleanup_wires and target_only:
-            rm_result["deleted_wires"] = _drop_dangling_wires_at(editor, target_only)
+        if own:
+            rm_result.update(_drop_dangling_wires_at(editor, own - set(others), others))
         return rm_result
 
     if isinstance(op, OpMoveComponent):
@@ -3227,12 +3521,15 @@ def apply_op_inplace(
         ]
         removed = before - len(editor.labels)
         if removed == 0:
-            raise NetlistError(f"No net label found at ({x},{y}).")
+            if removals is not None and (by := removals.label_taken_at((x, y))) is not None:
+                return {"op": "remove_net_label", "already_removed_by": by}
+            raise NetlistError(_no_label_text(editor, (x, y)))
         return {"op": "remove_net_label", "x": x, "y": y, "removed": removed}
 
     if isinstance(op, OpRemoveWire):
         before = len(editor.wires)
-        if all(v is not None for v in (op.x1, op.y1, op.x2, op.y2)):
+        ends: set[tuple[int, int]]
+        if op.x1 is not None and op.y1 is not None and op.x2 is not None and op.y2 is not None:
             # Exact-segment form: drop the matching segment in either direction.
             seg = ((op.x1, op.y1), (op.x2, op.y2))
             rev = ((op.x2, op.y2), (op.x1, op.y1))
@@ -3268,9 +3565,21 @@ def apply_op_inplace(
                         "which takes every wire ending there."
                     )
             editor.wires = kept
+            ends = set(seg)
+            if not copies and removals is not None:
+                by = removals.wires_by.get(_segment_key(*seg))
+                if by is not None:
+                    return {"op": "remove_wire", "already_removed_by": by}
         elif op.pin is not None or (op.x is not None and op.y is not None):
             # Incident-point form: drop every segment touching the coordinate.
-            _drop_wires_at(editor, {_resolve_op_xy(op, editor)})
+            point = _resolve_op_xy(op, editor)
+            ends = {point}
+            if (
+                not _drop_wires_at(editor, {point})
+                and removals is not None
+                and (by := removals.wire_taken_at(point)) is not None
+            ):
+                return {"op": "remove_wire", "already_removed_by": by}
         else:
             raise NetlistError(
                 "remove_wire needs either all of x1,y1,x2,y2 (a segment) or a "
@@ -3278,7 +3587,7 @@ def apply_op_inplace(
             )
         removed = before - len(editor.wires)
         if removed == 0:
-            raise NetlistError("No matching wire segment found to remove.")
+            raise NetlistError(_no_wire_text(editor, ends))
         return {"op": "remove_wire", "removed": removed}
 
     if isinstance(op, OpWirePins):
@@ -3328,55 +3637,112 @@ def apply_op_inplace(
         }
 
     if isinstance(op, OpReplaceDirective):
-        # One text, named as remove_directive names it, keeps its record (place,
-        # size, justification, kind) and takes the new text.
-        # Everything is checked before the text changes, so a refused op leaves
-        # the sheet as it was, and a dry run's later ops see it so.
+        # One text keeps its record (place, size, justification, kind) and takes
+        # the new text, whole or in the words find names. Everything is checked
+        # before the text changes, so a refused op leaves the sheet as it was,
+        # and a dry run's later ops see it so.
         if (op.x is None) != (op.y is None):
             raise NetlistError("replace_directive takes x and y together, or neither.")
-        named = _text_matcher(op.instruction)
-        matched = [text for text in editor.directives if named(text)]
-        if not matched:
-            raise _no_text_matched(op.instruction)
-        if op.x is not None:
-            there = [
-                text for text in matched if (int(text.coord.X), int(text.coord.Y)) == (op.x, op.y)
-            ]
-            if not there:
-                raise NetlistError(
-                    f"None of the texts {op.instruction!r} names is anchored at "
-                    f"({op.x}, {op.y}); they are {_listed_texts(matched)}."
-                )
-            matched = there
-        if len(matched) > 1:
-            place = " at that anchor" if op.x is not None else ""
-            fix = (
-                "Move one of them first: texts on one anchor cannot be told apart."
-                if op.x is not None
-                else "Give the x and y of the one to change."
-            )
-            raise NetlistError(
-                f"replace_directive changes one text, and {op.instruction!r} names "
-                f"{len(matched)}{place}: {_listed_texts(matched)}. {fix}"
-            )
-        (text,) = matched
-        kind = _text_kind(text)
-        if kind == "directive":
-            _refuse_unrunnable_directive(op.text)
+        if op.find is not None:
+            return _replace_found_words(editor, op, op.find)
+        assert op.instruction is not None  # the model requires one of the two
+        text = _named_text(editor, op.instruction, op.x, op.y)
+        new = op.text.strip()
         was = _shown_text(text.text)
-        text.text = _text_record_body(op.text)
-        return {
-            "op": "replace_directive",
-            "text": {
-                "kind": kind,
-                "x": int(text.coord.X),
-                "y": int(text.coord.Y),
-                "was": was,
-                "now": _shown_text(text.text),
-            },
-        }
+        _write_replaced_text(text, new)
+        # As the sheet now holds it: the record keeps no carriage return.
+        now = _shown_text(text.text)
+        return {"op": "replace_directive", "text": {**_text_place(text), "was": was, "now": now}}
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
+
+
+_WireKey = tuple[tuple[int, int], tuple[int, int]]
+_LabelKey = tuple[int, int, str]
+
+
+def _wire_keys(editor: AscEditor) -> Counter[_WireKey]:
+    return Counter(_segment_key(_xy(w.V1), _xy(w.V2)) for w in editor.wires)
+
+
+def _label_keys(editor: AscEditor) -> Counter[_LabelKey]:
+    return Counter((*_xy(lbl.coord), lbl.text) for lbl in editor.labels)
+
+
+@dataclass
+class BatchRemovals:
+    """Which removal op of a batch took each wire and label that has gone, the
+    last one when a thing was taken more than once. Only a removal op is said
+    to have taken something: a wire an earlier op moved away was not removed."""
+
+    wires_by: dict[_WireKey, int] = field(default_factory=dict)
+    labels_by: dict[_LabelKey, int] = field(default_factory=dict)
+
+    @contextmanager
+    def taken_by(self, index: int, editor: AscEditor, removal: bool) -> Iterator[None]:
+        """Note what op ``index`` takes, when it is a removal and succeeds."""
+        if not removal:
+            yield
+            return
+        wires, labels = _wire_keys(editor), _label_keys(editor)
+        yield
+        for key in wires - _wire_keys(editor):
+            self.wires_by[key] = index
+        for key in labels - _label_keys(editor):
+            self.labels_by[key] = index
+
+    def wire_taken_at(self, point: tuple[int, int]) -> int | None:
+        """The last op that took a wire ending at ``point``, if any did."""
+        return max((i for key, i in self.wires_by.items() if point in key), default=None)
+
+    def label_taken_at(self, point: tuple[int, int]) -> int | None:
+        """As ``wire_taken_at``, for a label on ``point``."""
+        return max((i for key, i in self.labels_by.items() if key[:2] == point), default=None)
+
+
+_REMOVALS = (OpRemoveComponent, OpRemoveWire, OpRemoveNetLabel)
+
+
+def _no_wire_text(editor: AscEditor, ends: set[tuple[int, int]]) -> str:
+    """The refusal of a ``remove_wire`` that finds nothing: the wires ending at
+    the points it named, which is what a caller who misread one wants."""
+    there = [
+        segment_text((*_xy(w.V1), *_xy(w.V2)))
+        for w in editor.wires
+        if _xy(w.V1) in ends or _xy(w.V2) in ends
+    ]
+    named = " or ".join(f"({x},{y})" for x, y in sorted(ends))
+    if not there:
+        return (
+            f"No wire to remove: no wire has an end at {named}. To see the wires of a "
+            "net with their ends, call inspect(kind=\"net\", at=[x, y]) on a point of it."
+        )
+    return (
+        f"No wire to remove: the wires with an end at {named} are {_listed(there)}. "
+        "Name one of those by its two ends, or remove by a point to take every wire ending there."
+    )
+
+
+def _no_label_text(editor: AscEditor, point: tuple[int, int]) -> str:
+    """The refusal of a ``remove_net_label`` that finds nothing: what is at the
+    point instead."""
+    pins = sorted(
+        pin.qualified_name for pin in sheet_nets(editor).nets.pins if pin.point == point
+    )
+    wires = [
+        segment_text((*_xy(w.V1), *_xy(w.V2)))
+        for w in editor.wires
+        if point_on_segment(point, _xy(w.V1), _xy(w.V2))
+    ]
+    there = [*(f"pin {name}" for name in pins), *(f"wire {wire}" for wire in wires)]
+    at = f"({point[0]},{point[1]})"
+    fix = (
+        "To see the labels of a net with their points, call "
+        "inspect(kind=\"net\", at=[x, y]) on a point of it."
+    )
+    if not there:
+        return f"No net label at {at}, and nothing else is there. {fix}"
+    return f"No net label at {at}; there: {_listed(there)}. {fix}"
 
 
 def run_op_batch(
@@ -3396,10 +3762,12 @@ def run_op_batch(
     """
     results: list[dict[str, object]] = []
     abort_reason: str | None = None
+    removals = BatchRemovals()
     for i, op in enumerate(ops):
         entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
         try:
-            op_result = apply_op_inplace(editor, op, asc_path, plot)
+            with removals.taken_by(i, editor, isinstance(op, _REMOVALS)):
+                op_result = apply_op_inplace(editor, op, asc_path, plot, removals)
             entry.update({k: v for k, v in op_result.items() if k != "op"})
         except (NetlistError, ValueError) as e:
             entry["ok"] = False

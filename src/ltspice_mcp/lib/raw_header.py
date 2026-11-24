@@ -37,6 +37,18 @@ class RawHeaderError(ValueError):
     """The complete RAW input is malformed or unsupported."""
 
 
+class RawHoldsNoPointError(RawHeaderError):
+    """The results file holds no point: it is empty, or its first plot
+    declares none. A simulator that stopped before its first solution writes
+    either one (LTspice 26 an empty file, LTspice XVII a header of zero
+    points), so the run's log, not the file, says what happened.
+
+    ``parser_code`` is the code the parser worker reports it under.
+    """
+
+    parser_code = "raw_holds_no_point"
+
+
 class RawLimitError(RawHeaderError):
     """A caller-supplied preflight budget was exceeded."""
 
@@ -572,7 +584,10 @@ def _read_plot(
         header["no. points"],
         "No. Points / points",
         max(scanner.limits.points, scanner.limits.numeric_bytes),
+        positive=scanner.plot_index > 0,
     )
+    if points == 0:
+        raise scanner.error(RawHoldsNoPointError, "the first plot declares no point (No. Points: 0)")
     variables: list[RawVariable] = []
     names: set[str] = set()
     for index in range(count):
@@ -673,6 +688,8 @@ def preflight_raw(
             raise RawHeaderError("RAW input must be a regular file")
         scanner = _Scanner(handle, initial.st_size, limits)
         scanner.check_limit("input_bytes", initial.st_size)
+        if initial.st_size == 0:
+            raise RawHoldsNoPointError("RAW input is empty: it holds no point")
         plots: list[RawPlotHeader] = []
         while handle.tell() < initial.st_size:
             scanner.plot_index = len(plots)

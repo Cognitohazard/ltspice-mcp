@@ -10,6 +10,7 @@ from pathlib import Path
 
 from spicelib.simulators.ltspice_simulator import LTspice
 
+from ltspice_mcp.lib.simulator_env import run_simulator
 from ltspice_mcp.lib.wsl import is_wsl, to_windows_path
 
 
@@ -49,12 +50,10 @@ class LTspiceWSL(LTspice):
         # Use the exe path as-is (already set via create_from with Linux path)
         cmd_run = [*cls.spice_exe, "-Run", "-b", win_path, *cmd_line_switches]
 
-        from spicelib.sim.simulator import run_function
-
         if exe_log:
             log_exe_file = netlist_file.with_suffix(".exe.log")
             with open(log_exe_file, "wb") as outfile:
-                error = run_function(
+                error = run_simulator(
                     cmd_run,
                     timeout=timeout,
                     stdout=outfile,
@@ -62,5 +61,5 @@ class LTspiceWSL(LTspice):
                     cwd=cwd,
                 )
         else:
-            error = run_function(cmd_run, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd)
+            error = run_simulator(cmd_run, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd)
         return error

@@ -840,7 +840,15 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # a part's symbol changed in place with its wiring kept, where a removal,
     # an addition and a wire per pin took a dozen ops. Its descriptions are a
     # line each; the rest is the op's four fields. Measured 16,387.
-    "edit_schematic": 16400,
+    # Raised by about 250 characters for replace_directive's find, which
+    # changes only the words it names: one value in a block of .param lines
+    # needed the whole block retyped, which risked changing its other lines.
+    # Measured 16,634.
+    # Raised by about 100 characters for remove_component's cleanup, whose
+    # result now names the wires and labels it took and the wires it kept, so
+    # the removal can be checked and undone; it used to give only a count.
+    # Measured 16,732.
+    "edit_schematic": 16750,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what

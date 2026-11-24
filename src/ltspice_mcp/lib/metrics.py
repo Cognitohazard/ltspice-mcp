@@ -35,7 +35,12 @@ from typing import Any, Literal, NoReturn, TypeAlias
 
 import numpy as np
 
-from ltspice_mcp.errors import LTSpiceMCPError, NoAxisError, ResultError
+from ltspice_mcp.errors import (
+    LTSpiceMCPError,
+    NoAxisError,
+    ResultError,
+    ResultHoldsNoPointError,
+)
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import (
     HALF_POWER_DB,
@@ -1039,13 +1044,23 @@ async def summary(
     *,
     signal: str | None = None,
 ) -> MetricValue:
-    """Sim type, axis range, trace list, .MEAS results and run diagnostics."""
-    raw = await services.load_raw(source, state)
-    assert source.raw is not None  # RAW admission established this path.
+    """Sim type, axis range, trace list, .MEAS results and run diagnostics.
+
+    A run whose results hold no point (the simulator stopped before its first
+    solution, and wrote a results file with none or, by job, kept none) has no
+    plot to summarize, so the summary is what the run's log says, with
+    ``results_hold_no_point`` and, when no log is beside the file,
+    ``log_not_found``.
+    """
+    raw: DecodedRaw | None = None
+    if source.raw is not None:
+        with contextlib.suppress(ResultHoldsNoPointError):
+            raw = await services.load_raw(source, state)
     # Honor ``step`` for the summary itself (range/point_count), not just for
     # ac_bandwidth_metrics. Validate up front so an out-of-range step errors
     # clearly instead of being silently ignored.
-    services.validate_step(raw, step)
+    if raw is not None:
+        services.validate_step(raw, step)
 
     # Re-inspection parity with the run-completion summary: a run's own netlist
     # is known, so parse the same requested-outputs and source-amplitude facts
@@ -1059,26 +1074,37 @@ async def summary(
             deck_observation_inputs, source.netlist
         )
 
-    logs = await _logs_for_raw(source, state, raw)
+    logs = (
+        await services.load_logs(source, state)
+        if raw is None
+        else await _logs_for_raw(source, state, raw)
+    )
     # What the simulator said about the run, with the rules its run row was
     # classified with when it ended, so the two answers are one.
-    descriptor = raw.descriptor
+    descriptor = None if raw is None else raw.descriptor
     if source.producer is not None:
         producer = source.producer
     else:
         producer = services.source_producer(
             source,
-            read_dialect=descriptor.dialect if descriptor.dialect_evidence else None,
+            read_dialect=(
+                descriptor.dialect
+                if descriptor is not None and descriptor.dialect_evidence
+                else None
+            ),
             reported=await asyncio.to_thread(reported_build, source.log, source.raw),
         )
     said = reply_fields(decoded_run_diagnostics(logs, producer))
     cards = await asyncio.to_thread(measurement_cards, source.netlist)
+    read = source.raw or source.log
+    # A job's case without a results file is read only when it kept its log.
+    assert read is not None
     try:
         # The worker has materialized every array and companion section. This
         # deadline covers resident summary computation; no artifact parser or
         # source-file read occurs inside the summary builder.
         facts = await services.bounded_parse(
-            source.raw,
+            read,
             lambda: build_simulation_summary(
                 raw,
                 logs,
@@ -1105,6 +1131,11 @@ async def summary(
     # auto-pick the first node voltage and warn — silently dropping
     # ac_bandwidth_metrics leaves the caller wondering why their AC summary had
     # no metrics. A device parameter (ngspice's v(@m1[vth])) is none.
+    if raw is None:
+        facts["results_hold_no_point"] = True
+        if "log" in logs.captured.absent:
+            facts["log_not_found"] = True
+        return {**facts, **said}
     ac_metrics = None
     ac_signal_used: str | None = None
     if is_ac_analysis(raw):

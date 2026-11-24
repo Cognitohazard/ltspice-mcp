@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import IO, Any, Protocol, Self
 
 from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib.simulator_env import simulator_environment
 
 BRIDGE_NAME = "ltspice-mcp-bridge.exe"
 
@@ -194,7 +195,7 @@ class BridgeSession:
         self._replies: queue.Queue[dict[str, Any] | None] = queue.Queue()
         environment = {
             name: value
-            for name, value in os.environ.items()
+            for name, value in simulator_environment().items()
             if name.upper() not in _BRIDGE_VARIABLES
         }
         desktop = hidden_desktop.shared()

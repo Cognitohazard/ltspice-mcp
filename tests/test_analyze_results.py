@@ -602,8 +602,10 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
     monkeypatch: pytest.MonkeyPatch,
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 1.0
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 10.0)
+    # The budget also bounds the raw's first parse, so it only caps a hang; the
+    # estimate is what lies far beyond the safety bound.
+    state_no_sim.config.analysis_budget_s = LIVENESS_S
+    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: LIVENESS_S * 100)
     data = await _analyze(
         state_no_sim,
         raw,
@@ -1652,8 +1654,10 @@ async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     """The estimate reads raw size and signal count, nothing else — so telling
     the caller to lower max_points or narrow the window sends them in a loop."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    state_no_sim.config.analysis_budget_s = 1.0
-    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 10.0)
+    # The budget also bounds the raw's first parse, so it only caps a hang; the
+    # estimate is what lies far beyond the safety bound.
+    state_no_sim.config.analysis_budget_s = LIVENESS_S
+    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: LIVENESS_S * 100)
     data = await _analyze(
         state_no_sim,
         raw,

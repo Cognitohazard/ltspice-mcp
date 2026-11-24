@@ -1028,6 +1028,43 @@ async def test_an_edit_says_of_a_sheet_what_a_check_of_it_says(asc_state):
     assert by_kind == Counter(finding["rule_id"] for finding in checked["findings"])
 
 
+@pytest.mark.parametrize(
+    ("ground_x", "across"),
+    [
+        # The base runs 157..193 at y=170, through the value's text, whose
+        # core (its extent less the slack) runs x 49..163, y 165..177: only
+        # the part of the triangle beyond 6 units from the point reaches it.
+        (175, ["R1's text '{Rload*2}' at (168,168) is drawn across the ground at (175,170)"]),
+        # The base starts at x=162, one unit into the text.
+        (180, ["R1's text '{Rload*2}' at (168,168) is drawn across the ground at (180,170)"]),
+        # The base starts at x=164, one unit clear of the text.
+        (182, []),
+    ],
+)
+async def test_both_tools_find_text_under_the_ground_triangle_ltspice_draws(
+    asc_state, work_dir, ground_x, across
+):
+    """A ground's triangle is as wide and as deep as both builds draw it
+    (draw/ground_flags), so text under its outer part is reported, by an edit
+    and by a check alike, and text one unit clear of it is not."""
+    sheet = work_dir / f"ground-{ground_x}.asc"
+    sheet.write_text(
+        "Version 4\nSHEET 1 880 680\n"
+        "SYMBOL res 200 200 R180\nSYMATTR InstName R1\nSYMATTR Value {Rload*2}\n"
+        f"FLAG {ground_x} 170 0\n",
+        encoding="utf-8",
+    )
+    rows = await _every_row(asc_state, sheet)
+    checked = await run_verify_circuit(asc_state, path=str(sheet), checks=["layout"])
+
+    assert [row["message"] for row in rows if row["kind"] == "attribute_text_overlap"] == across
+    assert [
+        finding["evidence"]["detail"]
+        for finding in checked["findings"]
+        if finding["rule_id"] == "attribute_text_overlap"
+    ] == across
+
+
 async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
     """A rule that found nothing is listed with zero, so it is told from one
     that did not run; the counts are of the sheet as it now is, what the batch

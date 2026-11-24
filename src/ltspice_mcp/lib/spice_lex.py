@@ -25,12 +25,14 @@ but ``LexResult.warnings`` carries diagnostics.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.format import is_scaled_number
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.simulator_build import Producer
@@ -932,7 +934,66 @@ def _extract_ends_name(body: str) -> str | None:
     return parts[1]
 
 
-_PLAIN_MODEL_NAME = re.compile(r"(?i:\s*\.model)\s+([^\s={}(),\"';]+)(?=\s|$)")
+#: The characters of a model name: one word with no space, quote, comma, '=',
+#: ';', brace or parenthesis. A leading digit is allowed, as in ``2N2222``,
+#: which both LTspice builds export as a model name (export/attributes).
+_MODEL_NAME = r"[^\s={}(),\"';]+"
+_PLAIN_MODEL_NAME = re.compile(rf"(?i:\s*\.model)\s+({_MODEL_NAME})(?=\s|$)")
+_MODEL_NAME_TEXT = re.compile(_MODEL_NAME)
+
+
+def is_model_name(text: str) -> bool:
+    """Whether ``text`` is a model name as a ``.model`` card declares it.
+
+    The one answer for reading a deck that exists: ``_extract_model_name``
+    reads a ``.model`` card's name with the same characters, and a Monte Carlo
+    model rule, which names a card the deck declares, asks here. A name the
+    server writes asks ``written_model_name_refusal``, which is narrower. A
+    lone ``$`` is a comment, never a name.
+    """
+    return _MODEL_NAME_TEXT.fullmatch(text) is not None and text != "$"
+
+
+#: The characters a written model name may hold: those the recorded LTspice
+#: decks show in a model name. The first is a letter, digit or underscore.
+_RECORDED_MODEL_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]*")
+
+
+def written_model_name_refusal(text: str) -> str | None:
+    """Why the server must not write ``text`` into a deck as a model name, or
+    None when it may.
+
+    The one answer for a name the server writes (a ``REF@model`` swap, the
+    ``instances`` form). It differs from ``is_model_name`` on purpose: that
+    reads whatever name a user's deck declares, while a written name is held
+    to what the recordings show LTspice reading in a model name, letters,
+    digits and ``_ . : -``, so it never writes a name no recording vouches
+    for. ``tests/test_model_name_swap.py`` pins the difference.
+    """
+    fix = "write the model's name as its .model card declares it"
+    if not text:
+        return f"a model name is empty: {fix}"
+    if any(unicodedata.category(c).startswith("C") for c in text):
+        return f"{text!r} holds a control character, which a model name cannot: {fix}"
+    if any(c.isspace() for c in text):
+        return f"{text!r} holds white space, which ends a model name on a card: {fix}"
+    if any(c in "\"'`" for c in text):
+        return f"{text!r} holds a quote, which a model name cannot: {fix}"
+    if _RECORDED_MODEL_NAME.fullmatch(text) is None:
+        return (
+            f"{text!r} holds a character that no recording shows LTspice reading in a "
+            "model name, which may use letters, digits and '_ . : -' and start with a "
+            f"letter, digit or '_' (a leading digit, as in 2N2222, is fine): {fix}"
+        )
+    # A text of those characters is one bare word to the lexer, so no further
+    # check of its words is needed.
+    if is_scaled_number(text):
+        return (
+            f"{text!r} reads whole as a number (a number with at most a scale suffix), "
+            "which a simulator can take for an area or a value instead of a model "
+            f"name: {fix}; a name with more after the number, as in 2N2222, is fine"
+        )
+    return None
 
 
 def _extract_model_name(body: str) -> str | None:
@@ -1544,6 +1605,12 @@ class DefinitionRule:
                 f"(needed: {needed}), so no definition of it was read here. {fix}"
             )
         return None
+
+
+#: A rule that keeps no definition of a name given more than once in one
+#: scope, for a reader of a file as written (a structural diff, a components
+#: listing): it asks only which definitions share a scope and a name.
+AS_WRITTEN = DefinitionRule("a reading as written", "unestablished", "unestablished", "unestablished")
 
 
 def definition_rule(producer: Producer) -> DefinitionRule:

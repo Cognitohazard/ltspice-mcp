@@ -100,6 +100,7 @@
       "ops[].drag",
       "ops[].dx",
       "ops[].dy",
+      "ops[].find",
       "ops[].from_pin",
       "ops[].from_pin.x",
       "ops[].from_pin.y",

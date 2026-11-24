@@ -4740,3 +4740,97 @@ its name, its crossing the result;
 reads it on every route, as a cell of the printed-measurement grid. `tests/test_run_diagnostics.py` still lists XVII's
 dashed line among the lines the log classifier does not know: the classifier
 reads a result line with a pattern of its own.
+
+## Bug 45 — `run_function` takes no environment (limitation)
+
+**Status:** known limitation; draft for an upstream API change. Reported on
+macOS 26 with LTspice 26.0.2.1; the launch path is read from the source.
+**Affected version:** spicelib 1.5.1 (`spicelib/sim/simulator.py`,
+`run_function`, and each module that imports it by name:
+`spicelib/simulators/ltspice_simulator.py`, `ngspice_simulator.py`,
+`qspice_simulator.py`, `xyce_simulator.py` and
+`spicelib/log/qspice_log_reader.py`).
+**Our workaround:** `src/ltspice_mcp/lib/simulator_env.py`,
+`install_spicelib_launch_environment`, replaces the `run_function` each of
+those modules holds with `run_simulator`, which starts the simulator with
+`simulator_environment()`.
+
+### Summary
+
+Every simulator spicelib starts, through `Simulator.run` and its subclasses,
+is started by `run_function`, which calls `subprocess.run` with no `env`. The
+simulator therefore always inherits the calling process's whole environment,
+and `Simulator.run` offers no way to start it with another one. A caller that
+needs a variable removed or added for the simulator alone has to change its
+own `os.environ`, which every other process it starts then inherits too.
+
+One case where this matters: some programs that start the calling process
+set `NoDefaultCurrentDirectoryInExePath`, a Windows setting. LTspice 26 on
+macOS starts through a Wine launcher, and with that variable set it was
+reported to exit with code 0 and write no `.log` and no `.raw`; started with
+the variable removed (`env -u NoDefaultCurrentDirectoryInExePath ...`), the
+run works. That is the reporter's measurement; it is not reproduced here.
+
+### Affected code
+
+```python
+# spicelib/sim/simulator.py
+def run_function(command, timeout=None, stdout=None, stderr=None, cwd=None):
+    result = subprocess.run(command, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd)
+    return result.returncode
+
+# spicelib/simulators/ltspice_simulator.py (likewise in the others)
+from ..sim.simulator import Simulator, run_function, SpiceSimulatorError
+...
+return run_function(cmd_run, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd)
+```
+
+### Reproduction
+
+```python
+import os
+from pathlib import Path
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+fake = Path("fake-sim")
+fake.write_text('#!/bin/sh\nenv > "$0.env"\nexit 0\n')
+fake.chmod(0o755)
+Path("rc.cir").write_text("* RC\nR1 in 0 1k\n.op\n.end\n")
+os.environ["EXAMPLE_VARIABLE"] = "1"
+NGspiceSimulator.create_from(str(fake.resolve())).run("rc.cir", timeout=30)
+print("EXAMPLE_VARIABLE" in Path("fake-sim.env").read_text())  # True, and no argument changes it
+```
+
+### Impact
+
+A simulator that misbehaves under a variable the caller cannot control runs
+with that variable anyway. For LTspice on macOS the run looks successful
+(exit code 0) and produces nothing to read. Changing `os.environ` to avoid it
+changes the environment of every other process the caller starts, and is not
+safe while other threads start processes.
+
+### Proposed fix
+
+Give `run_function` an `env=None` keyword passed to `subprocess.run`, and
+give `Simulator.run` (and each subclass's `run`) the same keyword, passed
+through to `run_function`. `None` keeps today's behaviour.
+
+### Suggested upstream test
+
+With the fake simulator above, call `run(..., env={"PATH": os.environ["PATH"],
+"EXAMPLE_VARIABLE": "2"})` on each simulator class and assert that the
+recorded environment holds `EXAMPLE_VARIABLE=2`; call it without `env` and
+assert that it holds the caller's value.
+
+### Cross-reference
+
+`tests/test_simulator_environment.py` starts the fake simulator through
+spicelib's LTspice, ngspice, QSPICE and Xyce classes and LTspice's netlist
+export, through the server's own launches
+(the question it asks ngspice, the version probe and the recoverable ngspice
+adapter), and checks that each starts without the variable while the
+server's own environment keeps it. A source scan in the same file requires
+every simulator launch in the server to pass an environment, and a check in
+a fresh process requires every loaded spicelib module that holds a
+`run_function` to hold `run_simulator`. The workaround
+can go once `run` takes `env`.

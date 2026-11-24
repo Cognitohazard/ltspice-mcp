@@ -21,7 +21,7 @@ from typing import IO, Any
 import psutil
 import pytest
 
-from ltspice_mcp.lib import parser_process, windows_job
+from ltspice_mcp.lib import parser_bootstrap, parser_process, windows_job
 from ltspice_mcp.lib.parser_process import (
     JsonValue,
     ParserProcessError,
@@ -54,15 +54,22 @@ Path("imported.txt").write_text("imported", encoding="utf-8")
 def parse_request(request, work_dir):
     mode = request.get("mode", "ok")
     if mode == "runaway":
-        child = subprocess.Popen(
-            [sys.executable, "-c", "while True: pass"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=os.name != "nt",
-        )
-        parser_file_in(work_dir, "started.json").write_text(json.dumps({
-            "worker_pid": os.getpid(), "child_pid": child.pid,
-        }), encoding="utf-8")
-        if sys.platform == "linux":
+        started = {"worker_pid": os.getpid()}
+        try:
+            child = subprocess.Popen(
+                [sys.executable, "-c", "while True: pass"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=os.name != "nt",
+            )
+        except OSError:
+            if sys.platform != "darwin":
+                raise
+            # The macOS worker cannot start a process; the worker is the tree.
+        else:
+            started["child_pid"] = child.pid
+        parser_file_in(work_dir, "started.json").write_text(json.dumps(started),
+                                                            encoding="utf-8")
+        if sys.platform != "win32":
             ctypes.PyDLL(None).sleep(60)  # Holds the decoder's GIL.
         else:
             ctypes.PyDLL("kernel32").Sleep(60000)
@@ -252,7 +259,8 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
             )
         assert caught.value.code == "cancelled" and caught.value.reaped
         canceller.join(timeout=LIVENESS_S)
-        assert len(owned) == 2
+        # The macOS worker cannot start the runaway's child.
+        assert len(owned) == (1 if sys.platform == "darwin" else 2)
         _assert_gone(owned)
     finally:
         test_ended.set()
@@ -556,6 +564,10 @@ def test_unsupported_platform_refuses_before_control_files_or_launch(
 ):
     directory = call_dir()
     monkeypatch.setattr(sys, "platform", platform)
+    if platform == "darwin":
+        # macOS is refused only to root, which its process limit exempts.
+        # Windows has no uid functions; the faked platform still reads them.
+        monkeypatch.setattr(os, "getuid", lambda: 0, raising=False)
     with pytest.raises(ParserProcessError, match="containment") as caught:
         run_parser_sync(
             {},
@@ -568,8 +580,7 @@ def test_unsupported_platform_refuses_before_control_files_or_launch(
     assert caught.value.worker_pid is None
     assert {path.name for path in directory.iterdir()} == {"parser_fixture.py"}
     if platform == "darwin":
-        assert "memory" in str(caught.value) and "ownership" in str(caught.value)
-        assert "owner-death" in str(caught.value)
+        assert "non-root" in str(caught.value)
 
 
 def _refused_bootstrap(directory, limits, mode, *, platform=None):
@@ -581,6 +592,9 @@ from ltspice_mcp.lib import parser_bootstrap, store
 platform, *arguments = sys.argv[1:]
 if platform:
     sys.platform = platform
+if platform == "darwin":
+    import os
+    os.geteuid = lambda: 0  # macOS is refused only to root.
 sys.argv = ["parser_bootstrap", *arguments]
 raise SystemExit(parser_bootstrap.main())
 """
@@ -624,12 +638,6 @@ raise SystemExit(parser_bootstrap.main())
 @pytest.mark.parametrize("mode", ["worker", "guardian"])
 def test_unsupported_bootstrap_refuses_even_an_open_gate(call_dir, limits, platform, mode):
     _refused_bootstrap(call_dir(), limits, mode, platform=platform)
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="Requires a native macOS interpreter")
-@pytest.mark.parametrize("mode", ["worker", "guardian"])
-def test_native_macos_bootstrap_refuses_even_an_open_gate(call_dir, limits, mode):
-    _refused_bootstrap(call_dir(), limits, mode)
 
 
 @pytest.mark.parametrize("failure", ["json", "directory"])
@@ -808,6 +816,11 @@ def test_existing_control_files_do_not_claim_empty_tree(call_dir, limits):
 def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
     directory = call_dir()
     executable, env = python_launch()
+    # The macOS worker contains itself before the gate, which needs the
+    # owner pipe and the allocator settings the supervisor passes.
+    owner = os.pipe() if sys.platform == "darwin" else None
+    if owner:
+        env = {**(env if env is not None else os.environ), **parser_bootstrap.DARWIN_ALLOCATOR}
     process = subprocess.Popen(
         [
             executable,
@@ -822,13 +835,17 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
             "2",
             "parser_fixture",
             "0",
+            *([str(owner[1])] if owner else []),
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         cwd=directory,
         env=env,
+        pass_fds=(owner[1],) if owner else (),
     )
+    if owner:
+        os.close(owner[1])
     try:
         # timing: a negative window; nothing may import before the gate opens
         time.sleep(0.2)
@@ -842,6 +859,8 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
         if process.poll() is None:
             process.kill()
         process.wait(timeout=LIVENESS_S)
+        if owner:
+            os.close(owner[0])
 
 
 def test_windows_job_default_and_parser_limits(monkeypatch):
@@ -1051,6 +1070,14 @@ def test_a_cancelled_warm_call_reaps_the_tree_and_the_next_starts_fresh(warm, tm
 
 def test_a_stray_process_ends_the_tree_before_its_call_is_read(warm):
     _, call = warm
+    if sys.platform == "darwin":
+        # The macOS worker cannot start the stray: the decoder fails, no
+        # process is left, and the next call is served.
+        with pytest.raises(ParserProcessError) as caught:
+            call({"mode": "stray"})
+        assert caught.value.code == "worker_error"
+        assert call({})[0].metadata["value"] == pytest.approx(2 / 3)
+        return
     reply, _ = call({"mode": "stray"})
     assert reply.metadata["value"] == pytest.approx(2 / 3)
     # The tree held more than its worker after the reply, so it was closed and

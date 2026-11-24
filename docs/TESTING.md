@@ -98,21 +98,23 @@ and run in the ordinary suite.
 The server parses every `.raw` and `.log` file in a separate parser process
 with a deadline and a memory limit (`lib/parser_process.py`), and kills that
 process and every process it started when a read ends, times out or is
-cancelled. This runs on Linux and native Windows only. On macOS the server
-refuses to parse (`ParserProcessError` with code `unsupported_platform`,
-which the caller receives as a failed result read) before it writes any file
-for the parser or starts a process, and the parser's entry module
-(`lib/parser_bootstrap.py`) refuses too when started directly, before it reads
-its first request or imports any decoding code; `test_parser_process.py`
-checks both. Its checks that set `sys.platform` to another value run anywhere
-and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
-native macOS interpreter, run in CI's macOS job (release tier only) and skip
-elsewhere; a pass there also shows only the refusal and does not show a working macOS parser.
-Supporting macOS needs
-native tests there of the hard memory limit, applied before any decoding code
-is imported, and of the parser's cleanup after a deadline, after repeated
-cancellation and after the server process dies, including a child process
-that tries to break away from the parser's process tree.
+cancelled. On Linux and native Windows this is the supported path. On macOS
+it is experimental: the parser's entry module (`lib/parser_bootstrap.py`)
+limits its own address space, core files and process count, proves each limit
+holds, and starts a thread that ends the parser when the server's end of a
+pipe closes, before it reads its first request or imports any decoding code.
+It refuses to run as root, which the process limit does not bind, and any
+other platform. There the memory limit is headroom over the address space the worker
+has mapped when it starts, and the worker can start no process. Before the
+limits it checks that it started with its allocator setting
+(`DARWIN_ALLOCATOR`); whether the system applied it is not checked, since
+one it ignores can only make a decode fail inside the budget.
+`test_parser_darwin_containment.py` checks each step: a missing allocator
+setting is refused on any host, the
+pipe, the thread and the limit proofs run on any POSIX host, and the cases
+that need the macOS kernel (a refused owner pipe, an inherited lower address
+space limit, a decode just under and one over the budget, a run as root) run
+only on macOS and skip elsewhere.
 
 Every CI tier but docs (*CI tiers* below), so every landing that changes code
 and every release, runs the suite on a native Windows runner
@@ -127,20 +129,22 @@ suite runs unless ngspice reads it. The runner's code page is cp1252 and its
 paths have no spaces, so a run on a user's machine still covers what this job
 cannot.
 
-The release gate in `publish.yml`, and no landing, also runs the suite on a
-native macOS runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
-ngspice and Cairo from Homebrew, one xdist worker per core, and no coverage gate. Because the server
-refuses to parse there, a test that reads a result fails there for that reason
-alone, and `tests/parser_refusal.py` reports it as skipped, with the refusal as
-its reason. On a host whose parser refuses, that plugin records each refusal
-the supervisor's check raises while a test runs, and reports a test that fails
+The release gate in `publish.yml`, and a pull request that changes the
+parser's containment (*CI tiers* below), also run the suite on native macOS
+runners, on Apple silicon and on Intel (`check-macos (arm64)` and
+`check-macos (intel)`, in `.github/workflows/checks.yml`): Python 3.12, ngspice
+and Cairo from Homebrew, one xdist worker per core, and no coverage gate. On a
+host whose parser refuses (another platform, or macOS as root),
+`tests/parser_refusal.py` reports a test that fails because of that refusal as
+skipped, with the refusal as its reason. It records each refusal the
+supervisor's check raises while a test runs, and reports a test that fails
 after one as skipped; the check itself still runs and raises. A test that meets
 the refusal and passes is reported as passed, and any other failure stays a
 failure. The plugin cannot see a refusal in a process the test started itself
 (a program that runs the supervisor, the `run_code` worker, or the parser's
 entry module started directly), so such a test carries the plugin's `needs_parsing` mark, which
 skips it with the same reason; the tests of a warm parser, which is called past
-the supervisor's check, skip in their shared fixture. On Linux and Windows the
+the supervisor's check, skip in their shared fixture. Where the parser runs the
 plugin changes no report, and `test_parser_refusal.py` checks both behaviours
 on every platform.
 
@@ -152,13 +156,8 @@ skips on `CONTROLLED_STARTUP_REFUSED` there, which asks the server's own check,
 so it skips where the server refuses and runs wherever the table says the
 startup is verified.
 
-Everything else runs on macOS and must pass: schematic editing and rendering,
-netlist and deck checks, the job and run machinery, the decoders called in the
-test's own process, the `run_code` worker, the refusal checks above, and the
-ngspice end-to-end tests that do not read a result. The job runs with `-ra`,
-so its summary lists every skip with its reason. Most of the tests that skip
-for the parser refusal are tests of `analyze_results`, `plot_waveform`, the
-recorded LTspice results and the parser itself.
+Everything else runs on macOS and must pass. The job runs with `-ra`, so its
+summary lists every skip with its reason.
 
 The optional Sky130 integration tests find a `sky130A` root containing
 `libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
@@ -201,7 +200,7 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos (arm64)`, `check-macos (intel)` |
 | push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
@@ -216,8 +215,11 @@ push to it runs full again while the label stays. Adding any other label
 starts a run that skips every check and cancels nothing. A pull request retitled to `Rollup…` after it was opened runs
 full from its next push, or at once if it is labelled `full-ci`.
 
-A landing is held to Linux and Windows; macOS is checked at release. No
-tier a landing gets runs `check-macos`, so a macOS regression first shows
+A landing is held to Linux and Windows; macOS is checked at release. The
+exception is a pull request that changes `lib/parser_bootstrap.py`,
+`parser_process.py`, `parser_worker.py`, `parser_service.py` or `proc_kill.py`:
+`ci.yml` then passes `macos` to `checks.yml`, which runs both macOS jobs at
+whatever tier the pull request gets. Otherwise a macOS regression first shows
 when a release is cut, and holds the release until it is fixed. To run the
 release tier on a branch before then, start CI by hand on it: the Actions
 tab, the CI workflow, "Run workflow", or `gh workflow run ci.yml --ref
@@ -227,7 +229,8 @@ A job a tier leaves out is skipped by its own condition, so it reports as
 skipped under the same name it has in a release run, and a required check of
 that name still passes. That is why the Linux suite is three jobs with fixed
 names, `check (3.11)`, `check (3.12)` and `check (3.13)`, which share one list
-of steps, instead of a matrix: a matrix job skipped by its condition reports
+of steps, instead of a matrix, and macOS is two, `check-macos (arm64)` and
+`check-macos (intel)`: a matrix job skipped by its condition reports
 once, under a name that is not any leg's.
 
 A pull request therefore proves Windows and Linux on 3.12 only. A failure
@@ -373,7 +376,7 @@ These tests run on any machine, without LTspice:
 |`test_recorded_ltspice_unread_cards.py`|that every reader of a deck's cards (the components listing, variation targets and rules, the mismatch plan, staging and the recovery of a staged closure, the `.op` option a run adds, the measurement kinds and noise unit read off a run's deck, an export's pin nodes) reads neither the title line nor a card after `.end`, and reads an included file up to its own `.end`|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, a frequency response analysis's results file, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes on save (line endings, encoding, record order), and that `asc_document` reads it, writes it back byte-identical, and formats a record as the build does|
-|`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, a hidden or moved window, a flag named GND, where a net label's text goes, a port's outline, and the text the scene leaves out|
+|`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, a hidden or moved window, a flag named GND, where a net label's text goes, on a wire and on a part's pin, a port's outline, the text the scene leaves out, and the suite's own sheets drawn with its stand-in symbols|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
 |`test_log_condition_grid.py`|which condition each recorded log line states, through the rules of its build, the reader, the decoded log, the summary by path and by job, the run rows and the Python API, the rules a producer with no recording reads with, and `classify_line`; every rule a recording matches is a cell's; and the same routes live on ngspice|

@@ -70,9 +70,9 @@ from ltspice_mcp.lib.netlist_graph import (
     rekey_across_added_x,
 )
 from ltspice_mcp.lib.spice_lex import (
+    AS_WRITTEN,
     INCLUDE_HEADS,
     Definition,
-    DefinitionRule,
     SpiceCard,
     SpiceLexError,
     Token,
@@ -267,13 +267,6 @@ class Deck:
     readings: tuple[OtherReading, ...] = ()
 
 
-#: A rule for :func:`spice_lex.settle_definitions` that keeps no definition
-#: of a name given more than once: a structural diff compares files as
-#: written and asks only which definitions share a scope and a name.
-_AS_WRITTEN = DefinitionRule(
-    "a structural diff", "unestablished", "unestablished", "unestablished"
-)
-
 #: The name the lexer gives the scope of a ``.subckt`` with no name.
 _NAMELESS = "<anon>"
 
@@ -328,7 +321,7 @@ def read_deck(source: str | Path | StoredDeck) -> Deck:
     # Which definitions share a scope and a name: settle_definitions' groups.
     settled = settle_definitions(
         [Definition(card.scope, card.name or _NAMELESS, "", True) for _i, card in openers],
-        _AS_WRITTEN,
+        AS_WRITTEN,
     )
     twice = {answer.key: answer.name for answer in settled if len(answer.members) > 1}
     scopes: dict[ScopeKey, Scope] = {(): Scope()}

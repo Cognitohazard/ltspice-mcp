@@ -16,7 +16,7 @@ first, then bare names:
 
 | Target | Meaning |
 |-|-|
-| `"M1@model"`, glob `"M*@model"` | swap the instance's model card — the corner idiom, `{"M*@model": ["NTT", "NSS", "NFF"]}` |
+| `"M1@model"`, glob `"M*@model"` | swap the instance's model card — the corner idiom, `{"M*@model": ["NTT", "NSS", "NFF"]}`. A swapped-in name is letters, digits and `_ . : -`, starting with a letter, digit or `_` (`2N5486` is fine), and is not a number with at most a scale suffix (`2222`, `1k`; `1k5` is fine) |
 | `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4; LTspice `delvto` on a level 54 BSIM4 model only; through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`; refused on QSPICE and Xyce) |
 | a declared `.param` name | substitute that parameter |
 | a component reference (`R1`, `C2`) | substitute that component's value |

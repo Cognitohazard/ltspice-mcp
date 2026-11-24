@@ -286,7 +286,9 @@ def net_change(
     which part or label stands in a place are refused. Members only one state
     holds, and those ``leaving`` picks out of ``after``, are left out. Nets are
     compared ``folded`` (nets that share a name are one) unless asked for
-    wiring alone.
+    wiring alone. A piece lists its pins, then its labels, each in the order
+    ``after`` holds them, and the pieces come in the order of their first
+    members.
     """
 
     def keyed(nets: Nets) -> dict[tuple[str, int, int], tuple[Member, int]]:
