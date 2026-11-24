@@ -566,7 +566,8 @@ def test_unsupported_platform_refuses_before_control_files_or_launch(
     monkeypatch.setattr(sys, "platform", platform)
     if platform == "darwin":
         # macOS is refused only to root, which its process limit exempts.
-        monkeypatch.setattr(os, "getuid", lambda: 0)
+        # Windows has no uid functions; the faked platform still reads them.
+        monkeypatch.setattr(os, "getuid", lambda: 0, raising=False)
     with pytest.raises(ParserProcessError, match="containment") as caught:
         run_parser_sync(
             {},

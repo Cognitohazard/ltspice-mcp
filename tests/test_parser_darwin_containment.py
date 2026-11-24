@@ -325,12 +325,13 @@ def test_the_parser_tree_leads_its_own_session(call_dir, monkeypatch):
 
 def test_macos_refuses_root(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(os, "getuid", lambda: 1000)
-    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    # Windows has no uid functions; the faked platform still reads them.
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
     parser_bootstrap.require_containment_platform()
     for name in ("getuid", "geteuid"):
         with monkeypatch.context() as root:
-            root.setattr(os, name, lambda: 0)
+            root.setattr(os, name, lambda: 0, raising=False)
             with pytest.raises(RuntimeError, match="non-root"):
                 parser_bootstrap.require_containment_platform()
 
