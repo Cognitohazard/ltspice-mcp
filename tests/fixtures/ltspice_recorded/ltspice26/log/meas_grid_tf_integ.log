@@ -1,0 +1,17 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\meas_grid_tf_integ.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 3
+
+Files loaded:
+C:\recording\meas_grid_tf_integ.cir
+
+integ_v: INTEG(transfer_function)=0 FROM 0 TO 1
+integ_f: INTEG(transfer_function)=0 FROM 2 TO 3

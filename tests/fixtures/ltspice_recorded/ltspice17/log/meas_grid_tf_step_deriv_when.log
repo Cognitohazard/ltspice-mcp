@@ -1,0 +1,26 @@
+Circuit: * DERIV WHEN in a transfer function, stepped: a deck of its own, since a build may refuse the form there
+
+Direct Newton iteration for .op point succeeded.
+
+
+Measurement "deriv_when_v" FAIL'ed
+
+Measurement "deriv_when_f" FAIL'ed
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 3
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)

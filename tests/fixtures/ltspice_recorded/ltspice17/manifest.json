@@ -9331,6 +9331,2863 @@
         ".raw"
       ]
     },
+    "log/meas_grid_ac_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_failed.cir": "95c4a6e0a755f733ffa7cb0cf56c52d0d33c9c778b5d140e44f373bcb3cadc5b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_failed.log": {
+          "bytes": 912,
+          "sha256": "31f3ad5a7618207c059ac86b96b6d16721eb902eb714d81bf9a25fb53c152786"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_find.cir": "065fd2a081b1a96bd5c762d6ca5c760c5edfbfb8ed89519119b8fed7d6471e41"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_find.log": {
+          "bytes": 348,
+          "sha256": "2e0dc92aaac82c03b1a0e21da3c074a4add5daf5cce969b5a957f3782b1c56d9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_find_failed.cir": "8f4f6542a9a977cd3dccf28d7ea4793ab155213433e48275f0e69be80d1f090b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_find_failed.log": {
+          "bytes": 417,
+          "sha256": "4d047144e28b650027490ddbcc6506fc3b7f22fce7820352f89694318175fda0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_failed.cir": "6b0126488b5a44fee9a12801a1097cb05a953b770a7bbff194245e1dc1c6caaa"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_failed.log": {
+          "bytes": 1465,
+          "sha256": "7726ff2fd832b4bbc93df9c9e3172f2b2a6cefa42bd7432cd8cf8ede8dfcc5e3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_find.cir": "4f605fa2cb318f99545ead5cb9d023c2b7b598fb8806967d032b12351ac881f1"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_find.log": {
+          "bytes": 293,
+          "sha256": "1e9c3d8bd29a68414ee813852179aeb4d2e826eadfa32d2d7754e164b1a8af6e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_find_failed.cir": "7de8c8f2e5970d27ce05226c949a52bf4a367a34c724d5db9cfebbd0acc9ed1a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_find_failed.log": {
+          "bytes": 361,
+          "sha256": "1b4a4f2604d93a9ffc909fb4e4d8fdae2c7ea1ac55e68693fe64282421043d29"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_step_outcomes.cir": "cde46e3f0c8b40b5dc4c3f65ba79e972b799860578ef03dcccb23dd496766121"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_step_outcomes.log": {
+          "bytes": 2925,
+          "sha256": "e069a67caf9e2e3074d1bd1411f0e21b5b41142522f46c956ba7f6f20fd3ef7f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_value.cir": "d7518fb562e1e977e90bb023ee7302dbb76cdb63c164d469bf805841678773cc"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_value.log": {
+          "bytes": 1544,
+          "sha256": "cc6909de2f3a13874740d3423e7534136ee62b3fd07fa2a99176295d236a895f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_value.cir": "1d0af92f2024acaf210b27211118e14ce5deda416abd36e321fadd755d3c8e79"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_value.log": {
+          "bytes": 791,
+          "sha256": "760a7766ddbf07ccb6f62a7d302cf5396f956bd6f8d4aea5e24f732a5c8d238a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_failed.cir": "65fd7c3cd2b1f37c425876b0f57d164f57f4a419bd0bb4bd1bcc29a74dc34fb9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_failed.log": {
+          "bytes": 804,
+          "sha256": "a9687373b0bd387a2a88ccd4118e6df3f5ca115a58657f66598b5f481354cc02"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_find.cir": "5a7edde00b3f1082fba5edfeaeef285f05d8d56fb9d1b5fe33e9f08f6d92bb9e"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_find.log": {
+          "bytes": 446,
+          "sha256": "434287b1797374db515df7c46fe1d385f445a07132280e47de33cdc8265f6b94"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_find_failed.cir": "7a9e3eb39993ab9ef21f2ec33f920e2124896b0c3432500ca741b222cfe540bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_find_failed.log": {
+          "bytes": 520,
+          "sha256": "6cae1188f132a54cd78b7dbf6acc2bf0d2d72c92ed72300fe715f05925c49039"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_failed.cir": "c3b5c56cb8cb39f9726719c2f3d40a40383d82df76a98afdcfd5e5e0ca0deef3"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_failed.log": {
+          "bytes": 839,
+          "sha256": "223797de7058ea1ee397aaf783f50186123c0bf72bff4724026b770e5bd5ae35"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_find.cir": "6e37893d60255eb458603867b7105d962f3bf86fa85bd3a8833a0c361c09f690"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_find.log": {
+          "bytes": 396,
+          "sha256": "8294154da99c36361a372caff809dd6510dc40b0035cf2e90247e9ddc36e435e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_find_failed.cir": "2e21313e470b63d2e7c66cc2ad2901b9b5cb7d54525478e4e085f5068b15e86a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_find_failed.log": {
+          "bytes": 464,
+          "sha256": "b20700dd0205276f9e38178e0f0ffa5b1cd14632b76b23ec1f919359cc415b6d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_step_outcomes.cir": "3b22acf13f344b628bd93123d9c8b0b054a7d1653a58f14b270a3a9c95d475be"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_step_outcomes.log": {
+          "bytes": 1978,
+          "sha256": "9dc515dd5ee0ca767542fbc48f2130e118dd30b72d3dae5ab38b334b58b1656f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_value.cir": "ef98551bf9415bcd54095f989c2cea50062d50893bcb6e7bd959995f4dce196c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_value.log": {
+          "bytes": 1442,
+          "sha256": "ac819dc43f22bdeb3c73e137960f51e6713cd0a10528e2b312ae86bfb73e7fd8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_value.cir": "27e47fe6156a0ae9d031447113cacdd5cec740e3a5510b160f04c46851897458"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_value.log": {
+          "bytes": 758,
+          "sha256": "22adb126c7c1b86e13ad06907c97d4b5c67f870f1a8adb9cd0bb49e1511b1c22"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_dash": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dash.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_dash.cir": "cb45395d43a3889452d8ec6571c8ec4d5fb23f9be1715415861ef35d99ec2bde"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dash.log": {
+          "bytes": 522,
+          "sha256": "ee61cb7fa1327d386ea905c95e0c667d81c29969863a197307f8b2e40ec33237"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_dash_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dash_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_dash_step.cir": "d85ed9a7fee920a3f74703e5dc75521063396d02d8ca449658c0ec4d3930043b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dash_step.log": {
+          "bytes": 540,
+          "sha256": "4a9fb198509ab4b56ffe3ec250eafd383cca18c3c98f1813040248be878240dc"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_dot": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dot.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_dot.cir": "60ec25c38aebae645e732f798406ccb1af26326080cf8d8e7bd8b47fb5f9f8ba"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dot.log": {
+          "bytes": 521,
+          "sha256": "3352f51676a09dbc19fe0702443f34aec3562e3029d535d877372b4e0c1c4ff3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_dot_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dot_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_dot_step.cir": "6c1012c7aa8c063a700c8e61de45165baf20eab6f970ed644ddf35d171300def"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dot_step.log": {
+          "bytes": 539,
+          "sha256": "a6f234d90d830397884496ebee42706bef27815b15e23dc452df368596f138a5"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_reserved_bare": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_reserved_bare.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_reserved_bare.cir": "880d6f90a3fad0951cffd170bd9aba1596775cb32ed0d7ba722a4b2aefb1cc50"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_reserved_bare.log": {
+          "bytes": 578,
+          "sha256": "2cc21856f2240b7ab9cc64ed4f5441f77102bb76ab551639f0928461ec705e1d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_reserved_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_reserved_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_reserved_failed.cir": "3bce0bad62599e0f1d9c7d6d9ee844f5e53d43090cd77f26dbb9669150cd17af"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_reserved_failed.log": {
+          "bytes": 529,
+          "sha256": "10aef3628cf0087725ae78f56aafcbfef7240391753d69dc7e6183fcdf2391f1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_reserved_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_reserved_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_reserved_step.cir": "69b40108e0d714283de103805ebaa217f92a28057dd080fc30f83dab545ad704"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_reserved_step.log": {
+          "bytes": 553,
+          "sha256": "74f59183cde686d6ada4e37709ab350fe87660e91bc5e2324483e4ce8ffbfada"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_upper": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_upper.cir": "f11e8afafef6021590f49c0e98f788f9c277c3230efb125bb14aa0c52fb482bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_upper.log": {
+          "bytes": 564,
+          "sha256": "97e257d7e7a6dc8ba65e32eb73e4f5e97eb5770498f80563df2829a4025b272b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_upper_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_upper_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_upper_step.cir": "59d30cc17c7f25a04080e2595fe63c24a67555f0e95eec6b89c029ec0c64ff42"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_upper_step.log": {
+          "bytes": 542,
+          "sha256": "ba07386604332fdd77d75c46903926b93e3d80bf766e5b9b2df3d887199836bd"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_failed.cir": "9c0084a86d763f6e16e3d430714f41402049487bd1a49b88e21fe4760b169c06"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_failed.log": {
+          "bytes": 703,
+          "sha256": "cf0e6572096ca79a31348e644ecef393dd05ba332655ae15b5f158454411b07a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_find.cir": "b0c9635e65061e151f0ebe3391f9cb6551c81086f92800a8b393f90fe3ae4ee9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_find.log": {
+          "bytes": 351,
+          "sha256": "b6eb9441f0598da23108f3b7e6e4a63c2caa11122086f3699d083ac4a96029d0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_find_failed.cir": "317194167ffbce6b0a1515737702c43fe5332812bb8a0abbd6766fe835a88990"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_find_failed.log": {
+          "bytes": 472,
+          "sha256": "44da885e269c756cd4c0943eca58d98729c9d4ba3bdd9603c054c27626d1869a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_failed.cir": "59aee51039ace71a8cf9ca6023bed4da0ccb80e8e97287a88558ab33d990289f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_failed.log": {
+          "bytes": 738,
+          "sha256": "933dee850bb083acbc2dd8a30fa78f3ee31f3aee1789f9b76f956e3be40414cd"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_find.cir": "408e09dde2f3649fa0e034f50fdaa3afab0655394b18c6aa2e0b73f0f9a98471"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_find.log": {
+          "bytes": 295,
+          "sha256": "3a4c49289531ec39e9258b384171e01d3d9c95f563276036cf7ed946c7bd0b0f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_find_failed.cir": "84c505c0bfdbc65917b953a0f020bf2e45ab0cc677929ec89a14a587750e2b20"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_find_failed.log": {
+          "bytes": 413,
+          "sha256": "56ea223b48c7c9beb7265b2a663326c1830bd7249e06cb98aaac878f7482759d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_step_outcomes.cir": "9c16e5951c717a8dd2ef0c689f7b73bab992d08cd376d3a37de395f7afa1b027"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_step_outcomes.log": {
+          "bytes": 1867,
+          "sha256": "08e36d1e03404358e74bd1e1c91af0a2359172bb1435a005f985abc591633669"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_value.cir": "d96b70eb000c1f10f8823f7449f5e23bef9c2c839064f20e1e560cd23437d06b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_value.log": {
+          "bytes": 1424,
+          "sha256": "0c395d115f6b4a66f0dcdd7f808d4d624a513d8a3480c6e05ebdbd9094db8ca0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_value.cir": "2492197a1141d00c00ce2b199a9fa500c348a1dfb9d29767c6fae927f2402bc7"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_value.log": {
+          "bytes": 860,
+          "sha256": "884af18e86b26b1c71640800864eb11b634fbde20aed8802e3732f0488e4b730"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_avg.cir": "9753cfb79e621729f62781e727489bfde0d1aaee76d0405cef975005784f260d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_avg.log": {
+          "bytes": 503,
+          "sha256": "ee07ab69ad3670f1606e3f777a4e2c15922add35f3974eb6a603b8196b011224"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_deriv_at.cir": "68b0e73ada530b90a8ed840e1003b4718e57e90541859339c5602a87dbff638d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_deriv_at.log": {
+          "bytes": 502,
+          "sha256": "2dc2b493bf5b7e35a18f7360972bc23dadc068f70085e8d2de87eae9972499d1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_deriv_when.cir": "b0fb060e4ea5a5be33d55d7ec045435137dfbe53d23544b9ba5773167c155490"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_deriv_when.log": {
+          "bytes": 516,
+          "sha256": "eeae9a968df4210d0e89101bd519ae99aaed9f36f9712019bce29ffd1464faf6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find.cir": "c8845f1c05b901887d5aab8fb281bc4cf2bc64a5c6928198f80fc9498fdf6311"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find.log": {
+          "bytes": 524,
+          "sha256": "1943b174d47a90061880c70630a4da90103a9ae070430d58909c290777ea1913"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find_at.cir": "01e6b782bcd87bffa7387b8a3678e7135b01313af4f91adc354a8a80b27f5964"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find_at.log": {
+          "bytes": 491,
+          "sha256": "8d849da4d1263a25dd32b6ad327830b781f54179758f05c14d8dd3fdb6cba045"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find_failed.cir": "b81e0c000c91d4291d7afc732ba592303417ab98678689fd8f5de069629d9eb3"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find_failed.log": {
+          "bytes": 543,
+          "sha256": "16cb64e7d953e540e011076b21a95c894391bfd2c2e15be89927f4363c740da0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find_when.cir": "1b4f4e53366c12a78a3a8e92106cf2e2b18ba7582127d0f91058e459335738df"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find_when.log": {
+          "bytes": 513,
+          "sha256": "7346f4c41bf8a01a994bca2407f48e43988484ff97a60699cfece8c8362e7925"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_integ.cir": "9d1b031ba84592615c83713ba4335473a8867e6a2f16adaa4e100b833c206a4e"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_integ.log": {
+          "bytes": 513,
+          "sha256": "cd55933b1d18022eba8fc4ffe82d96308b097b2f3afdace40e0676dbc13615d1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_max.cir": "97aac74843112baab5823ab5022ef33623abf3474b27d822dbbe2d2d5ca4889d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_max.log": {
+          "bytes": 505,
+          "sha256": "020da88502bd1a461fc777ceca8c55a7d53e7e03392644145400e541b99c4da3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_min.cir": "f759e61157d0da2aa425a0132824f1b3dd33936837d782e71c57f50a8a037e73"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_min.log": {
+          "bytes": 503,
+          "sha256": "6f75f1519ad19552c6850b91fa09243089e64834775347ae9d490cc7682322a9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_pp.cir": "c603fdd357b128859d5eaf2fd36f8ee6cc6a1cccd1650542e3b065b5f065f8b2"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_pp.log": {
+          "bytes": 500,
+          "sha256": "1ced3b6902436634c6ec90c91c1259486b272a2989e269e64627700ec90e0bd3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_rms.cir": "83d4515636f606e55e2301465710effa511ae3f712510caa45f2888959ec9d67"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_rms.log": {
+          "bytes": 513,
+          "sha256": "2e3edda71835fe257c0f83711b8441f7a29576655b8f982665b5dcb369539d5d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_avg.cir": "76b941acb715b2884e5711169cbd9b8f2ad185758913bc5a13142d78c06bb641"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_avg.log": {
+          "bytes": 524,
+          "sha256": "4430e68b49bd94f54254407fb5299995e69bbc338746550efc4885ab9ff7bdfc"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_deriv_at.cir": "4397d66679d222c06b37f08879583b20408328521cc0325adb9b8ce03047905d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_deriv_at.log": {
+          "bytes": 523,
+          "sha256": "56f6b6de964d9bb5ac0ffa7f28cc1e2fdf1e35be83338a4e86534e4911f5d50e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_deriv_when.cir": "9e01e31172fd63cb3de258202f97cadc71afa1230b343a87f22009bbe61b7723"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_deriv_when.log": {
+          "bytes": 525,
+          "sha256": "cdb45f5116f366382684d649e3d21dffc64be0a454f9eac124197ce4ee93cfae"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find.cir": "5c1092c81b2d3f28fa864eceb6ec284be9275898b266c0630435b8194dd12b0f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find.log": {
+          "bytes": 452,
+          "sha256": "0aafabc5f481aec809e80ee58567af360b7e3eae39226c6d7688dcac80197f48"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find_at.cir": "f6bc6035cb8c4bd8ebce5c1c41cdba34c9d1801b87f2d881bf593fa07d267198"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find_at.log": {
+          "bytes": 506,
+          "sha256": "65bbd284b8135649116d9078e8f6f6795cd933d41c2a85aad6f63aaaa16bae91"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find_failed.cir": "5131cca0ede2df0d4c78ef923b617884921144cbabbd426d4e6fb237eda54bbb"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find_failed.log": {
+          "bytes": 467,
+          "sha256": "433b1086cdc7ea240e207ca32436531021cea516073ee3911916f97f5866d337"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find_when.cir": "d58962466b5163c00db46967a73400fe0a10fb9cc43354e87660b5b3f3616d73"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find_when.log": {
+          "bytes": 522,
+          "sha256": "370f949bdedb611a79cd40c7955f91722360cf8fa600a3c093b43b2dd83e96ed"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_integ.cir": "65e063a28627d5d70e205f7d9462ea0353edde7bf28eabad96a187f79ac90edf"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_integ.log": {
+          "bytes": 534,
+          "sha256": "4818a4d36cac6c7d840ff38a486809e35eb16d01f358a30f6b5de3e7d2dd844b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_max.cir": "a8ee0a7c79bcb8eb176e20b5ca312e1f2b9a11813970719dd8414dcea32f13aa"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_max.log": {
+          "bytes": 519,
+          "sha256": "08da67fda34368d51d8a93186239648cb78f65793714e6e2c98619a29f66e230"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_min.cir": "77c8149f12e0489e41dcec631985267c5c089880f75937f66c7656d954da393a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_min.log": {
+          "bytes": 524,
+          "sha256": "3307af189d30804d94dae170aed964d6a0df1f5160d04bc5e5f9ef7784bf4284"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_pp.cir": "79c8ebd7e14b6e35c4fbe0dd32cfbe3e6419a969338851832bdd7c1f9d28a7d9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_pp.log": {
+          "bytes": 521,
+          "sha256": "c79f09176601b3907b724e2156f4e57c7b2d634319003d727be557fcfbf5a89b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_rms.cir": "2afd460f4e00f67ccc1b2a61d9512654c9fe1d810916f787edbfc1be1cb6b09f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_rms.log": {
+          "bytes": 524,
+          "sha256": "2c249d1639a989743a46fa160e0ea4a791898c0c15ff53e4592c505e39bd8c8c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_trig_targ.cir": "a31589a064fb03f32b6bc17eb445175de61b8ea69c5e0654e235e8802aa33e78"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_trig_targ.log": {
+          "bytes": 522,
+          "sha256": "987534387d9b90e831c9b2111ca56f7a22630f53318a15ab539f187f366e42ab"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_when.cir": "b10b788df1c788677fbcf6b6c6718a7ae7f93566b8b2e56b52f380586da17bd8"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_when.log": {
+          "bytes": 540,
+          "sha256": "026b62d2fe01d81cc93f013012c7816f245a775a826e1a960b9e48baa4849bdc"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_trig_targ.cir": "a627980b7aeaaaf7f99d68f19607f8dbca8f0ff5f71c816c5e6035d55b614162"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_trig_targ.log": {
+          "bytes": 513,
+          "sha256": "316333462d0696e1a2ba684c27c19e94bf195039e4342f50d281674ab428dbbe"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_when.cir": "9b48cae326b08df5dbea49105c05026e2727c845a5bf7fa5737c0cd43a24f56d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_when.log": {
+          "bytes": 531,
+          "sha256": "34c781169ecd87ce9451d5e5113dbc3b454472823ef6cdb9e0e4b3f3c72b187a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_avg.cir": "71d9c77c1901d261075e43641773e9448568b5eb6617af6b1467cfed1a18f90f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_avg.log": {
+          "bytes": 528,
+          "sha256": "e43f7344b79899885e5806eae937fa5c9d368eaac02d25c7d7ef375a914eac42"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_deriv_at.cir": "73e841a09cd3b3f2c520381eb4ca6009da57a6cdc2c5ee725b81d468bb3d4872"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_deriv_at.log": {
+          "bytes": 521,
+          "sha256": "14f2ea255645e132c0d4264e45503fac6dd74a5c28e1424490176707e11c99a4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_deriv_when.cir": "6bb38283dec465f425664ed6992a5c4a6aa9e1aa99d8e31950cf852e4cb70a97"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_deriv_when.log": {
+          "bytes": 517,
+          "sha256": "a7bdad064df8740dc9c52d342a07525e25f5995239bba37d0f48365c35a5d2c3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find.cir": "345b93590c4603e7c5bf0c7efbb49808ad355322c1c5c8fde680da398e565189"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find.log": {
+          "bytes": 536,
+          "sha256": "bf5128251cc2324c774788f578409a4aed61b072167056d7a72f9e503b51705d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find_at.cir": "6c7531b9509a2779612d57aa38cb80c2eca4f7885a158c8b7a420fba9a525758"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find_at.log": {
+          "bytes": 512,
+          "sha256": "650bba0ea3052e1c745c1f57abb6d858ff9ecc800a06b38260bda6ec087a8763"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find_failed.cir": "88c22124b77fafcb08b72c6077f44c5ed952c842b591b069f780251de4333865"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find_failed.log": {
+          "bytes": 594,
+          "sha256": "0d9072ea603eb8cd7285afa1a7d922ed313115d674fdfb5b1739363badcf6d7c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find_when.cir": "0dc6789fbfe5e356f7e54b9b0bbce775e6443fa757767b756e0969f6f5bde8b9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find_when.log": {
+          "bytes": 514,
+          "sha256": "e273a6307d4922e4ca9f9debabe171b7b5f26ecc5e40d1e8ba998faeb79c8287"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_integ.cir": "68b3c2bd0e9f58a70032ef5a15b62f1222a29b76b10871262e7b7431bb4acf02"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_integ.log": {
+          "bytes": 538,
+          "sha256": "eb79868c7b25f73a20bcfbe9ac4f8d9df93a8500aa760f7a88d3e77a7727ec30"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_max.cir": "2ee48365cfce6294a1050a58a37d20952ae1a31a114cbcfda78c46d87980b399"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_max.log": {
+          "bytes": 524,
+          "sha256": "356fc86e74a181473057071ad76356c61816c1d3e9911856e5e71ea356a666d2"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_min.cir": "ef1329e246fa091156700ce21c25462a52394a94855878e56c4fd1909a990eaa"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_min.log": {
+          "bytes": 524,
+          "sha256": "43bd3f6ae3a7796133b02b8ea76d7b08ba54a80e52d269543bc4852bf88eec5a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_pp.cir": "deb108c8604061c66d1f154f91d45d84d3c55f9ed3f9a88b8bf5dd78eb4b4aca"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_pp.log": {
+          "bytes": 519,
+          "sha256": "0aa654a0671ffb41c8819b50ac9245d0ebd92cf07f3ff59a566ae2a8dccc2231"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_rms.cir": "e08a7d175ae9adf947743a275b52d52da864d120246a113ca0d23929280b314c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_rms.log": {
+          "bytes": 536,
+          "sha256": "4b897d1873777a0206857208b558d516f4322d29f08334e6eddf020572a434e2"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_avg.cir": "5194e6939cd6a295471023d4f0e3cec3fc950b70ee8c848072ffb918c4ca7ff5"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_avg.log": {
+          "bytes": 547,
+          "sha256": "b3b7e8ed4bf43003c07d6ec82a1ae36f72f2bcc6073d7df2c7549dc398d93cfe"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_deriv_at.cir": "e5772288db541e6cb8481fc23d9113518044480cc888a0be142205ef027ddc65"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_deriv_at.log": {
+          "bytes": 546,
+          "sha256": "1216d1d1b53c39efd6191ca88cc2e267a1e25bd6889f2693a34d8d8a16d52c80"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_deriv_when.cir": "4984f3f9d4f2d652a0210d67f4220c160b272b2d0c088203f9b87a9e22314f2d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_deriv_when.log": {
+          "bytes": 526,
+          "sha256": "3d0a29ad47736af4280a071c7ea6538890ef26cb22163ec0581a1af0e600eca8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find.cir": "7e9d522ccc4b628df3827aef47b942050bab7e1d1b01525843ee8d14cb02d2c6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find.log": {
+          "bytes": 453,
+          "sha256": "21fef1c0c9ea27174291ff1277ba0c44351e0d8b8c245f32e3960c255d2f16db"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find_at.cir": "b5bb410e43225413a782edac7984c594d235557e5f45757c1d4e61673fa5d2d6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find_at.log": {
+          "bytes": 529,
+          "sha256": "9d7dd03a98b0043506819b47c6a170b0863eb814af1e723afd44a3e3417d26b9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find_failed.cir": "24a7dc0163748cb11bc800be886e5f213b5be4cc264df7f8a5ccb5920a8f66db"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find_failed.log": {
+          "bytes": 518,
+          "sha256": "1db6943d829fb783a5817c215331d1a0599eb7b5fc0cfa3bf34ef2fe1e27557c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find_when.cir": "1c2b5224a7571fd7e76fd7753c444ff5e1d05f820237d93758c8d29fb265f047"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find_when.log": {
+          "bytes": 523,
+          "sha256": "71dc3e158df4bfdf78f58688604b9806b66e75d62396c94d3a091e71781a69a1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_integ.cir": "a89c67191b2da23625d45dc85db01e21009a4c5acdcbdbc1fd777ffc528b9dcf"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_integ.log": {
+          "bytes": 557,
+          "sha256": "6bbece884d4f4f19e627c079d37145aff425f50561a09f359bf295bea001535d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_max.cir": "8272688a364db2d60aa623bd0ada9bd722b1f4f29620608f2f065c18ffc79a0c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_max.log": {
+          "bytes": 542,
+          "sha256": "8d4eee8e19dfbaa580905d4d8254e0f82a10a1869db286bda474f49a1ca2bd02"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_min.cir": "74359be13d7dc0922d1f8cb79435f74fa3aaeedbefe8a79517a73749cafcb9a4"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_min.log": {
+          "bytes": 547,
+          "sha256": "b505b05e6d23f478c3ddcc4f8ed9d957f5f5089cbf448c2f1b18aebc03f009cc"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_pp.cir": "d44c0858adf240c65736ac90723c6b11dfda0ff1ba396647a45ec6dc04e7e9b7"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_pp.log": {
+          "bytes": 544,
+          "sha256": "d1e390b80963784f11e6295b97858774fa1a5eeb9136cb99ece8aea91b6676e8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_rms.cir": "c2d003e5ce6bed4d180f7fbe0b635cbf772c288e2387c84cc07a5263cc0b42e8"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_rms.log": {
+          "bytes": 547,
+          "sha256": "f2b338959e2a3075d3d3fc574fcdb9da5e5d790d17d95ee465326b9040f1d4b1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_trig_targ.cir": "e9f2d015e4881ff78b3e6fa38598618d2ab2b50944819fece08cc7b5b1502f0f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_trig_targ.log": {
+          "bytes": 523,
+          "sha256": "9f5763784c638e15195b7ca50894e19ea99d5dfc32e01f824c07ff11cb6f8bb6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_when.cir": "649fa1e6d5c42c130ef736c491b7b54e15ee863a5b1c4b9bd5e07ef5116f981d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_when.log": {
+          "bytes": 541,
+          "sha256": "0252bff96ebcccd6c78a998d99a524ef47d0df5b9ff517f3180783b2a4d865c4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_trig_targ.cir": "cfefc9808ec5e10ad0ec3ed75bb5366cda7108aa363af36b74d3f674db274c05"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_trig_targ.log": {
+          "bytes": 514,
+          "sha256": "094df908b2cb3a798b9efb46157075ff40f3a7b06d1d1a71f3ff4d363a21e193"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_when.cir": "b727a1b791011f6030c0efe01e3eea8382c75edeac6ef5275a85e8aab58fcfa8"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_when.log": {
+          "bytes": 532,
+          "sha256": "8ba614f73b7c6062418518487d6c79dd61d5a7856b897932d52c7f03d69f3197"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_failed.cir": "58e39e1ea7fa765efd31b9d36a29653f1712f1b5ceaa878655b8d5eef24514bc"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_failed.log": {
+          "bytes": 824,
+          "sha256": "d87eb96103e17395db59882a91a5b3fb96e1042b640dfaac98bb9d9235f11584"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_find.cir": "5c9752e8797008c312cb6c5289e8fd79b6839706b7abe5cba853ad1fc044afb1"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_find.log": {
+          "bytes": 468,
+          "sha256": "3d15c6efbc7148df64eb68dc5dd6eb5b48a7d107fcee37bd8570929779779fa8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_find_failed.cir": "202e782a573d14afdbac2f2f40dfb0bf150f4a76a7eacb2e1911ba3917a8ad02"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_find_failed.log": {
+          "bytes": 542,
+          "sha256": "125414d6e609c8bbdef6e22fa6ee06f3bf26c3665ca1a9a2426c1b8c33569bf5"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_failed.cir": "f2a958b9c9d68ebd85aade33b97e374a9d77af50f73e3cd58ec7f0e6d5ac9e0f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_failed.log": {
+          "bytes": 859,
+          "sha256": "762babda6744eb3fae9d4685770ad602e0c78bce5324004f51f92e69d4f750b8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_find.cir": "7b93bb1f56a9d8b98d679bdc85d06df82a62c723396058b86a0389e88191f04f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_find.log": {
+          "bytes": 416,
+          "sha256": "f26311242dea0eb79da68c0bf3f6c416948c79bc8f724407342314ac5af4bdd4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_find_failed.cir": "714c98d88cb404096b2d20094f1b0609ec390144d7e977508fe6aca9408732b6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_find_failed.log": {
+          "bytes": 484,
+          "sha256": "f958c62d59b42b279d34cb8d78a635d7bf044bb5501889517e3861f0e6aa3534"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_step_outcomes.cir": "3dac0ae2ca55ceabb0e6072951845c7596a5a6be2a22779a1315d52524cdb3ac"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_step_outcomes.log": {
+          "bytes": 2287,
+          "sha256": "2526018af6865f8ef114c7f640f51f5a8f06df41c53836275c0932ec09ea6f4f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_value.cir": "41145be1d0429b4c2b4395cd06531089a2c09c5a59aa976ee93d1710bc5d4810"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_value.log": {
+          "bytes": 877,
+          "sha256": "3f6fb37c26a2362cc3fc91af9fde207d6e4bec3fa19f13c2e74547c3d0ec0f36"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/meas_name_dash": {
       "behaviour": "log-meas-name-punctuation",
       "command": [

@@ -1,0 +1,6 @@
+C:\recording\meas_grid_name_dash.cir(7): syntax error
+.meas tran t-bare TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL=0.9 RISE=1
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\recording\meas_grid_name_dash.cir(8): syntax error
+.meas tran t-never WHEN V(out)=2
+            ^^^^^^^^^^^^^^^^^^^^

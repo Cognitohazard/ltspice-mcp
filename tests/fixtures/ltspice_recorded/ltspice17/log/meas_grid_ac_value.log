@@ -1,0 +1,30 @@
+Circuit: * every form with a result: an AC analysis
+
+
+max_v: MAX(mag(v(out)))=(-6.98714dB,0°) FROM 2000 TO 8000
+min_v: MIN(mag(v(out)))=(-18.1171dB,0°) FROM 2000 TO 8000
+pp_v: PP(mag(v(out)))=(11.13dB,0°) FROM 2000 TO 8000
+avg_v: AVG(mag(v(out)))=0.223762 FROM 2000 TO 8000
+rms_v: RMS(mag(v(out)))=0.239454 FROM 2000 TO 8000
+integ_v: INTEG(mag(v(out)))=1342.57 FROM 2000 TO 8000
+find_when_v: ph(v(out))=(33.0643dB,180°) at 1000
+deriv_at_v: D(mag(v(out)))=(-88.507dB,180°) at 5000
+deriv_when_v: D(mag(v(out)))=(-69.2592dB,180°) at 1000
+param_v: max_v*2=(-0.966539dB,0°)
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 0
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+

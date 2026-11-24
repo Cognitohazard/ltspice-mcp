@@ -1,0 +1,116 @@
+Circuit: * every form failing in the second step (k=100), and every form whose result is 0 in one step (z=0 in the second, or a level of 0 in the first): a transient, stepped
+
+.OP point found by inspection.
+.step k=1
+.step k=100
+
+
+Measurement "max_sf" FAIL'ed
+
+Measurement "min_sf" FAIL'ed
+
+Measurement "pp_sf" FAIL'ed
+
+Measurement "avg_sf" FAIL'ed
+
+Measurement "rms_sf" FAIL'ed
+
+Measurement "integ_sf" FAIL'ed
+
+Measurement "find_at_sf" FAIL'ed
+
+Measurement "find_when_sf" FAIL'ed
+
+Measurement "when_sf" FAIL'ed
+
+Measurement "deriv_at_sf" FAIL'ed
+
+Measurement "deriv_when_sf" FAIL'ed
+
+Measurement "trig_targ_sf" FAIL'ed
+
+Measurement "param_sf" FAIL'ed
+
+Measurement: max_sz
+  step	MAX(v(out)*z)	FROM	TO
+     1	0.997502	0.0001	0.0006
+     2	0	0.0001	0.0006
+
+Measurement: min_sz
+  step	MIN(v(out)*z)	FROM	TO
+     1	0.630052	0.0001	0.0006
+     2	0	0.0001	0.0006
+
+Measurement: pp_sz
+  step	PP(v(out)*z)	FROM	TO
+     1	0.36745	0.0001	0.0006
+     2	0	0.0001	0.0006
+
+Measurement: avg_sz
+  step	AVG(v(out)*z)	FROM	TO
+     1	0.926432	0.0001	0.0006
+     2	0	0.0001	0.0006
+
+Measurement: rms_sz
+  step	RMS(v(out)*z)	FROM	TO
+     1	0.930902	0.0001	0.0006
+     2	0	0.0001	0.0006
+
+Measurement: integ_sz
+  step	INTEG(v(out)*z)	FROM	TO
+     1	0.000463216	0.0001	0.0006
+     2	0	0.0001	0.0006
+
+Measurement: find_at_sz
+  step	v(out)*z	at
+     1	0.993213	0.0005
+     2	0	0.0005
+
+Measurement: find_when_sz
+  step	v(in)*z	at
+     1	1	6.98893e-005
+     2	0	6.98893e-005
+
+Measurement: when_sz
+  step	v(out)=0.5
+     1	6.98893e-005
+     2	6.98893e-005
+
+Measurement: deriv_at_sz
+  step	D(v(out)*z)	at
+     1	69.0946	0.0005
+     2	0	0.0005
+
+Measurement: deriv_when_sz
+  step	D(v(out)*z)	at
+     1	5273.21	6.98893e-005
+     2	0	6.98893e-005
+
+Measurement: trig_targ_sz
+  step	trig_targ_sz	FROM	TO
+     1	0	1.10395e-005	1.10395e-005
+     2	0	1.10395e-005	1.10395e-005
+
+Measurement: param_sz
+  step	2*z
+     1	2
+     2	0
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2042
+traniter = 2042
+tranpoints = 1022
+accept = 1022
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

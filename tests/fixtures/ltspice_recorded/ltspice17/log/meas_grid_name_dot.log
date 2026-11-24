@@ -1,0 +1,26 @@
+Circuit: * measurements named with a dot: a TRIG/TARG, printed with no colon, and one that fails
+
+.OP point found by inspection.
+
+t.bare=0.000219853 FROM 1.10466e-005 TO 0.0002309
+
+Measurement "t.never" FAIL'ed
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2042
+traniter = 2042
+tranpoints = 1022
+accept = 1022
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

@@ -1,0 +1,45 @@
+Circuit: * every form with a result: a transient, stepped
+
+.OP point found by inspection.
+.step r=1000
+.step r=2000
+
+
+Measurement: min_v
+  step	MIN(v(out))	FROM	TO
+     1	0.630052	0.0001	0.0006
+     2	0.3912	0.0001	0.0006
+
+Measurement: pp_v
+  step	PP(v(out))	FROM	TO
+     1	0.36745	0.0001	0.0006
+     2	0.558794	0.0001	0.0006
+
+Measurement: rms_v
+  step	RMS(v(out))	FROM	TO
+     1	0.930902	0.0001	0.0006
+     2	0.791492	0.0001	0.0006
+
+Measurement: integ_v
+  step	INTEG(v(out))	FROM	TO
+     1	0.000463216	0.0001	0.0006
+     2	0.000388198	0.0001	0.0006
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2042
+traniter = 2042
+tranpoints = 1022
+accept = 1022
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

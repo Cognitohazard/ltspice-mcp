@@ -1,0 +1,3 @@
+C:\recording\meas_grid_name_reserved_step.cir(7): Expected a name that is not a reserved name here.
+.meas tran e MAX V(out)
+           ^^^^^^^^^^^^

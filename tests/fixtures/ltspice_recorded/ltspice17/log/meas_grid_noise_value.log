@@ -1,0 +1,37 @@
+Circuit: * every form with a result: a noise analysis
+
+
+max_v: MAX(v(onoise))=1.82131e-009 FROM 2000 TO 8000
+min_v: MIN(v(onoise))=5.05689e-010 FROM 2000 TO 8000
+pp_v: PP(v(onoise))=1.31562e-009 FROM 2000 TO 8000
+avg_v: AVG(v(onoise))=9.74909e-010 FROM 2000 TO 8000
+rms_v: RMS(v(onoise))=9.74909e-010 FROM 2000 TO 8000
+integ_v: INTEG(v(onoise))=7.55161e-008 FROM 2000 TO 8000
+find_at_v: v(onoise)=7.98892e-010 at 5000
+
+Measurement "find_when_v" FAIL'ed
+
+Measurement "when_v" FAIL'ed
+deriv_at_v: D(v(onoise))=-1.89393e-013 at 5000
+
+Measurement "deriv_when_v" FAIL'ed
+
+Measurement "trig_targ_v" FAIL'ed
+param_v: max_v*2=3.64262e-009
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 0
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+

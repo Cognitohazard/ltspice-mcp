@@ -1,0 +1,42 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\meas_grid_tran_step_value.cir
+Start Time: Thu Jan 15 00:00:00 2026
+
+.step r=1000
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+
+.step r=2000
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.000 seconds.
+Total iterations: 2040
+
+Files loaded:
+C:\recording\meas_grid_tran_step_value.cir
+
+
+Measurement: min_v
+  step	MIN(V(out))	FROM	TO
+     1	0.630273177257	0.0001	0.0006
+     2	0.391949108258	0.0001	0.0006
+
+Measurement: pp_v
+  step	PP(V(out))	FROM	TO
+     1	0.367235755923	0.0001	0.0006
+     2	0.558139298384	0.0001	0.0006
+
+Measurement: rms_v
+  step	RMS(V(out))	FROM	TO
+     1	0.931008316449	0.0001	0.0006
+     2	0.791793276644	0.0001	0.0006
+
+Measurement: integ_v
+  step	INTEG(V(out))	FROM	TO
+     1	0.000463276885105	0.0001	0.0006
+     2	0.000388372488333	0.0001	0.0006

@@ -1,0 +1,87 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\meas_grid_noise_step_value.cir
+Start Time: Thu Jan 15 00:00:00 2026
+
+.step r=1000
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+
+.step r=2000
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.000 seconds.
+Total iterations: 0
+
+Files loaded:
+C:\recording\meas_grid_noise_step_value.cir
+
+
+Measurement: max_v
+  step	MAX(V(onoise))	FROM	TO
+     1	1.82131082825e-09	2000	8000
+     2	1.39706323043e-09	2000	8000
+
+Measurement: min_v
+  step	MIN(V(onoise))	FROM	TO
+     1	5.05689422285e-10	2000	8000
+     2	3.59669895013e-10	2000	8000
+
+Measurement: pp_v
+  step	PP(V(onoise))	FROM	TO
+     1	1.31562140597e-09	2000	8000
+     2	1.03739333541e-09	2000	8000
+
+Measurement: avg_v
+  step	AVG(V(onoise))	FROM	TO
+     1	9.749087352e-10	2000	8000
+     2	7.16059181937e-10	2000	8000
+
+Measurement: rms_v
+  step	RMS(V(onoise))	FROM	TO
+     1	9.749087352e-10	2000	8000
+     2	7.16059181937e-10	2000	8000
+
+Measurement: integ_v
+  step	INTEG(V(onoise))	FROM	TO
+     1	7.551610591e-08	2000	8000
+     2	5.54657057308e-08	2000	8000
+
+Measurement: find_at_v
+  step	V(onoise)	at
+     1	7.98891794121e-10	5000
+     2	5.73258782619e-10	5000
+
+Measurement: find_when_v
+  step	V(inoise)	at
+     1	4.07137434877e-09	1788.1839969
+     2	5.75779246503e-09	1362.85464674
+
+Measurement: when_v
+  step	V(onoise)=2n
+     1	1788.1839969
+     2	1362.85464674
+
+Measurement: deriv_at_v
+  step	V(onoise)	at
+     1	-1.89393452417e-13	5000
+     2	-1.41570743369e-13	5000
+
+Measurement: deriv_when_v
+  step	V(onoise)	at
+     1	-8.48808804939e-13	1788.1839969
+     2	-1.20564665471e-12	1362.85464674
+
+Measurement: trig_targ_v
+  step	trig_targ_v	FROM	TO
+     1	3033.40643523	919.422542535	3952.82897776
+     2	2048.31952384	822.422989279	2870.74251312
+
+Measurement: param_v
+  step	max_v*2
+     1	3.6426216565e-09
+     2	2.79412646085e-09

@@ -9356,6 +9356,2968 @@
         ".raw"
       ]
     },
+    "log/meas_grid_ac_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_failed.cir": "95c4a6e0a755f733ffa7cb0cf56c52d0d33c9c778b5d140e44f373bcb3cadc5b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_failed.log": {
+          "bytes": 763,
+          "sha256": "945e8ffb2ae774675a58d2cb27859e2c5f30ed754728bd70b4ff3d6b141ea15a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_find.cir": "065fd2a081b1a96bd5c762d6ca5c760c5edfbfb8ed89519119b8fed7d6471e41"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_find.log": {
+          "bytes": 404,
+          "sha256": "f1f714c943ae62999b3bf0804186fd4643f5928809be726844ebdc47c742ddd9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_find_failed.cir": "8f4f6542a9a977cd3dccf28d7ea4793ab155213433e48275f0e69be80d1f090b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_find_failed.log": {
+          "bytes": 493,
+          "sha256": "750e9a190c37c183154c472540630a9b6be2f1a4ffaf466588eab9d243d9c869"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_failed.cir": "6b0126488b5a44fee9a12801a1097cb05a953b770a7bbff194245e1dc1c6caaa"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_failed.log": {
+          "bytes": 863,
+          "sha256": "086974ab5ad4b428a19292679a4a7e64869666a5ac7736db1c4578f9f8fc8fdd"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_find.cir": "4f605fa2cb318f99545ead5cb9d023c2b7b598fb8806967d032b12351ac881f1"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_find.log": {
+          "bytes": 679,
+          "sha256": "6dfd9ff6f13ce0dac0dec172c299d9fc74c48bbb0746d4cba5538480652a68d6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_find_failed.cir": "7de8c8f2e5970d27ce05226c949a52bf4a367a34c724d5db9cfebbd0acc9ed1a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_find_failed.log": {
+          "bytes": 593,
+          "sha256": "a3df4f3fe67af42fd5a899678a9988ade01c92fb066f42f701bd55670abd54c8"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_step_outcomes.cir": "cde46e3f0c8b40b5dc4c3f65ba79e972b799860578ef03dcccb23dd496766121"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_step_outcomes.log": {
+          "bytes": 3278,
+          "sha256": "d0a6402996fc3832522a562c41cf53fa28d45d58838b39dd7f61095dc699f743"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_step_value.cir": "d7518fb562e1e977e90bb023ee7302dbb76cdb63c164d469bf805841678773cc"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_step_value.log": {
+          "bytes": 1846,
+          "sha256": "f2f24b6b3c1b34e519291b469da7e5aa253b4028d3ad9ed212b25499c5501fb5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_ac_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_ac_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_ac_value.cir": "1d0af92f2024acaf210b27211118e14ce5deda416abd36e321fadd755d3c8e79"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_ac_value.log": {
+          "bytes": 934,
+          "sha256": "370ae683fc05ef948b817236997084bf09321631d726bf1451676dbbb1c78e89"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_failed.cir": "65fd7c3cd2b1f37c425876b0f57d164f57f4a419bd0bb4bd1bcc29a74dc34fb9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_failed.log": {
+          "bytes": 734,
+          "sha256": "1fb296f936a353d006b8d378f503afdb32644a54015ef8a0d38ee80782cb57ec"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_find.cir": "5a7edde00b3f1082fba5edfeaeef285f05d8d56fb9d1b5fe33e9f08f6d92bb9e"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_find.log": {
+          "bytes": 344,
+          "sha256": "a4b964f403d744769f61f3ce66b82d9d067e7fc0cfce26438780241faab7f684"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_find_failed.cir": "7a9e3eb39993ab9ef21f2ec33f920e2124896b0c3432500ca741b222cfe540bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_find_failed.log": {
+          "bytes": 464,
+          "sha256": "ee948757c79e25a5b1158290a000e6608d48fe8e23ca911da99f74e8ea63b8fc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_failed.cir": "c3b5c56cb8cb39f9726719c2f3d40a40383d82df76a98afdcfd5e5e0ca0deef3"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_failed.log": {
+          "bytes": 770,
+          "sha256": "d8855c27299f57dfdf8593255fb6ed4e08425dd8d68e799151c81d26299db450"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_find.cir": "6e37893d60255eb458603867b7105d962f3bf86fa85bd3a8833a0c361c09f690"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_find.log": {
+          "bytes": 486,
+          "sha256": "d2554e2baf5e43fd8e9a72f55716520771ada3fe710e067abae768d31b9399fe"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_find_failed.cir": "2e21313e470b63d2e7c66cc2ad2901b9b5cb7d54525478e4e085f5068b15e86a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_find_failed.log": {
+          "bytes": 500,
+          "sha256": "f1d85b8d6e363a06d1ccd1f7dd5933b9f2803db760edacd032f44cbc6d01156b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_step_outcomes.cir": "3b22acf13f344b628bd93123d9c8b0b054a7d1653a58f14b270a3a9c95d475be"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_step_outcomes.log": {
+          "bytes": 2500,
+          "sha256": "9c043d6da920bbc87760014ef050d265a7d90367e81e5677399a2f598db2c9d9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_step_value.cir": "ef98551bf9415bcd54095f989c2cea50062d50893bcb6e7bd959995f4dce196c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_step_value.log": {
+          "bytes": 1501,
+          "sha256": "d5b304115039f69d95c92f70bcaac15bda5626e9ef5d4d32fe2589b50658936d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_dc_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_dc_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_dc_value.cir": "27e47fe6156a0ae9d031447113cacdd5cec740e3a5510b160f04c46851897458"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_dc_value.log": {
+          "bytes": 744,
+          "sha256": "6c7ee7a2e936b8958eb0e6e7dc6d1b67a0e1dc5f7b54a35577caafe5d918bafa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_dash": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dash.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_grid_name_dash.cir": "cb45395d43a3889452d8ec6571c8ec4d5fb23f9be1715415861ef35d99ec2bde"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dash.log": {
+          "bytes": 318,
+          "sha256": "67feab392cfc79f11d596345c3a757b70ad1879e5e0d0dae5ee85095a33d665e"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_grid_name_dash_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dash_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_grid_name_dash_step.cir": "d85ed9a7fee920a3f74703e5dc75521063396d02d8ca449658c0ec4d3930043b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dash_step.log": {
+          "bytes": 115,
+          "sha256": "9eb59baffd2bfa055f812e56b242291288b83a0c0e351df64a168079f043094e"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_grid_name_dot": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dot.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_dot.cir": "60ec25c38aebae645e732f798406ccb1af26326080cf8d8e7bd8b47fb5f9f8ba"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dot.log": {
+          "bytes": 451,
+          "sha256": "18d7152f4cb101d6ce3ab9572a8982bbee37142671b32abaad61465c73ad7e37"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_dot_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_dot_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_dot_step.cir": "6c1012c7aa8c063a700c8e61de45165baf20eab6f970ed644ddf35d171300def"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_dot_step.log": {
+          "bytes": 567,
+          "sha256": "0e9583ec46f86ef76908da825f7002b83e5c20efa2f0a628d38d13c27c52626f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_reserved_bare": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_reserved_bare.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_grid_name_reserved_bare.cir": "880d6f90a3fad0951cffd170bd9aba1596775cb32ed0d7ba722a4b2aefb1cc50"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_reserved_bare.log": {
+          "bytes": 234,
+          "sha256": "ac8e0114394b42f3e30129ccf274e33f5e2d61808c4b2c293ea2f82cc34c152b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_grid_name_reserved_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_reserved_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_grid_name_reserved_failed.cir": "3bce0bad62599e0f1d9c7d6d9ee844f5e53d43090cd77f26dbb9669150cd17af"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_reserved_failed.log": {
+          "bytes": 156,
+          "sha256": "b0d394267d1020140b18d2e3e95ba255a59577a45979a93e9203db1b9090c021"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_grid_name_reserved_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_reserved_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_grid_name_reserved_step.cir": "69b40108e0d714283de103805ebaa217f92a28057dd080fc30f83dab545ad704"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_reserved_step.log": {
+          "bytes": 148,
+          "sha256": "cfd7382f3e7c92957ce03ca0c21ab591315ec30db13cefa5743a86e9a0f0c1c0"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_grid_name_upper": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_upper.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_upper.cir": "f11e8afafef6021590f49c0e98f788f9c277c3230efb125bb14aa0c52fb482bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_upper.log": {
+          "bytes": 494,
+          "sha256": "24e0747d398601e4daf853e15fb7ea8db2b9fe8263c640a9a8b16085bd539b74"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_name_upper_step": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_name_upper_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_name_upper_step.cir": "59d30cc17c7f25a04080e2595fe63c24a67555f0e95eec6b89c029ec0c64ff42"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_name_upper_step.log": {
+          "bytes": 571,
+          "sha256": "d6441d678ae7d0b2852ed359a0dcaeeda8f580183df23dd499213f8bd76d7346"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_failed.cir": "9c0084a86d763f6e16e3d430714f41402049487bd1a49b88e21fe4760b169c06"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_failed.log": {
+          "bytes": 769,
+          "sha256": "f451b76db81bd2fd764de6e7481b37038670505fe1b0c8560873ba33704435b9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_find.cir": "b0c9635e65061e151f0ebe3391f9cb6551c81086f92800a8b393f90fe3ae4ee9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_find.log": {
+          "bytes": 399,
+          "sha256": "45055147af2ed8d161861c843bb889892c66c1b44eb6a3ed07661f98a5f38d1a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_find_failed.cir": "317194167ffbce6b0a1515737702c43fe5332812bb8a0abbd6766fe835a88990"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_find_failed.log": {
+          "bytes": 508,
+          "sha256": "7bad5729e33df92b279474360786572d8cd345eee7775081af1581391b79b75a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_failed.cir": "59aee51039ace71a8cf9ca6023bed4da0ccb80e8e97287a88558ab33d990289f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_failed.log": {
+          "bytes": 869,
+          "sha256": "0b261078ab4ace3f407ad19519b72c7e7869ef5d458b0fe349abab544c5e852a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_find.cir": "408e09dde2f3649fa0e034f50fdaa3afab0655394b18c6aa2e0b73f0f9a98471"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_find.log": {
+          "bytes": 643,
+          "sha256": "de06ec3745c0180d4e9c3c0ada7d667470e701ee2849c420f6c1909ee53e6a27"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_find_failed.cir": "84c505c0bfdbc65917b953a0f020bf2e45ab0cc677929ec89a14a587750e2b20"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_find_failed.log": {
+          "bytes": 608,
+          "sha256": "ed5bd7d9a7d7d53818b94f7fc717718d0f3ba2c5fa68ba453d9cfbcf445f81db"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_step_outcomes.cir": "9c16e5951c717a8dd2ef0c689f7b73bab992d08cd376d3a37de395f7afa1b027"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_step_outcomes.log": {
+          "bytes": 3096,
+          "sha256": "c67857d7295618d79470fa5771cb3e14c2952e92d52c6d1f9b2007044d21d488"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_step_value.cir": "d96b70eb000c1f10f8823f7449f5e23bef9c2c839064f20e1e560cd23437d06b"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_step_value.log": {
+          "bytes": 2018,
+          "sha256": "b10250cbc88819477acc286b0c7d0449c59fa16dcc09e6476ea14df92b278e01"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_noise_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_noise_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_noise_value.cir": "2492197a1141d00c00ce2b199a9fa500c348a1dfb9d29767c6fae927f2402bc7"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_noise_value.log": {
+          "bytes": 1060,
+          "sha256": "fc4f0151e59cc0f1d8a7a85d495eaed9626c810a1cc79566facf36128062b734"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_avg.cir": "9753cfb79e621729f62781e727489bfde0d1aaee76d0405cef975005784f260d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_avg.log": {
+          "bytes": 442,
+          "sha256": "fc4c75197e024585414052c78d4503d8c70272b3ba483efed676dec2cf0326c8"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_deriv_at.cir": "68b0e73ada530b90a8ed840e1003b4718e57e90541859339c5602a87dbff638d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_deriv_at.log": {
+          "bytes": 412,
+          "sha256": "305a15abe3cbe6025b8d7e6f816e23a37f9bbe767e42acce67bfb08d85f9e419"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_deriv_when.cir": "b0fb060e4ea5a5be33d55d7ec045435137dfbe53d23544b9ba5773167c155490"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_deriv_when.log": {
+          "bytes": 434,
+          "sha256": "b13ad4b568c698c825a2ba7be18ede5b820ae82c38df49359fd7e3405310bd13"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find.cir": "c8845f1c05b901887d5aab8fb281bc4cf2bc64a5c6928198f80fc9498fdf6311"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find.log": {
+          "bytes": 419,
+          "sha256": "c60d4e10a009d1b06b79ebe890bcb05da22a02474c71769f7ff24cd00c90b218"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find_at.cir": "01e6b782bcd87bffa7387b8a3678e7135b01313af4f91adc354a8a80b27f5964"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find_at.log": {
+          "bytes": 434,
+          "sha256": "ceeffaa12e7937d6cd4b6030b0a0a2e997eb0ebc023f7e6ccdcb3f45600b44e0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find_failed.cir": "b81e0c000c91d4291d7afc732ba592303417ab98678689fd8f5de069629d9eb3"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find_failed.log": {
+          "bytes": 493,
+          "sha256": "0c4e9bcd8614eeb1e31f18a038eda840d7fe0f85cfecc63f998a5de2e8d6b41d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_find_when.cir": "1b4f4e53366c12a78a3a8e92106cf2e2b18ba7582127d0f91058e459335738df"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_find_when.log": {
+          "bytes": 430,
+          "sha256": "df60267de15a6ce37faa6d8042ee3bc10cba81d834f2e666c538bc1b52e8eae1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_integ.cir": "9d1b031ba84592615c83713ba4335473a8867e6a2f16adaa4e100b833c206a4e"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_integ.log": {
+          "bytes": 428,
+          "sha256": "1119b3b9322a326814bf21b376d8cbd62cb72e4ce91d04a04d4a11f8cb6a44bb"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_max.cir": "97aac74843112baab5823ab5022ef33623abf3474b27d822dbbe2d2d5ca4889d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_max.log": {
+          "bytes": 442,
+          "sha256": "5711acf350548b8d4268bd83ee07a75074c4ed43014ab3d77e62d86dbd029333"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_min.cir": "f759e61157d0da2aa425a0132824f1b3dd33936837d782e71c57f50a8a037e73"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_min.log": {
+          "bytes": 442,
+          "sha256": "68c0a675f4377fc81c6712684f50d0f5ec8862cf17ac0b762af603c04b0178a0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_pp.cir": "c603fdd357b128859d5eaf2fd36f8ee6cc6a1cccd1650542e3b065b5f065f8b2"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_pp.log": {
+          "bytes": 410,
+          "sha256": "2b91fbb81fce63736863d598f56302ee21239c7c9524feed39ae9b00223aed2f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_rms.cir": "83d4515636f606e55e2301465710effa511ae3f712510caa45f2888959ec9d67"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_rms.log": {
+          "bytes": 442,
+          "sha256": "7174ddd6cda658e448433912e5aa98e36d930fb495174d9ec9f4d4b7a310013e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_avg.cir": "76b941acb715b2884e5711169cbd9b8f2ad185758913bc5a13142d78c06bb641"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_avg.log": {
+          "bytes": 478,
+          "sha256": "2ffad2a109af0d0e4bce486d488c5f92ff19b5ee989fbdf730c86955fdf9065a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_deriv_at.cir": "4397d66679d222c06b37f08879583b20408328521cc0325adb9b8ce03047905d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_deriv_at.log": {
+          "bytes": 505,
+          "sha256": "556f959960d89af89214347904c6c34e3cb7ee1a90d4b41a490b301998d256b7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_deriv_when.cir": "9e01e31172fd63cb3de258202f97cadc71afa1230b343a87f22009bbe61b7723"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_deriv_when.log": {
+          "bytes": 506,
+          "sha256": "f2a0108e1bda42fa4674d7aa1591dbcf672df18fd627d7156321d7dee673967d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find.cir": "5c1092c81b2d3f28fa864eceb6ec284be9275898b266c0630435b8194dd12b0f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find.log": {
+          "bytes": 491,
+          "sha256": "7d00d477f2890e9aa185eeb7931dd282445280c70787369122b110f247186eb3"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find_at.cir": "f6bc6035cb8c4bd8ebce5c1c41cdba34c9d1801b87f2d881bf593fa07d267198"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find_at.log": {
+          "bytes": 500,
+          "sha256": "c3015b6f0d1f7c7fbec3089e72c818a272d30e46631f20acc20466b3cbadfc7d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find_failed.cir": "5131cca0ede2df0d4c78ef923b617884921144cbabbd426d4e6fb237eda54bbb"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find_failed.log": {
+          "bytes": 571,
+          "sha256": "21514665d7b47b90393ccb1e1040d129e3925c856e2652cd3173d71157b4984e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_find_when.cir": "d58962466b5163c00db46967a73400fe0a10fb9cc43354e87660b5b3f3616d73"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_find_when.log": {
+          "bytes": 502,
+          "sha256": "21af5237800cb3311235239ab29c1f86206dc07122c82fff2c0d40284a836317"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_integ.cir": "65e063a28627d5d70e205f7d9462ea0353edde7bf28eabad96a187f79ac90edf"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_integ.log": {
+          "bytes": 486,
+          "sha256": "3462cd1ba4f3ff4b3137e680a1bae99e79163ae39442aa90ab6765abcb2318b4"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_max.cir": "a8ee0a7c79bcb8eb176e20b5ca312e1f2b9a11813970719dd8414dcea32f13aa"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_max.log": {
+          "bytes": 478,
+          "sha256": "5547b93b5be9a9f3be29b2f1864167b1cb8e296dd7eec95beafc1f8ba055112b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_min.cir": "77c8149f12e0489e41dcec631985267c5c089880f75937f66c7656d954da393a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_min.log": {
+          "bytes": 478,
+          "sha256": "a6be93650d4acd65a4778fd65dfad9a2d31c3826bc1a46019f87bce08fc94c7d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_pp.cir": "79c8ebd7e14b6e35c4fbe0dd32cfbe3e6419a969338851832bdd7c1f9d28a7d9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_pp.log": {
+          "bytes": 474,
+          "sha256": "67a0b87a0dd0ab5f9119d4fa8a6712f21ac3bd526877d13dfbbb6d76fbbd014f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_rms.cir": "2afd460f4e00f67ccc1b2a61d9512654c9fe1d810916f787edbfc1be1cb6b09f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_rms.log": {
+          "bytes": 478,
+          "sha256": "545adc9fe6f1077842fc23e145abfbaffa61fa278c6a2c1c6fbc4bdc9d31dba1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_trig_targ.cir": "a31589a064fb03f32b6bc17eb445175de61b8ea69c5e0654e235e8802aa33e78"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_trig_targ.log": {
+          "bytes": 502,
+          "sha256": "8b65310567aee8ed3acc0522f445a67218578d78d2ca7796c2d8adb79b6ae688"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_step_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_step_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_step_when.cir": "b10b788df1c788677fbcf6b6c6718a7ae7f93566b8b2e56b52f380586da17bd8"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_step_when.log": {
+          "bytes": 513,
+          "sha256": "a7ee29820688d6017ba416eae414fd1b25c7173253090168c7595fa36188c44f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_trig_targ.cir": "a627980b7aeaaaf7f99d68f19607f8dbca8f0ff5f71c816c5e6035d55b614162"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_trig_targ.log": {
+          "bytes": 430,
+          "sha256": "65ac0303f5515efa9fdd1bba07c5404c84e742be6a6d97d1b9f31afa9f256251"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_op_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_op_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_op_when.cir": "9b48cae326b08df5dbea49105c05026e2727c845a5bf7fa5737c0cd43a24f56d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_op_when.log": {
+          "bytes": 441,
+          "sha256": "7974f30512f49881d125b0efc56ed9e7cde1547c197a6b2f1c55fc6b31faeafb"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_avg.cir": "71d9c77c1901d261075e43641773e9448568b5eb6617af6b1467cfed1a18f90f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_avg.log": {
+          "bytes": 438,
+          "sha256": "30e99532544555e045ececf14014e711e76e4fb05f6ae77bb1ba476d7361d627"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_deriv_at.cir": "73e841a09cd3b3f2c520381eb4ca6009da57a6cdc2c5ee725b81d468bb3d4872"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_deriv_at.log": {
+          "bytes": 434,
+          "sha256": "02d2b56c346357f3c6f2004975b3e7c144348d7d14f6935e944181a3ff2bcb95"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_deriv_when.cir": "6bb38283dec465f425664ed6992a5c4a6aa9e1aa99d8e31950cf852e4cb70a97"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_deriv_when.log": {
+          "bytes": 434,
+          "sha256": "25b7f3f5f74bfd2b562ef8c269ee9fb78565915571d4193e1ae1a442852d8965"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find.cir": "345b93590c4603e7c5bf0c7efbb49808ad355322c1c5c8fde680da398e565189"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find.log": {
+          "bytes": 411,
+          "sha256": "8548f18b1a5f5a8c08b34c234221130e7bf0047fae31bd7750ac61afc66471aa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find_at.cir": "6c7531b9509a2779612d57aa38cb80c2eca4f7885a158c8b7a420fba9a525758"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find_at.log": {
+          "bytes": 430,
+          "sha256": "34218ce7617edc22efc4eba3b6292793ce3426816e4c79d0b6322b14ad822e92"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find_failed.cir": "88c22124b77fafcb08b72c6077f44c5ed952c842b591b069f780251de4333865"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find_failed.log": {
+          "bytes": 493,
+          "sha256": "371e737e069fd42cb8a36cf5523071e2a50b17e67158687e97c7176b4175abae"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_find_when.cir": "0dc6789fbfe5e356f7e54b9b0bbce775e6443fa757767b756e0969f6f5bde8b9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_find_when.log": {
+          "bytes": 430,
+          "sha256": "5ae85c197e7be6c8ff3e330266d826a77088dff656bee883ef6ff74efddc8f3d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_integ.cir": "68b3c2bd0e9f58a70032ef5a15b62f1222a29b76b10871262e7b7431bb4acf02"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_integ.log": {
+          "bytes": 450,
+          "sha256": "786e0cbfcd4f358ebb6dd124081702789a592cdafc6207bbd7ac609714d12221"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_max.cir": "2ee48365cfce6294a1050a58a37d20952ae1a31a114cbcfda78c46d87980b399"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_max.log": {
+          "bytes": 438,
+          "sha256": "3962a4970a2e2b4f8b2957f4610fc578943fe30e733c66b3e37752113da6a0b2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_min.cir": "ef1329e246fa091156700ce21c25462a52394a94855878e56c4fd1909a990eaa"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_min.log": {
+          "bytes": 438,
+          "sha256": "404cd14e1e9af03ace26af440cb6aab2c2b79dba74388d26a863e6b89a92ad6a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_pp.cir": "deb108c8604061c66d1f154f91d45d84d3c55f9ed3f9a88b8bf5dd78eb4b4aca"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_pp.log": {
+          "bytes": 432,
+          "sha256": "7a624efd5b87b75ba86d0a66753664202175ecbfd7b906ae4c2eddfa61669576"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_rms.cir": "e08a7d175ae9adf947743a275b52d52da864d120246a113ca0d23929280b314c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_rms.log": {
+          "bytes": 438,
+          "sha256": "e03ba6d6d640fdc50915a93ed4110dc78e9554f9be9b8068db59a57618685a7e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_avg": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_avg.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_avg.cir": "5194e6939cd6a295471023d4f0e3cec3fc950b70ee8c848072ffb918c4ca7ff5"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_avg.log": {
+          "bytes": 478,
+          "sha256": "e72e37945bb3a7919b69559aa35ebb2b8003beb0b3efc97c797180a4f9a7e6ae"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_deriv_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_deriv_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_deriv_at.cir": "e5772288db541e6cb8481fc23d9113518044480cc888a0be142205ef027ddc65"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_deriv_at.log": {
+          "bytes": 516,
+          "sha256": "d20b499fc4376ddac446ff4b5d9600352cf7323831a382371f3b9383f670ab58"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_deriv_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_deriv_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_deriv_when.cir": "4984f3f9d4f2d652a0210d67f4220c160b272b2d0c088203f9b87a9e22314f2d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_deriv_when.log": {
+          "bytes": 506,
+          "sha256": "3c4b5a5d8fd8db2deca86f335fe2cbd2ae0dfd146e313d8071b471fd4aadd26f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find.cir": "7e9d522ccc4b628df3827aef47b942050bab7e1d1b01525843ee8d14cb02d2c6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find.log": {
+          "bytes": 502,
+          "sha256": "aedc575df8a7b29ac43bcffb9595fcdeab844d87f1fbb9e49b12373fc67bf449"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find_at": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find_at.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find_at.cir": "b5bb410e43225413a782edac7984c594d235557e5f45757c1d4e61673fa5d2d6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find_at.log": {
+          "bytes": 511,
+          "sha256": "c3d51316e0854cca033ee38579dd46f4a971562df2045a832287eef563b8a14d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find_failed.cir": "24a7dc0163748cb11bc800be886e5f213b5be4cc264df7f8a5ccb5920a8f66db"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find_failed.log": {
+          "bytes": 571,
+          "sha256": "8dd1f4b1e404b0bf4914d84e7b50ffe8de62268703439ad3aab3d7889fa4eb34"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_find_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_find_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_find_when.cir": "1c2b5224a7571fd7e76fd7753c444ff5e1d05f820237d93758c8d29fb265f047"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_find_when.log": {
+          "bytes": 502,
+          "sha256": "aff67078f77b47be7b909465dd74d0cff5df05d8736bf623c1ea8582917e729d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_integ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_integ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_integ.cir": "a89c67191b2da23625d45dc85db01e21009a4c5acdcbdbc1fd777ffc528b9dcf"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_integ.log": {
+          "bytes": 486,
+          "sha256": "a03a26e9b1785b691f7a068946c24ad7e50f428ecbd909e2cf59d6f891f47dd9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_max": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_max.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_max.cir": "8272688a364db2d60aa623bd0ada9bd722b1f4f29620608f2f065c18ffc79a0c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_max.log": {
+          "bytes": 478,
+          "sha256": "b3af195402550d4c5e49d03d87117d504e70f92aa0cb9ac411b46d9524d4582d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_min": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_min.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_min.cir": "74359be13d7dc0922d1f8cb79435f74fa3aaeedbefe8a79517a73749cafcb9a4"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_min.log": {
+          "bytes": 478,
+          "sha256": "6b426f1ee2c308f38696f02f343a45b71d90b56e3ec0518675a354c8836064a7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_pp": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_pp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_pp.cir": "d44c0858adf240c65736ac90723c6b11dfda0ff1ba396647a45ec6dc04e7e9b7"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_pp.log": {
+          "bytes": 474,
+          "sha256": "9f3b22d9e3fa7da7df5b1749e9ca86076d0d311f2e55d5d5c8c53dbe808d90ee"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_rms": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_rms.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_rms.cir": "c2d003e5ce6bed4d180f7fbe0b635cbf772c288e2387c84cc07a5263cc0b42e8"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_rms.log": {
+          "bytes": 478,
+          "sha256": "398d5ae3a501ba6651c74f79df34cf8e11591da63541e4a776387705aade8339"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_trig_targ.cir": "e9f2d015e4881ff78b3e6fa38598618d2ab2b50944819fece08cc7b5b1502f0f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_trig_targ.log": {
+          "bytes": 502,
+          "sha256": "83e555226afc3a0c2f9134a8db960741f30e2bc2206256d8d9ae8ddea738f3ea"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_step_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_step_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_step_when.cir": "649fa1e6d5c42c130ef736c491b7b54e15ee863a5b1c4b9bd5e07ef5116f981d"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_step_when.log": {
+          "bytes": 513,
+          "sha256": "455f4031b361c713903c48c0af53d069fd8c624991c1c440642b9fa6f146ba61"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_trig_targ": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_trig_targ.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_trig_targ.cir": "cfefc9808ec5e10ad0ec3ed75bb5366cda7108aa363af36b74d3f674db274c05"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_trig_targ.log": {
+          "bytes": 430,
+          "sha256": "052f83e9aaa97924dffb0ef93b517132c3f24c30ebd36583d5a32faec5fbff4a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tf_when": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tf_when.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tf_when.cir": "b727a1b791011f6030c0efe01e3eea8382c75edeac6ef5275a85e8aab58fcfa8"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tf_when.log": {
+          "bytes": 441,
+          "sha256": "79afb26297fa7fbe796f1d968c1bc738d138e90fc5de3791aed3d3e7aa8eb88d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_failed.cir": "58e39e1ea7fa765efd31b9d36a29653f1712f1b5ceaa878655b8d5eef24514bc"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_failed.log": {
+          "bytes": 770,
+          "sha256": "a2f343b12629e80d043b34b9b657658a0d66142dad21ac37b9d344cef6a7db3b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_find.cir": "5c9752e8797008c312cb6c5289e8fd79b6839706b7abe5cba853ad1fc044afb1"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_find.log": {
+          "bytes": 380,
+          "sha256": "76f84455f00dca0e00471bd0ea819df67eab3d4b81ba41b40d798d4ac4dc7c6c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_find_failed.cir": "202e782a573d14afdbac2f2f40dfb0bf150f4a76a7eacb2e1911ba3917a8ad02"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_find_failed.log": {
+          "bytes": 506,
+          "sha256": "756f43ea51408a3aee3232344c2aed329daa4c9ba6a79dcba788848d4ecda915"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_failed.cir": "f2a958b9c9d68ebd85aade33b97e374a9d77af50f73e3cd58ec7f0e6d5ac9e0f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_failed.log": {
+          "bytes": 870,
+          "sha256": "6f6cabfeff5f9af652adf956c0f61ff4f8b29ebb71a0a32d5c7102b83e997e71"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_find": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_find.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_find.cir": "7b93bb1f56a9d8b98d679bdc85d06df82a62c723396058b86a0389e88191f04f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_find.log": {
+          "bytes": 586,
+          "sha256": "e779fa76aa1151d7ccab840399ec88cae2167b2a137db98a7f60dcbd3929f8d1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_find_failed": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_find_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_find_failed.cir": "714c98d88cb404096b2d20094f1b0609ec390144d7e977508fe6aca9408732b6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_find_failed.log": {
+          "bytes": 606,
+          "sha256": "c9d967c02848d7ec109412c6c8b9b51c77bcf70eb30d0e1881600b8f357e1baf"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_step_outcomes": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_step_outcomes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_step_outcomes.cir": "3dac0ae2ca55ceabb0e6072951845c7596a5a6be2a22779a1315d52524cdb3ac"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_step_outcomes.log": {
+          "bytes": 3180,
+          "sha256": "a21e9e37faf3b6315044367f71fd07e5049e01e96122a032ebef7cf528e947ee"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_grid_tran_step_value": {
+      "behaviour": "log-meas-grid",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_grid_tran_step_value.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_grid_tran_step_value.cir": "41145be1d0429b4c2b4395cd06531089a2c09c5a59aa976ee93d1710bc5d4810"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_grid_tran_step_value.log": {
+          "bytes": 963,
+          "sha256": "8ebe240d1c0006504f01d790ffcdcdafa42375c153862e59d809e6bca756cd1a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/meas_name_dash": {
       "behaviour": "log-meas-name-punctuation",
       "command": [

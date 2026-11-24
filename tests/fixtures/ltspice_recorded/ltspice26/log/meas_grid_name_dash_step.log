@@ -1,0 +1,3 @@
+C:\recording\meas_grid_name_dash_step.cir(7): syntax error
+.meas tran t-max MAX V(out)
+            ^^^^^^^^^^^^^^^
