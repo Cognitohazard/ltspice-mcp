@@ -460,7 +460,7 @@ inputs = [
 pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.card-grid]
-summary = "The cells of the deck-card grid (at the end of this file) that no other recording fills: a + line after its card, right after the title and first in an included file; a ; inside braces and inside quotes; a .end inside a subcircuit; a .ends naming its subcircuit, naming none, naming another, with none open and missing; a carriage return alone and a form feed between cards; a deck whose file name is not ASCII; and each directive the server acts on, in lower and upper case, in its standard spelling and in the other the code knows. What a cell declares where no recording shows its form is a prediction, which the recording settles."
+summary = "The cells of the deck-card grid (at the end of this file) that no other recording fills: a + line after its card, right after the title and first in an included file; a ; inside braces and inside quotes; a .end inside a subcircuit; a .ends naming its subcircuit, naming none, naming another, with none open and missing; a carriage return alone and a form feed between cards; a deck whose file name is not ASCII; and each directive the server acts on, in lower and upper case, in its standard spelling and in the other the code knows. The recordings settle each form: LTspice 26 stops at a + line first in the deck or in an included file, at a .ends after the .end or with no subcircuit open, at the control cards, at .libfile (which it reads as .lib) and at a form feed, which breaks no line there; LTspice XVII stops where a ; ends a quoted include name and where lines end in a carriage return alone, reads the cards inside a control block, breaks no line at a form feed, and prints no value for a FIND measurement of an .op; both builds read .options, .opt and .params, a ; inside braces as part of the expression, and a deck whose file name is not ASCII."
 model = ["lib/spice_lex.py", "lib/spice_lex_views.py", "lib/spice_lex.py:lex_deck", "lib/spice_lex.py:directive_head", "lib/spice_lex_views.py:directive_args"]
 # Each card whose reading a cell asks about sets one node's voltage in the
 # .op raw, by a resistor or a source no other card touches, so the raw shows
@@ -7189,9 +7189,11 @@ item_axis = "card"
 # build); file, included where the subject's card is in a file the deck
 # includes; read_when, for a directive with a subject, whether the subject is
 # present or absent when the card is read; printed, a measurement whose printing in the log shows the directive was
-# read; not_established, why a cell's reading is a prediction no recording
-# shows; differs, a route that answers otherwise, with the reason.
-item_keys = ["subject", "node", "volts", "reads", "file", "read_when", "printed", "not_established", "differs"]
+# read; unshown, per build, why that build's log shows no reading of a printed
+# cell although it ran the deck; not_established, why a cell's reading is a
+# prediction no recording shows; differs, a route that answers otherwise, with
+# the reason.
+item_keys = ["subject", "node", "volts", "reads", "file", "read_when", "printed", "unshown", "not_established", "differs"]
 behaviours = ["deck-structure", "include-end", "deck-encoding", "card-grid"]
 groups = [
     ["first_line"],
@@ -7359,67 +7361,67 @@ R03 = { ends = "no_name", node = "n03", volts = { "3000" = 3000.0, "absent" = "r
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_plus_first"]
 [grid.deck-card.cell.items]
-R01 = { plus_line = "first_in_deck", node = "n01", volts = { "absent" = 2000.0, "2000" = 1000.0 }, not_established = "No recording shows a + line right after the title: it may continue the title, be read as a card, or stop the run." }
+R01 = { plus_line = "first_in_deck", node = "n01", volts = { "absent" = 2000.0, "2000" = 1000.0 }, reads = { ltspice17 = "absent" }, refused = { ltspice26 = 'LTspice 26 stops at the + line: "Syntax error. + R01 n01 0 2k".' } }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_plus_first_in_include"]
 [grid.deck-card.cell.items]
-R01 = { plus_line = "first_in_include", file = "included", node = "n01", volts = { "absent" = 2000.0, "2000" = 1000.0 }, not_established = "No recording shows a + line first in an included file: it may be read as a card, left out, or stop the run." }
+R01 = { plus_line = "first_in_include", file = "included", node = "n01", volts = { "absent" = 2000.0, "2000" = 1000.0 }, reads = { ltspice17 = "absent" }, refused = { ltspice26 = 'LTspice 26 stops at the first line of the included file: "Expected device instantiation or directive here."' } }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_semicolon_in_braces"]
 [grid.deck-card.cell.items]
-R01 = { comment = "semicolon_in_braces", node = "n01", volts = { "2000" = 2000.0, "absent" = "refused" }, not_established = "No recording shows a ; inside braces: a comment there leaves {1k +1k}, which is 2000, and no comment leaves an expression no build reads." }
+R01 = { comment = "semicolon_in_braces", node = "n01", volts = { "2000" = 2000.0, "absent" = "refused" }, reads = "2000" }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_semicolon_in_quotes"]
 [grid.deck-card.cell.items]
-R01 = { comment = "semicolon_in_quotes", file = "included", node = "n01", volts = { "3000" = 3000.0, "absent" = "refused" }, not_established = "No recording shows a ; inside quotes: the included file is found only if the quoted name is read whole." }
+R01 = { comment = "semicolon_in_quotes", file = "included", node = "n01", volts = { "3000" = 3000.0, "absent" = "refused" }, reads = { ltspice26 = "3000", ltspice17 = "absent" }, refused = { ltspice17 = 'LTspice XVII ends the quoted name at the ; and stops: "Could not open include file card_grid", so the included card is not read.' }, differs = [{ build = "ltspice17", routes = ["lex_deck with its included files", "load_hierarchy"], reason = "LTspice XVII ends the quoted file name at the ; and stops, so it reads no included card; the routes that follow includes read the whole quoted name and the included R01." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_end_in_subckt"]
 [grid.deck-card.cell.items]
-R01 = { end = "inside_subckt", node = "n01", volts = { "1000" = 500.0, "absent" = "refused" }, not_established = "No recording shows a .end inside a subcircuit: it may end the deck there, which leaves no circuit, or end nothing." }
+R01 = { end = "inside_subckt", node = "n01", volts = { "1000" = 500.0, "absent" = "refused" }, reads = { ltspice17 = "1000" }, refused = { ltspice26 = 'LTspice 26 stops at the .ends after the .end: "Expected device instantiation or directive here. .ends cgs".' } }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_ends_differs"]
 [grid.deck-card.cell.items]
-R01 = { ends = "name_differs", node = "n01", volts = { "1000" = 500.0, "absent" = "refused" }, not_established = "No recording shows a .ends naming another subcircuit: it may close the open one or stop the run." }
+R01 = { ends = "name_differs", node = "n01", volts = { "1000" = 500.0, "absent" = "refused" }, reads = "1000" }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_ends_absent"]
 [grid.deck-card.cell.items]
-R01 = { ends = "absent", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a subcircuit left open at .end." }
+R01 = { ends = "absent", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, reads = "1000" }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_ends_orphan"]
 [grid.deck-card.cell.items]
-R01 = { ends = "orphan", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a .ends with no subcircuit open." }
+R01 = { ends = "orphan", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, reads = { ltspice17 = "1000" }, refused = { ltspice26 = 'LTspice 26 stops at the .ends: "Expected device instantiation or directive here. .ends".' } }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_cr"]
 [grid.deck-card.cell.items]
-R01 = { line_ending = "cr", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a deck whose lines end in a carriage return alone." }
+R01 = { line_ending = "cr", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, reads = { ltspice26 = "1000", ltspice17 = "absent" }, refused = { ltspice17 = 'LTspice XVII breaks no line at a carriage return alone, so the whole file is its title: "No lines in input", "No circuit found in source".' }, differs = [{ build = "ltspice17", routes = ["api inspect components", "extract_netlist_info", "inspect components", "lex_deck", "lex_deck with its included files", "lex_for_edit", "load_hierarchy", "netlist_diff.read_deck", "parse_netlist_graph"], reason = "LTspice XVII breaks no line at a carriage return alone, so the whole file is its title and the run stops; lex splits lines with str.splitlines, which breaks there, so every route reads R01, and the reply gives no warning." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_form_feed"]
 [grid.deck-card.cell.items]
-R02 = { line_ending = "form_feed", node = "n01", volts = { "absent" = 1000.0, "1000" = 500.0 }, not_established = "No recording shows a form feed between two cards: it may break the line, as str.splitlines does, or be a space inside R01's line." }
+R02 = { line_ending = "form_feed", node = "n01", volts = { "absent" = 1000.0, "1000" = 500.0 }, reads = { ltspice17 = "absent" }, refused = { ltspice26 = 'LTspice 26 breaks no line at the form feed and stops: "Unknown parameter R01 n01 0 1kR02 n01 0 1k".' }, differs = [{ build = "ltspice17", routes = ["api inspect components", "extract_netlist_info", "inspect components", "lex_deck", "lex_deck with its included files", "lex_for_edit", "load_hierarchy", "netlist_diff.read_deck", "parse_netlist_graph"], reason = "LTspice XVII breaks no line at a form feed and reads no R02; lex splits lines with str.splitlines, which breaks there, so every route reads R02, and the reply gives no warning." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_path_é"]
 [grid.deck-card.cell.items]
-R01 = { path = "non_ascii", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a deck whose file name is not ASCII." }
+R01 = { path = "non_ascii", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, reads = "1000" }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_control_lower"]
 [grid.deck-card.cell.items]
-".control" = { directive = "control", spelling = "standard", case = "lower", subject = "element R02", read_when = "absent", node = "n01", volts = { "read" = 1000.0, "not_read" = 500.0 }, not_established = "No recording shows LTspice meet a .control region: ngspice holds it as script, LTspice may read its cards or stop." }
+".control" = { directive = "control", spelling = "standard", case = "lower", subject = "element R02", read_when = "absent", node = "n01", volts = { "read" = 1000.0, "not_read" = 500.0 }, reads = { ltspice17 = "not_read" }, refused = { ltspice26 = 'LTspice 26 stops at the .control and .endc cards: "Expected device instantiation or directive here."' }, differs = [{ build = "ltspice17", routes = ["api inspect components (element R02)", "extract_netlist_info (element R02)", "inspect components (element R02)", "lex_deck", "lex_deck (element R02)", "lex_deck with its included files", "lex_deck with its included files (element R02)", "lex_for_edit", "lex_for_edit (element R02)", "netlist_diff.read_deck (element R02)", "parse_netlist_graph (element R02)", "spice_validator._instance_terminals (element R02)", "variation targets (element R02)"], reason = "LTspice XVII reports the control cards as unknown and reads the cards between them, so it reads R02; lex_deck keeps a control region opaque for every simulator, so every route reads the control block and no R02, and the reply gives no warning." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_control_upper"]
 [grid.deck-card.cell.items]
-".CONTROL" = { directive = "control", spelling = "standard", case = "upper", subject = "element R02", read_when = "absent", node = "n01", volts = { "read" = 1000.0, "not_read" = 500.0 }, not_established = "No recording shows LTspice meet a .control region: ngspice holds it as script, LTspice may read its cards or stop." }
+".CONTROL" = { directive = "control", spelling = "standard", case = "upper", subject = "element R02", read_when = "absent", node = "n01", volts = { "read" = 1000.0, "not_read" = 500.0 }, reads = { ltspice17 = "not_read" }, refused = { ltspice26 = 'LTspice 26 stops at the .CONTROL and .ENDC cards: "Expected device instantiation or directive here."' }, differs = [{ build = "ltspice17", routes = ["api inspect components (element R02)", "extract_netlist_info (element R02)", "inspect components (element R02)", "lex_deck", "lex_deck (element R02)", "lex_deck with its included files", "lex_deck with its included files (element R02)", "lex_for_edit", "lex_for_edit (element R02)", "netlist_diff.read_deck (element R02)", "parse_netlist_graph (element R02)", "spice_validator._instance_terminals (element R02)", "variation targets (element R02)"], reason = "LTspice XVII reports the control cards as unknown and reads the cards between them, so it reads R02; lex_deck keeps a control region opaque for every simulator, so every route reads the control block and no R02, and the reply gives no warning." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_save_lower"]
@@ -7434,12 +7436,12 @@ cases = ["deck/card_grid_save_upper"]
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_libfile_lower"]
 [grid.deck-card.cell.items]
-".libfile" = { directive = "lib", spelling = "variant", case = "lower", node = "n01", volts = { "read" = 9000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .libfile, which the server's INCLUDE_HEADS names." }
+".libfile" = { directive = "lib", spelling = "variant", case = "lower", node = "n01", volts = { "read" = 9000.0, "not_read" = "refused" }, reads = { ltspice17 = "read" }, refused = { ltspice26 = 'LTspice 26 reads .libfile as .lib naming the file "file card_grid_libfile.lib" and stops: "File not found."' } }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_libfile_upper"]
 [grid.deck-card.cell.items]
-".LIBFILE" = { directive = "lib", spelling = "variant", case = "upper", node = "n01", volts = { "read" = 9000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .libfile, which the server's INCLUDE_HEADS names." }
+".LIBFILE" = { directive = "lib", spelling = "variant", case = "upper", node = "n01", volts = { "read" = 9000.0, "not_read" = "refused" }, reads = { ltspice17 = "read" }, refused = { ltspice26 = 'LTspice 26 reads .LIBFILE as .lib naming the file "file card_grid_libfile.lib" and stops: "File not found."' } }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_directives_lower"]
@@ -7453,8 +7455,8 @@ at = { spelling = "standard", case = "lower" }
 ".global" = { directive = "global", node = "n05", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read" }
 ".include" = { directive = "include", node = "n06", volts = { "read" = 6000.0, "not_read" = "refused" }, reads = "read" }
 ".lib" = { directive = "lib", node = "n07", volts = { "read" = 8000.0, "not_read" = "refused" }, reads = "read" }
-".meas" = { directive = "meas", subject = "meas m08", printed = "m08", reads = "read" }
-".options" = { directive = "options", node = "n09", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice's tnom option: a resistor of tc1=0.01 at 27 degrees is 1100 ohms if tnom is 17." }
+".meas" = { directive = "meas", subject = "meas m08", printed = "m08", reads = { ltspice26 = "read" }, unshown = { ltspice17 = "LTspice XVII prints no line for a FIND measurement of a stepped .op, so its log shows nothing of the card." } }
+".options" = { directive = "options", node = "n09", volts = { "read" = 1100.0, "not_read" = 1000.0 }, reads = "read" }
 ".step" = { directive = "step", node = "n10", volts = { "read" = 2000.0, "not_read" = 1000.0 }, reads = "read" }
 ".end" = { directive = "end", subject = "element R12", read_when = "absent", node = "n11", volts = { "read" = 1000.0, "not_read" = 500.0 }, reads = "read" }
 
@@ -7470,8 +7472,8 @@ at = { spelling = "standard", case = "upper" }
 ".GLOBAL" = { directive = "global", node = "n05", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read" }
 ".INCLUDE" = { directive = "include", node = "n06", volts = { "read" = 6000.0, "not_read" = "refused" }, reads = "read" }
 ".LIB" = { directive = "lib", node = "n07", volts = { "read" = 8000.0, "not_read" = "refused" }, reads = "read" }
-".MEAS" = { directive = "meas", subject = "meas m08", printed = "m08", reads = "read" }
-".OPTIONS" = { directive = "options", node = "n09", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice's tnom option: a resistor of tc1=0.01 at 27 degrees is 1100 ohms if tnom is 17." }
+".MEAS" = { directive = "meas", subject = "meas m08", printed = "m08", reads = { ltspice26 = "read" }, unshown = { ltspice17 = "LTspice XVII prints no line for a FIND measurement of a stepped .op, so its log shows nothing of the card." } }
+".OPTIONS" = { directive = "options", node = "n09", volts = { "read" = 1100.0, "not_read" = 1000.0 }, reads = "read" }
 ".STEP" = { directive = "step", node = "n10", volts = { "read" = 2000.0, "not_read" = 1000.0 }, reads = "read" }
 ".END" = { directive = "end", subject = "element R12", read_when = "absent", node = "n11", volts = { "read" = 1000.0, "not_read" = 500.0 }, reads = "read" }
 
@@ -7479,19 +7481,19 @@ at = { spelling = "standard", case = "upper" }
 cases = ["deck/card_grid_directive_variants_lower"]
 at = { spelling = "variant", case = "lower" }
 [grid.deck-card.cell.items]
-".params" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .params, which the deck comparison takes for .param." }
+".params" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read", differs = [{ build = "ltspice26", routes = ["ParamCard (param pp)", "lex_deck", "lex_deck (param pp)", "lex_deck with its included files", "lex_deck with its included files (param pp)", "lex_for_edit", "lex_for_edit (param pp)", "variation targets (param pp)"], reason = "Both LTspice builds read .params as .param; the lexer reads it as an unknown directive, so no route holds its parameter." }, { build = "ltspice17", routes = ["ParamCard (param pp)", "lex_deck", "lex_deck (param pp)", "lex_deck with its included files", "lex_deck with its included files (param pp)", "lex_for_edit", "lex_for_edit (param pp)", "variation targets (param pp)"], reason = "Both LTspice builds read .params as .param; the lexer reads it as an unknown directive, so no route holds its parameter." }] }
 ".inc" = { directive = "include", node = "n02", volts = { "read" = 7000.0, "not_read" = "refused" }, reads = "read" }
-".measure" = { directive = "meas", subject = "meas m03", printed = "m03", reads = "read" }
-".opt" = { directive = "options", node = "n04", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice read .opt, which the ngspice driver takes for .options." }
+".measure" = { directive = "meas", subject = "meas m03", printed = "m03", reads = { ltspice26 = "read" }, unshown = { ltspice17 = 'LTspice XVII echoes the card, which shows it read a measurement, and prints "FIND can not be evaluated over an interval" for a FIND measurement of an .op, so its log prints no value.' } }
+".opt" = { directive = "options", node = "n04", volts = { "read" = 1100.0, "not_read" = 1000.0 }, reads = "read", differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit"], reason = "Both LTspice builds read .opt as .options; the lexer names the card .opt, so a route that asks which card is .options does not count it, and the reply gives no warning." }, { build = "ltspice17", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit"], reason = "Both LTspice builds read .opt as .options; the lexer names the card .opt, so a route that asks which card is .options does not count it, and the reply gives no warning." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/card_grid_directive_variants_upper"]
 at = { spelling = "variant", case = "upper" }
 [grid.deck-card.cell.items]
-".PARAMS" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .params, which the deck comparison takes for .param." }
+".PARAMS" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read", differs = [{ build = "ltspice26", routes = ["ParamCard (param pp)", "lex_deck", "lex_deck (param pp)", "lex_deck with its included files", "lex_deck with its included files (param pp)", "lex_for_edit", "lex_for_edit (param pp)", "variation targets (param pp)"], reason = "Both LTspice builds read .params as .param; the lexer reads it as an unknown directive, so no route holds its parameter." }, { build = "ltspice17", routes = ["ParamCard (param pp)", "lex_deck", "lex_deck (param pp)", "lex_deck with its included files", "lex_deck with its included files (param pp)", "lex_for_edit", "lex_for_edit (param pp)", "variation targets (param pp)"], reason = "Both LTspice builds read .params as .param; the lexer reads it as an unknown directive, so no route holds its parameter." }] }
 ".INC" = { directive = "include", node = "n02", volts = { "read" = 7000.0, "not_read" = "refused" }, reads = "read" }
-".MEASURE" = { directive = "meas", subject = "meas m03", printed = "m03", reads = "read" }
-".OPT" = { directive = "options", node = "n04", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice read .opt, which the ngspice driver takes for .options." }
+".MEASURE" = { directive = "meas", subject = "meas m03", printed = "m03", reads = { ltspice26 = "read" }, unshown = { ltspice17 = 'LTspice XVII echoes the card, which shows it read a measurement, and prints "FIND can not be evaluated over an interval" for a FIND measurement of an .op, so its log prints no value.' } }
+".OPT" = { directive = "options", node = "n04", volts = { "read" = 1100.0, "not_read" = 1000.0 }, reads = "read", differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit"], reason = "Both LTspice builds read .opt as .options; the lexer names the card .opt, so a route that asks which card is .options does not count it, and the reply gives no warning." }, { build = "ltspice17", routes = ["lex_deck", "lex_deck with its included files", "lex_for_edit"], reason = "Both LTspice builds read .opt as .options; the lexer names the card .opt, so a route that asks which card is .options does not count it, and the reply gives no warning." }] }
 
 # ---------------------------------------------------------------- the element-node grid
 

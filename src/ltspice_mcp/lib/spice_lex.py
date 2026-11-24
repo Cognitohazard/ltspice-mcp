@@ -37,7 +37,10 @@ from ltspice_mcp.lib.format import is_scaled_number
 if TYPE_CHECKING:
     from ltspice_mcp.lib.simulator_build import Producer
 
-#: Directive heads whose first argument is a file path.
+#: Directive heads whose first argument is a file path. LTspice XVII reads
+#: ``.libfile`` as an include; LTspice 26 reads it as ``.lib`` followed by
+#: the word ``file`` and stops on the file it names
+#: (``deck/card_grid_libfile_lower``).
 INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
 
 CardKind = Literal[
@@ -882,7 +885,10 @@ def _classify_line(stripped: str) -> CardKind:
 # Directive pairs whose contents are NOT netlist cards, as opener → closer.
 # Only ``.control`` qualifies in these dialects: an ``.if``/``.endif`` body IS
 # made of netlist cards and must stay classified. Named so the next dialect that
-# brings an opaque region has somewhere obvious to declare it.
+# brings an opaque region has somewhere obvious to declare it. LTspice has no
+# such region: LTspice 26 stops at the control cards, and LTspice XVII reports
+# them as unknown and reads the cards between them
+# (``deck/card_grid_control_lower``).
 _OPAQUE_REGIONS: dict[str, str] = {".control": ".endc"}
 
 
@@ -1128,7 +1134,10 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
     end the deck or take a ``+`` line. ``lex_deck`` is the reading of a
     deck that uses it.
     """
-    # ``splitlines(keepends=True)`` preserves CRLF/LF for round-trip.
+    # ``splitlines(keepends=True)`` preserves CRLF/LF for round-trip. It also
+    # breaks at a carriage return alone, where LTspice 26 breaks a line and
+    # LTspice XVII does not, and at a form feed, where neither build does
+    # (``deck/card_grid_cr``, ``deck/card_grid_form_feed``).
     lines = netlist_text.splitlines(keepends=True)
     cards: list[SpiceCard] = []
     warnings: list[str] = []
