@@ -39,6 +39,7 @@ import random
 from dataclasses import dataclass
 from typing import Literal
 
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.format import plain_number
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -50,7 +51,8 @@ from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     ModelCard,
-    instances_by_ref,
+    RepeatedReference,
+    repeated_references,
 )
 
 logger = logging.getLogger(__name__)
@@ -455,13 +457,23 @@ def inject_card_before_end(netlist_text: str, card: str, *, deck: bool) -> str:
     return emit(cards)
 
 
-def _top_level_instances(cards: list[SpiceCard]) -> dict[str, SpiceCard]:
-    """The instance cards by lowercased reference among ``cards``, the ones a
-    file's ``lex_for_edit`` reads (none after its ``.END``): not one inside a
+def _top_level_instances(cards: list[SpiceCard]) -> list[SpiceCard]:
+    """The instance cards among ``cards``, the ones a file's ``lex_for_edit``
+    reads (none after its ``.END``), in deck order: not one inside a
     ``.subckt`` body, which is another device that only shares the name. The
     extraction and the rewrite below both read this, so the card rewritten is
     the card measured."""
-    return instances_by_ref(cards, scope=())
+    return [c for c in cards if c.kind == "instance" and c.name and not c.scope]
+
+
+def _repeated_at_top(cards: list[SpiceCard]) -> dict[str, RepeatedReference]:
+    """The top-level references more than one of ``cards`` carries, by folded
+    name (``spice_lex_views.repeated_references``)."""
+    return {
+        fold_name(repeat.reference): repeat
+        for repeat in repeated_references(cards)
+        if not repeat.scope
+    }
 
 
 def rewrite_instance_model(
@@ -482,7 +494,14 @@ def rewrite_instance_model(
     trailing params. Raises ``ValueError`` if the instance isn't found.
     """
     lexed = lex_for_edit(netlist_text, deck=deck)
-    card = _top_level_instances(lexed.read).get(instance_ref.lower())
+    key = fold_name(instance_ref)
+    if repeat := _repeated_at_top(lexed.read).get(key):
+        raise ValueError(
+            f"Instance {instance_ref!r} names more than one card: {repeat.describe()}"
+        )
+    card = next(
+        (c for c in _top_level_instances(lexed.read) if fold_name(c.name or "") == key), None
+    )
     if card is None:
         raise ValueError(f"Instance {instance_ref!r} not found in netlist")
     view = InstanceLine.from_card(card)
@@ -538,8 +557,23 @@ def extract_mosfet_instances(netlist_text: str, *, deck: bool) -> TopLevelMosfet
     """
     sized: list[InstanceGeometry] = []
     unsized: list[UnsizedInstance] = []
-    for c in _top_level_instances(lex_for_edit(netlist_text, deck=deck).read).values():
+    read = lex_for_edit(netlist_text, deck=deck).read
+    # A draw is keyed by reference, so one that more than one card carries is
+    # listed once, as a device this path cannot size.
+    repeated = _repeated_at_top(read)
+    unreported = dict(repeated)
+    for c in _top_level_instances(read):
         if not c.name or c.name[:1].upper() != "M":
+            continue
+        if (key := fold_name(c.name)) in repeated:
+            if repeat := unreported.pop(key, None):
+                unsized.append(
+                    UnsizedInstance(
+                        c.name,
+                        f"its reference names more than one card ({repeat.describe()}); "
+                        "give each card its own reference",
+                    )
+                )
             continue
         view = InstanceLine.from_card(c)
         if view.model is None:

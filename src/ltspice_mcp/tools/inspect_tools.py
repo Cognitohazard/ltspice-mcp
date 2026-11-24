@@ -163,6 +163,7 @@ from ltspice_mcp.lib.continuation import call_to_continue
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.hierarchy import (
@@ -230,8 +231,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     SubcktCard,
     global_names,
-    instances_by_ref,
-    instances_by_scope,
+    repeated_references,
 )
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -241,6 +241,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_DIFFERENCE_ENTRIES,
     LTSPICE_WINDOW_PROPERTIES,
     PRINTED_ONCE_SCHEMA,
+    REPEATED_REFERENCE_SCHEMA,
     RO_ANNOTATIONS,
     UNREADABLE_SCHEMA,
     WARNINGS_SCHEMA,
@@ -1525,7 +1526,7 @@ _NODES_LISTED = 8
 
 def _netlist_node_from_at(
     at: str | list[int],
-    nodes_of: dict[str, list[str]],
+    nodes_of: Sequence[tuple[SpiceCard, list[str]]],
     *,
     cards: Sequence[SpiceCard],
     unread: int,
@@ -1539,7 +1540,9 @@ def _netlist_node_from_at(
     of the deck's cards is refused, unless a node is called that.
 
     ``nodes_of`` holds the nodes of each of the deck's own cards that read
-    (``unread`` did not), and ``cards`` all of the deck's cards. A name none of
+    (``unread`` did not), in deck order, and ``cards`` all of the deck's cards.
+    ``REF.<terminal>`` for a reference more than one card carries is refused
+    with their lines, never answered from one of them. A name none of
     them is on is refused, as a sheet refuses a name none of its labels
     carries (:func:`handle_trace_net`): answered, it would be an empty net,
     which reads as a node with nothing on it. Ground is always a node.
@@ -1551,12 +1554,26 @@ def _netlist_node_from_at(
             "(at='net:NAME' or at='REF.<terminal>')",
         )
     spellings = _node_spellings(nodes_of)
+
+    def card_nodes(ref: str) -> list[str] | None:
+        key = fold_name(ref)
+        same = [(card, nodes) for card, nodes in nodes_of if fold_name(card.name or "") == key]
+        if len(same) > 1:
+            lines = ", ".join(str(card.line_start) for card, _ in same)
+            raise _QueryError(
+                "invalid_at",
+                f"'{ref}' is the reference of {len(same)} cards of this netlist (lines "
+                f"{lines}), so a terminal of it names no one node: give each card its "
+                f"own reference, or use at='net:NAME'",
+            )
+        return same[0][1] if same else None
+
     if at.startswith("net:"):
         return _deck_node(at[4:], spellings, cards=cards, unread=unread, reader=reader)
     if "." in at:
         ref, _, term = at.rpartition(".")
         if term.isdigit():
-            nodes = nodes_of.get(ref.lower())
+            nodes = card_nodes(ref)
             if nodes is None:
                 raise _QueryError("not_found", f"component '{ref}' not found in netlist")
             index = int(term)
@@ -1566,7 +1583,7 @@ def _netlist_node_from_at(
                     f"terminal {index} out of range for '{ref}' ({len(nodes)} terminals)",
                 )
             return nodes[index - 1]
-        nodes = nodes_of.get(ref.lower())
+        nodes = card_nodes(ref)
         if nodes is not None and name_key(at) not in spellings:
             raise _QueryError(
                 "invalid_at",
@@ -1578,11 +1595,11 @@ def _netlist_node_from_at(
     return _deck_node(at, spellings, cards=cards, unread=unread, reader=reader)
 
 
-def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
+def _node_spellings(nodes_of: Sequence[tuple[SpiceCard, list[str]]]) -> dict[str, str]:
     """The nodes of the deck's own cards by name key, each as the deck first
     spells it, in the order the cards give them."""
     spellings: dict[str, str] = {}
-    for card_nodes in nodes_of.values():
+    for _card, card_nodes in nodes_of:
         for node in card_nodes:
             spellings.setdefault(name_key(node), node)
     return spellings
@@ -1763,18 +1780,19 @@ def _net_netlist_payload(
     without case (the ``node-name-case`` recording) and with ``gnd`` as node 0.
     """
     lexed = lex_deck(text)
-    by_ref = instances_by_ref(lexed.cards, scope=())
-    parsed: dict[str, InstanceLine] = {}
-    nodes_of: dict[str, list[str]] = {}
+    parsed: list[InstanceLine] = []
+    nodes_of: list[tuple[SpiceCard, list[str]]] = []
     unparseable = 0
-    for ref_lower, card in by_ref.items():
+    for card in lexed.cards:
+        if card.kind != "instance" or not card.name or card.scope:
+            continue
         try:
             line = InstanceLine.from_card(card)
         except Exception:
             unparseable += 1
             continue
-        parsed[ref_lower] = line
-        nodes_of[ref_lower] = line.nodes
+        parsed.append(line)
+        nodes_of.append((card, line.nodes))
 
     node = _netlist_node_from_at(
         at, nodes_of, cards=lexed.cards, unread=unparseable, reader=reader
@@ -1782,16 +1800,20 @@ def _net_netlist_payload(
     node_key = name_key(node)
     members: list[dict[str, Any]] = []
     spellings = {node}
-    for line in parsed.values():
+    for line in parsed:
         for i, n in enumerate(line.nodes, start=1):
             if name_key(n) == node_key:
                 members.append({"reference": line.ref, "terminal": i})
                 spellings.add(n)
+    # A stable sort: the members of one repeated reference stay in deck order.
     members.sort(key=lambda m: (m["reference"], m["terminal"]))
     payload: dict[str, Any] = {
         "node": node,
         "members": members,
         "unparseable_cards": unparseable,
+        "repeated_references": [
+            repeat.as_dict() for repeat in repeated_references(lexed.cards) if not repeat.scope
+        ],
     }
     warnings = _lex_warnings(lexed)
     if node_key == GROUND and any(fold_case(spelling) == "gnd" for spelling in spellings):
@@ -1825,6 +1847,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
                 "total_members": page["total"],
                 "returned": page["returned"],
                 "unparseable_cards": payload["unparseable_cards"],
+                "repeated_references": payload["repeated_references"],
                 # Every page carries them, as for components: they are about
                 # the read every page comes from.
                 **({"warnings": payload["warnings"]} if "warnings" in payload else {}),
@@ -1925,8 +1948,12 @@ def _check_prefix(prefix: str | None) -> str | None:
 
 def _components_netlist_payload(
     text: str, prefix: str | None, detail: str
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """The component rows, plus the lexer's notes about how the deck read.
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, object]]]:
+    """The component rows, the lexer's notes about how the deck read, and the
+    references more than one card of a scope carries (``repeated_references``).
+
+    There is one row per card, so a repeated reference is listed once for each
+    card that carries it, in deck order.
 
     ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns. The
     rows are the cards the simulator reads (``spice_lex.lex_deck``), as the
@@ -1934,7 +1961,7 @@ def _components_netlist_payload(
     The components are the top level's cards; a card of a ``.subckt`` body is
     listed after them, under the body it belongs to (``subcircuit``, the
     enclosing names outermost first), and a reference is one card only inside
-    its scope (``instances_by_scope``). A name defined more than once in one
+    its scope. A name defined more than once in one
     scope gives each body one scope, so which card a reference names there is
     not known: those bodies' cards are left out, and a warning names them.
     """
@@ -1945,7 +1972,7 @@ def _components_netlist_payload(
     definitions = subckt_definitions(cards, AS_WRITTEN)
     read = (c for i, c in enumerate(cards) if i not in definitions.aside)
     rows: list[dict[str, Any]] = []
-    for card in (c for refs in instances_by_scope(read).values() for c in refs.values()):
+    for card in (c for c in read if c.kind == "instance"):
         ref = card.name
         if not ref or (prefix is not None and not matches_prefix(ref, prefix)):
             continue
@@ -1966,6 +1993,7 @@ def _components_netlist_payload(
                 if repeated := line.repeated_params():
                     entry["repeated_params"] = repeated
         rows.append(entry)
+    # A stable sort: the cards of one repeated reference stay in deck order.
     rows.sort(key=lambda r: (r.get("subcircuit", []), r["reference"]))
     unlisted = [
         f"subcircuit {'/'.join((*cards[answer.members[0]].scope, answer.name))} is defined "
@@ -1974,7 +2002,8 @@ def _components_netlist_payload(
         f"delete all but one definition of {answer.name}."
         for answer in definitions.unsettled.values()
     ]
-    return rows, _lex_warnings(lexed) + unlisted
+    repeats = [repeat.as_dict() for repeat in repeated_references(cards)]
+    return rows, _lex_warnings(lexed) + unlisted, repeats
 
 
 def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:
@@ -2011,6 +2040,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     identity = {"path": str(path), "prefix": prefix, "detail": detail}
     digest: str | None = None
     lex_notes: list[str] = []
+    repeats: list[dict[str, object]] = []
 
     if _route_circuit_kind(path, "components") == "asc":
         sheet, digest = await _sheet_of_file(path, state)
@@ -2029,7 +2059,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
         try:
-            all_rows, lex_notes = await asyncio.to_thread(
+            all_rows, lex_notes, repeats = await asyncio.to_thread(
                 _components_netlist_payload, text, prefix, detail
             )
         except SpiceLexError as exc:
@@ -2046,6 +2076,8 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     }
     if digest is not None:
         data["sha256"] = digest
+    # Every page carries them, as it carries the warnings below.
+    data["repeated_references"] = repeats
     if lex_notes:
         # Every page of this deck carries them: they describe the read the rows
         # came out of, and a caller who pages past the first one is reading the
@@ -3222,6 +3254,16 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                                     "What the results read say of themselves: partial_raw "
                                     "for a stopped case's kept raw."
                                 ),
+                            },
+                            "repeated_references": {
+                                "type": "array",
+                                CUT: NEVER,
+                                "description": (
+                                    "A netlist's references that more than one card of "
+                                    "one scope carries, each with the first line of every "
+                                    "such card and, inside a body, its subcircuit."
+                                ),
+                                "items": REPEATED_REFERENCE_SCHEMA,
                             },
                             "section": {
                                 "anyOf": [

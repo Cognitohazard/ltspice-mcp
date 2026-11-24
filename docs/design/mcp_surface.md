@@ -2287,6 +2287,10 @@ directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
+A reference that more than one card of one scope carries (compared under
+`fold_name`) is not paired on either side, since which card stands for which
+is not known; `repeated_references` names each with its `side`, its lines and,
+inside a definition, its `subcircuit`, and `equivalent` is false.
 In either mode `values_read_otherwise` summarizes the values of each side's
 files that an LTspice build the session may run reads as another number than
 the comparison does, one summary per build and kind of reading (see
@@ -2303,7 +2307,8 @@ own. An entry inside a definition says which: a string ends in
 two elements. It does not compare nodes, and its `not_compared` says so in the
 data; it also names a definition either deck gives more than once in one
 scope, which it does not compare on either side (which of them stands for
-which is not known; `equivalent` is then null), and says that included files'
+which is not known; `equivalent` is then null), likewise a reference more than
+one card of one scope carries, and says that included files'
 cards are not read when a deck includes one. The modes differ on a deck they
 cannot read.
 `equivalence` returns a compare failure with no `comparison` block, while
@@ -2495,7 +2500,10 @@ cursors where listed:
     pin name or, failing that,
     the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number,
     and a name after one of the deck's references (`M1.D`) is refused as
-    `invalid_at` unless a node is called that.
+    `invalid_at` unless a node is called that. A reference more than one
+    of the deck's own cards carries is refused as `invalid_at`, naming its
+    lines; a net query lists every such card as a member and names the
+    repeat in `repeated_references`.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
     name on a netlist. A name no label of the sheet carries, or no card of
     the deck's own is on, is refused on both as `not_found` rather
@@ -2511,8 +2519,10 @@ cursors where listed:
     reads, as the net query's members are: neither the deck's first line,
     its title, nor a card after `.end`. They are the top level's cards; a
     card of a `.subckt` body follows them with `subcircuit`, the names of
-    the bodies it sits in, outermost first, and a reference is one card
-    only within its scope. The cards of a subcircuit defined more than
+    the bodies it sits in, outermost first. A reference given to more
+    than one card of one scope (compared under `fold_name`) is listed once
+    per card, and `repeated_references` names each such reference with
+    its lines and, inside a body, its `subcircuit`. The cards of a subcircuit defined more than
     once in one scope are left out, since no reference there names one
     card, and a warning names it. On a netlist, `detail: "full"` adds each card's
     `nodes`, `model` and `params`, keyed as written (a key given twice in
@@ -2844,6 +2854,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
 | `subckt-defined-twice` | blocking | a subcircuit name defined more than once at the top level of the deck, which the reader refuses: LTspice 26 (recorded). `verify_circuit`'s `syntax` check reports the same as `subckt_defined_twice`. ngspice (the first) and LTspice XVII (the last of two) run a definition, which every check reads, and get no finding |
 | `subckt-defined-twice-unrecorded` | warning | a subcircuit name defined more than once in one scope, where what the reader does is not recorded: an LTspice build other than 26 and XVII, one whose build is not known yet, QSPICE, Xyce, or for LTspice two definitions inside one subcircuit or more than two of one name. No check reads any of the bodies; `verify_circuit` reports the same as `subckt_defined_twice_unrecorded`. A definition repeated across the deck and an include is not linted |
+| `repeated-reference` | warning | one reference, compared under `fold_name`, on more than one instance card of one scope (the top level, or one `.subckt` body; the same reference in two scopes is not a repeat); the finding names the reference, its lines and its scope. Both recorded LTspice builds stop on two top-level cards of one spelling (`log/err_duplicate_name`); a repeat inside a body, one in two spellings and what ngspice does are not recorded, so the rule says nothing about them. `verify_circuit` reports the same as `shared_reference`, and Monte Carlo mismatch leaves a MOSFET of such a reference out as unsized, naming its lines |
 | `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out. On a part, `.subckt` header or `.global` its words count as connected and defined nodes and names, so no rule reports something on a guess about it; a variation or random rule on a part, `.model` or `.param` name a card like it may declare is refused (`ambiguous_target`). It covers the deck and its staged includes, and an include card in a live include, for which `model-missing` then says nothing. What a simulator does with such a card is recorded only for the `.meas` of `meas-unclosed-paren-ltspice`; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |

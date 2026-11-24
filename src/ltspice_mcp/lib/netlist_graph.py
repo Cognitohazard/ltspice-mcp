@@ -122,7 +122,13 @@ from ltspice_mcp.lib.spice_lex import (
     unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import without_added_x, without_section_sign
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    RepeatedReference,
+    SubcktCard,
+    global_names,
+    repeated_references,
+)
 from ltspice_mcp.lib.stored_values import (
     OtherReading,
     StoredDeck,
@@ -352,6 +358,9 @@ class NetlistGraph:
     #: Each value of the files read that a recorded LTspice build reads as
     #: another number than the graph holds (``stored_values``).
     readings: tuple[OtherReading, ...] = ()
+    #: Each reference more than one instance card of one scope of the deck's
+    #: own text carries (``spice_lex_views.repeated_references``).
+    repeated_references: tuple[RepeatedReference, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -529,7 +538,8 @@ class GraphComparison:
     """The structured result of :func:`compare_graphs`.
 
     ``equivalent`` is the single-glance verdict: structurally isomorphic *and*
-    no component, value, parameter, anchor, or arity difference.
+    no component, value, parameter, anchor, or arity difference, and no
+    reference on more than one card, whose cards are not compared.
     ``structurally_equivalent`` is the wiring-only verdict (the 1-WL histogram
     check, ground pinned, anchor labels ignored) — it can be True while
     ``equivalent`` is False when only values or anchor placement differ.
@@ -558,6 +568,11 @@ class GraphComparison:
     unresolved_subckts: list[UnresolvedSubckt] = field(default_factory=list)
     duplicate_subckts: list[DuplicateSubckt] = field(default_factory=list)
     duplicate_params: list[DuplicateParam] = field(default_factory=list)
+    #: Each reference more than one card of one scope carries, with its side
+    #: (``NetlistGraph.repeated_references``). Which card stands for which on
+    #: the other side is not known, so no card of it is compared by reference
+    #: and ``equivalent`` is not claimed.
+    repeated_references: list[tuple[str, RepeatedReference]] = field(default_factory=list)
     #: The subcircuit instances both sides expanded, paired (``paired_calls``):
     #: which definition stands for which, for the directive comparison to read.
     #: Not part of the reply.
@@ -605,6 +620,9 @@ class GraphComparison:
                     "values": list(d.values),
                 }
                 for d in self.duplicate_params
+            ],
+            "repeated_references": [
+                {**repeat.as_dict(), "side": side} for side, repeat in self.repeated_references
             ],
         }
 
@@ -817,6 +835,7 @@ def parse_netlist_graph(
         directives=directives,
         definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
         readings=tuple(registry.readings),
+        repeated_references=tuple(repeated_references(cards)),
     )
 
 
@@ -1452,8 +1471,19 @@ def compare_graphs(
     result.anchor_violations.extend(_check_anchors(ref_flat, cand_flat, colors, anchor_set))
 
     # --- per-component diffs, by reference-name matching ----------------------
-    ref_by_ref = {canon_ref(c.ref): c for c in ref_flat.components}
-    cand_by_ref = {canon_ref(c.ref): c for c in cand_flat.components}
+    for side, outcome in (("reference", ref), ("candidate", cand)):
+        result.repeated_references.extend((side, r) for r in outcome.graph.repeated_references)
+    # A path more than one leaf carries (a repeated reference, at the top level
+    # or in a body each instance expands) pairs with nothing: which leaf stands
+    # for which is not known.
+    shared = {
+        key
+        for flat in (ref_flat, cand_flat)
+        for key, count in Counter(canon_ref(c.ref) for c in flat.components).items()
+        if count > 1
+    }
+    ref_by_ref = {k: c for c in ref_flat.components if (k := canon_ref(c.ref)) not in shared}
+    cand_by_ref = {k: c for c in cand_flat.components if (k := canon_ref(c.ref)) not in shared}
     cand_by_ref, paired = rekey_across_added_x(ref_by_ref, cand_by_ref)
     result.renamed = _renamed_instances(ref_by_ref, cand_by_ref, paired)
 
@@ -1506,6 +1536,7 @@ def compare_graphs(
         and not result.node_partition_mismatches
         and not result.anchor_violations
         and not result.arity_errors
+        and not result.repeated_references
     )
     return result
 

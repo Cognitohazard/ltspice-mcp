@@ -207,6 +207,12 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "repeated-reference",
+        "V1 in 0 1\nR1 in 0 1k\nR1 in 0 2k\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "unreadable-card",
         "V1 in 0 1\nR1 in 0 {1k\n.op\n.end\n",
         None,

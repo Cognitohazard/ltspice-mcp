@@ -23,6 +23,7 @@ from ltspice_mcp.errors import NetlistError, UnreadableCardError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value, plain_number
 from ltspice_mcp.lib.spice_lex import (
+    AS_WRITTEN,
     MEAS_ANALYSIS_TOKENS,
     SpiceCard,
     SpiceLexError,
@@ -32,6 +33,7 @@ from ltspice_mcp.lib.spice_lex import (
     copies_by_name,
     directive_head,
     strip_matching_quotes,
+    subckt_definitions,
     tokenize_body,
 )
 
@@ -1359,6 +1361,60 @@ def instances_by_ref(
     """Lowercased ``ref`` → instance-card lookup of one scope
     (:func:`instances_by_scope`)."""
     return instances_by_scope(cards).get(scope, {})
+
+
+@dataclass(frozen=True)
+class RepeatedReference:
+    """One reference that more than one instance card of one scope carries.
+
+    ``scope`` is ``()`` at the top level, else the ``.subckt`` bodies outermost
+    first; ``reference`` is the name as its first card writes it, and ``lines``
+    the first line of each card that carries it, in deck order; ``first`` is
+    the first of those cards.
+    """
+
+    scope: tuple[str, ...]
+    reference: str
+    lines: tuple[int, ...]
+    first: SpiceCard = field(compare=False, repr=False)
+
+    def as_dict(self) -> dict[str, object]:
+        out: dict[str, object] = {"reference": self.reference, "lines": list(self.lines)}
+        if self.scope:
+            out["subcircuit"] = list(self.scope)
+        return out
+
+    def describe(self) -> str:
+        where = f" in subcircuit {'/'.join(self.scope)}" if self.scope else ""
+        return f"{self.reference}{where} is on lines {', '.join(map(str, self.lines))}"
+
+
+def repeated_references(cards: Sequence[SpiceCard]) -> list[RepeatedReference]:
+    """The references that more than one instance card of one scope carries,
+    in the order their first cards come.
+
+    The one answer to whether a deck repeats a reference. Two spellings are one
+    reference when ``device_names.fold_name`` makes them one, so ``R1`` and
+    ``r1`` repeat each other. A card in a ``.subckt`` body is in that body's
+    scope, so a top-level ``R1`` and an ``R1`` inside a body do not repeat each
+    other. The bodies of a name defined twice in one scope share that scope and
+    are not compared here (``spice_lex.subckt_definitions``).
+    """
+    # device_names imports spice_lex_ops, which imports this module.
+    from ltspice_mcp.lib.device_names import fold_name
+
+    aside = subckt_definitions(cards, AS_WRITTEN).aside
+    found: dict[tuple[tuple[str, ...], str], list[SpiceCard]] = {}
+    for i, card in enumerate(cards):
+        if card.kind == "instance" and card.name and i not in aside:
+            found.setdefault((card.scope, fold_name(card.name)), []).append(card)
+    return [
+        RepeatedReference(
+            scope, same[0].name or "", tuple(c.line_start for c in same), same[0]
+        )
+        for (scope, _), same in found.items()
+        if len(same) > 1
+    ]
 
 
 # ---------------------------------------------------------------------------
