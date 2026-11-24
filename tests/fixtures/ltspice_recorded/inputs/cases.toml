@@ -503,7 +503,6 @@ extra = [
     "deck/card_grid_lib.lib",
     "deck/card_grid_libfile.lib",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.element-grid]
 summary = "The cells of the element-node grid (at the end of this file) that no other recording fills: each element letter with a value, a model, a keyed value or nothing after its nodes where its syntax allows it; a BJT with four nodes and a MOSFET with three; a voltage- and a current-controlled switch with its state after its model; and PARAMS: in upper case on a subcircuit call. What a cell declares where no recording shows its form is a prediction, which the recording settles."
@@ -530,7 +529,6 @@ inputs = [
     "deck/element_grid_cswitch_off.cir",
     "deck/element_grid_params_upper.cir",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.declaration-grid]
 summary = "The cells of the declaration grid (at the end of this file) that no other recording fills: a .param card of one assignment, of two, in braces, in quotes and with spaces round its sign; a .model card's parameters in parentheses and bare, its level as a number and computed; and a subcircuit whose default follows its ports with no params:, used and overridden. What a cell declares where no recording shows its form is a prediction, which the recording settles."
@@ -545,7 +543,6 @@ inputs = [
     "deck/decl_grid_model.cir",
     "deck/decl_grid_subckt.cir",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.deck-structure]
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
@@ -1558,7 +1555,6 @@ inputs = [
     "deck/lib_whole_sectioned_rff.cir",
 ]
 extra = ["deck/sections.lib"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.meas-subckt-node]
 summary = "Whether a .meas reads a node inside a subcircuit instance XAMP, named xamp:mid and amp:mid, on the build's default settings and with subcircuit node voltages saved."
@@ -1573,7 +1569,6 @@ model = ["lib/device_names.py", "lib/lint_rules.py"]
 # mid is the middle of a 1k/1k divider on a 1 V step: the raw holds V(xamp:mid)
 # (or V(amp:mid)) and the .meas reads 0.5 if the dot is read as a colon.
 inputs = ["deck/save_subckt_dotted.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.node-name-nonascii-case]
 summary = "Whether two node names that differ only in case beyond ASCII (Äb and äb, Maß and MASS) are one node when a deck runs."
@@ -1581,7 +1576,6 @@ model = ["lib/device_names.py", "lib/connectivity.py"]
 # Each current source drives its own name and each resistor sits on the other
 # spelling: I(R1) and I(R2) are 1 mA only if the two spellings are one node.
 inputs = ["deck/node_name_nonascii_case.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.mos-charge-capacitances]
 summary = "What the .op device table prints of a charge-model (BSIM3) MOSFET's capacitances, beside the capacitances an AC run of the same bias shows at its terminals."
