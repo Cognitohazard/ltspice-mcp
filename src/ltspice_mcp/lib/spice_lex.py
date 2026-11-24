@@ -1063,7 +1063,7 @@ def _extract_instance_ref(body: str) -> str | None:
 # (S-parameter). ``spice_lex_views.MeasAnalysis`` mirrors these values at the
 # type level (a Literal cannot be derived from a runtime constant — keep both
 # in sync).
-MEAS_ANALYSIS_TOKENS: frozenset[str] = frozenset({"tran", "ac", "dc", "op", "noise", "sp"})
+MEAS_ANALYSIS_TOKENS: frozenset[str] = frozenset({"tran", "ac", "dc", "op", "noise", "tf", "sp"})
 
 
 def extract_meas_name(body: str) -> str | None:

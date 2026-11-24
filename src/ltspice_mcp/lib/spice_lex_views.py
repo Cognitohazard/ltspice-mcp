@@ -1588,7 +1588,7 @@ def save_cards(cards: Sequence[SpiceCard]) -> list[SaveCard]:
 
 # Mirrors ``spice_lex.MEAS_ANALYSIS_TOKENS`` at the type level (a Literal cannot
 # be derived from the runtime constant — keep the two in sync).
-MeasAnalysis = Literal["tran", "ac", "dc", "op", "noise", "sp"]
+MeasAnalysis = Literal["tran", "ac", "dc", "op", "noise", "tf", "sp"]
 
 
 @dataclass
