@@ -645,10 +645,11 @@ def stage_deck(
         if not absolute and not relative_data_path_established(dialect, in_deck=depth == 0):
             raise DeckStagingError(
                 "data_file_unestablished",
-                f"Cannot stage {where}: which folder LTspice reads a relative data "
-                "path on a card in an included file from is not recorded (on a card "
-                "in the deck it is the deck's folder). Name the file by an absolute "
-                "path, or move the card into the deck.",
+                f"Cannot stage {where}: LTspice builds read a relative data path on "
+                "a card in an included file from different folders (LTspice 26 from "
+                "the included file's folder, LTspice XVII from the deck's folder; on "
+                "a card in the deck both read the deck's folder). Name the file by an "
+                "absolute path, or move the card into the deck.",
                 reference=data.raw_path,
             )
         target = resolve_reference(stands_at.parent, data.raw_path)
@@ -1174,15 +1175,17 @@ def _value_reference(
 
 
 def relative_data_path_established(dialect: str | None, *, in_deck: bool) -> bool:
-    """Whether it is established which folder the simulator of ``dialect``
-    reads a relative data path from: for both simulators here, when
-    established, it is the deck's folder.
+    """Whether every build of the simulator of ``dialect`` reads a relative
+    data path from one folder, the deck's, so staging can copy the file from
+    there.
 
     LTspice reads a relative path on a card in the deck from the deck's
     folder, never from the folder it was started in (the
     ``data-file-relative-path`` recordings, both builds). For a card in an
-    included file no recording shows which folder it is read from
-    (``data-file-relative-path-in-include``, pending). ngspice-42 reads it
+    included file the builds differ (``data-file-relative-path-in-include``):
+    LTspice 26 reads it from the included file's folder, LTspice XVII from
+    the deck's folder, and staging does not know which build runs the deck,
+    so no folder is established. ngspice-42 reads it
     from the deck's folder for a card in the deck and in an included file
     alike, and only then from the folder it was started in, which the server
     does not choose for a run (``tests/test_staged_data_files.py``).

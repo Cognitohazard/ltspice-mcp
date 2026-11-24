@@ -253,8 +253,9 @@ def test_ngspice_staging_reads_an_included_files_data_path_from_the_decks_folder
 
 
 def test_ltspice_staging_refuses_a_relative_data_path_in_an_included_file(tmp_path: Path):
-    """Which folder LTspice reads it from is not recorded, so staging does
-    not guess."""
+    """LTspice 26 reads it from the included file's folder and XVII from the
+    deck's (``data-file-relative-path-in-include``); staging does not know
+    which build runs the deck, so it refuses and says what each does."""
     root = tmp_path / "root"
     (root / "sub" / "data").mkdir(parents=True)
     (root / "sub" / "data" / "level.txt").write_text(_level_file(BESIDE_THE_DECK))
@@ -266,7 +267,8 @@ def test_ltspice_staging_refuses_a_relative_data_path_in_an_included_file(tmp_pa
         stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect="ltspice")
 
     assert caught.value.code == "data_file_unestablished"
-    assert "not recorded" in str(caught.value)
+    assert "LTspice 26 from the included file's folder" in str(caught.value)
+    assert "LTspice XVII from the deck's folder" in str(caught.value)
     assert "absolute path" in str(caught.value)
 
 

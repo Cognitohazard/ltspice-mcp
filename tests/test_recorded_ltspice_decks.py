@@ -2339,31 +2339,31 @@ def test_staging_copies_a_relative_data_file_and_names_the_copy(tmp_path: Path):
 )
 def test_a_data_file_named_by_an_absolute_path_is_read(build: str, stem: str, tmp_path: Path):
     """A staged deck names the staged copy of each data file by its absolute
-    path, and the staging reports that this reading is not recorded
-    (``data_path_unrecorded``) until this passes: then that note goes."""
-    pending = rec.CASES.behaviours["data-file-absolute-path"].pending
-    if pending:
-        pytest.skip(pending)
+    path, in quotes when it holds a space; both builds read it."""
     raw = rec.decode(build, f"deck/{stem}", tmp_path).raw
     assert set(np.asarray(raw.get_wave("V(a)", 0)).round(6)) == {DATA_BESIDE_THE_DECK}
 
 
+#: What v(a) is when LTspice 26 reads a relative data path on a card in an
+#: included file: the copy beside the included file holds 0.75.
+DATA_BESIDE_THE_INCLUDED_FILE = 0.75
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_which_folder_a_relative_data_path_in_an_included_file_is_read_from(
+def test_ltspice_26_reads_an_included_files_relative_data_path_from_its_folder_and_xvii_from_the_decks(
     build: str, tmp_path: Path
 ):
-    """Staging refuses a relative data path on a card in an included file for
-    LTspice (``data_file_unestablished``), since which folder it is read from
-    is not recorded. Once it is, the reading here says what staging may do:
-    from the deck's folder, staging reads it as it reads one in the deck."""
-    pending = rec.CASES.behaviours["data-file-relative-path-in-include"].pending
-    if pending:
-        pytest.skip(pending)
+    """The builds differ on a relative data path on a card in an included
+    file: LTspice 26 reads it from the included file's folder, XVII from the
+    deck's. Staging does not know which build runs the deck, so it
+    establishes no folder for it and refuses the card
+    (``data_file_unestablished``, ``tests/test_staged_data_files.py``)."""
     raw = rec.decode(build, "deck/included_relative_pwl_file", tmp_path).raw
     (level,) = set(np.asarray(raw.get_wave("V(a)", 0)).round(6))
-    assert relative_data_path_established("ltspice", in_deck=False) == (
-        level == DATA_BESIDE_THE_DECK
-    ), level
+    expected = {"xvii": DATA_BESIDE_THE_DECK, "current": DATA_BESIDE_THE_INCLUDED_FILE}
+    assert level == expected[rec.generation(build)]
+    assert not relative_data_path_established("ltspice", in_deck=False)
+    assert relative_data_path_established("ltspice", in_deck=True)
 
 
 #: ``V1 a 0 wavefile level.wav``, with no ``=``: both builds play the file, and

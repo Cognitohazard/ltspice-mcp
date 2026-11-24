@@ -836,7 +836,6 @@ model = ["lib/sheet_results.py"]
 # The recorder lists what a run wrote under the case's own name (two.dots.*).
 # A written list without .raw and .log says the build named them otherwise.
 inputs = ["beside/two.dots.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.raw-compression]
 summary = "What waveform compression keeps of a transient: a 1 mV RC charge compressed, uncompressed, with a maximum step and with a maximum step of a fifth of the run, the same charge at 1 V, and what a .meas reads from each."
@@ -1269,7 +1268,6 @@ extra = [
     "deck/data with space/level.wav",
     "deck/data with space/level.txt",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.data-file-relative-path-in-include]
 summary = "Which folder a build reads a relative data path from on a card in an included file in another folder: the deck's or the included file's."
@@ -1280,7 +1278,6 @@ model = ["lib/deck_staging.py"]
 # if it is relative to the included file's.
 inputs = ["deck/included_relative_pwl_file.cir"]
 extra = ["deck/run/pwl_source.inc", "deck/data/level.txt", "deck/run/data/level.txt"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.model-name-leading-digit]
 summary = "Whether a build reads a model name that starts with a digit (2N5486) as the name of a .model card, as a model swap writes it on an instance."
@@ -1288,7 +1285,6 @@ model = ["lib/spice_lex.py", "lib/spice_lex.py:is_model_name", "lib/spice_lex.py
 # J1 is swapped from 2N5485 to 2N5486, which differ in Beta and Vto: v(out) is
 # 0.6096 with 2N5486 and 1.5063 with 2N5485.
 inputs = ["deck/model_name_leading_digit.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.wavefile-without-equals]
 summary = "Whether a source written wavefile level.wav, with no =, plays the file."
