@@ -21,11 +21,10 @@ from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
 #: .ac, .dc, .noise or .fra keeps its step values only in its log's ``.step``
 #: lines (``result_kinds``). Both builds write an exponent there as C's ``%g``
 #: does (``c=1e-007`` on XVII, ``c=1e-07`` on LTspice 26,
-#: ``log/step_two_params``), and ``%g`` keeps six significant digits, so
-#: ``.step param r list 2.1544346900318838k`` would be read back as 2154.43,
-#: two parts in a million from the deck's value. No recording yet has a step
-#: value that needs more than six digits: ``raw/step_digits`` is the deck that
-#: records how many each build prints. A raw that stores one point a step
+#: ``log/step_two_params``). XVII keeps six significant digits there, as
+#: ``%g`` does, so it writes ``.step param v list -1 0 1.2345678`` as
+#: ``v=1.23457``, while LTspice 26 writes the value whole
+#: (``raw/step_grid_values_tran``, ``raw/step_digits``). A raw that stores one point a step
 #: holds its step values to seven digits or more (its first variable in eight
 #: bytes, any other in four).
 #:

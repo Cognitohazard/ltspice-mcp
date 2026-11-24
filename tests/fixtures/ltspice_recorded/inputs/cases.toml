@@ -1404,7 +1404,6 @@ inputs = [
     "raw/step_grid_values_op.cir",
     "raw/step_grid_values_tran.cir",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.log-meas-grid]
 summary = "The cells of the printed-measurement grid (at the end of this file) that no other recording fills: each .meas form in each analysis (.tran, .ac, .dc, .noise, .op, .tf), alone and stepped, with a result and failing whole, and where there is a sweep failing in one step and with a result of 0 in one step (in one deck, so that XVII's 0 for a failed step stands beside a true 0); and names with a dot, with a dash, in upper case and reserved, printed on a line with and without a colon, in a table and as FAIL'ed. A .tf deck measures the run's own trace, transfer_function (raw/tf). A form a build may refuse in an analysis (any form but a FIND with no point or a PARAM where there is no sweep, a FIND with no point where there is one, a signal the run does not save) has a deck of its own, since a refusal stops the run. A cell's declared outcome where no recording shows the form is a prediction, which the recording settles"
@@ -5163,57 +5162,57 @@ at = { nesting = "1", kept = "log" }
 cases = ["raw/step_grid_list_model"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"DM(Is)=1e-14" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=1e-13" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-13", steps = [2], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1] }
+"DM(Is)=1e-13" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-13", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_linear_model"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"DM(Is)=1e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=2e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [2], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1] }
+"DM(Is)=2e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_decade_model"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"DM(Is)=1e-15" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-15", steps = [1], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=1e-14" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [2], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-15" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-15", steps = [1] }
+"DM(Is)=1e-14" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_octave_model"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"DM(Is)=1e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=2e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [2], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1] }
+"DM(Is)=2e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_list_source"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1] }
+"VIN=2" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_linear_source"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1] }
+"VIN=2" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_decade_source"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=0.1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "0.1", steps = [1], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [2], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=0.1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "0.1", steps = [1] }
+"VIN=1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_octave_source"]
 at = { nesting = "1", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1] }
+"VIN=2" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested2_temp_list_param_linear"]
@@ -5228,8 +5227,8 @@ at = { nesting = "2", kept = "log" }
 cases = ["raw/step_grid_nested2_model_list_temp_linear"]
 at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
-"dm(is)=1e-14" = { sweep = "list", stepped = "model", value = "plain", name_case = "lower", axis = "dm(is)", step_value = "1e-14", steps = [1, 3], not_established = "how each build names a stepped model parameter in its .step lines" }
-"dm(is)=1e-13" = { sweep = "list", stepped = "model", value = "plain", name_case = "lower", axis = "dm(is)", step_value = "1e-13", steps = [2, 4], not_established = "how each build names a stepped model parameter in its .step lines" }
+"dm(is)=1e-14" = { sweep = "list", stepped = "model", value = "plain", name_case = "lower", axis = "dm(is)", step_value = "1e-14", steps = [1, 3] }
+"dm(is)=1e-13" = { sweep = "list", stepped = "model", value = "plain", name_case = "lower", axis = "dm(is)", step_value = "1e-13", steps = [2, 4] }
 "Temp=0" = { sweep = "linear", stepped = "temp", value = "degree", name_case = "mixed", axis = "Temp", step_value = "0", steps = [1, 2] }
 "Temp=50" = { sweep = "linear", stepped = "temp", value = "degree", name_case = "mixed", axis = "Temp", step_value = "50", steps = [3, 4] }
 
@@ -5237,17 +5236,17 @@ at = { nesting = "2", kept = "log" }
 cases = ["raw/step_grid_nested2_source_list_model_linear"]
 at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
-"vin=1" = { sweep = "list", stepped = "source", value = "plain", name_case = "lower", axis = "vin", step_value = "1", steps = [1, 3], not_established = "how each build names a stepped source in its .step lines" }
-"vin=2" = { sweep = "list", stepped = "source", value = "plain", name_case = "lower", axis = "vin", step_value = "2", steps = [2, 4], not_established = "how each build names a stepped source in its .step lines" }
-"DM(IS)=1e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "upper", axis = "DM(IS)", step_value = "1e-14", steps = [1, 2], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(IS)=2e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "upper", axis = "DM(IS)", step_value = "2e-14", steps = [3, 4], not_established = "how each build names a stepped model parameter in its .step lines" }
+"vin=1" = { sweep = "list", stepped = "source", value = "plain", name_case = "lower", axis = "vin", step_value = "1", steps = [1, 3] }
+"vin=2" = { sweep = "list", stepped = "source", value = "plain", name_case = "lower", axis = "vin", step_value = "2", steps = [2, 4] }
+"DM(IS)=1e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "upper", axis = "DM(IS)", step_value = "1e-14", steps = [1, 2] }
+"DM(IS)=2e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "upper", axis = "DM(IS)", step_value = "2e-14", steps = [3, 4] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested2_source_linear_param_decade"]
 at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3] }
+"VIN=2" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4] }
 "RV=1k" = { sweep = "decade", stepped = "param", value = "suffix", name_case = "upper", axis = "RV", step_value = "1k", steps = [1, 2] }
 "RV=10k" = { sweep = "decade", stepped = "param", value = "suffix", name_case = "upper", axis = "RV", step_value = "10k", steps = [3, 4] }
 
@@ -5257,15 +5256,15 @@ at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
 "temp=1" = { sweep = "decade", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "1", steps = [1, 3] }
 "temp=10" = { sweep = "decade", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "10", steps = [2, 4] }
-"DM(Is)=1e-15" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-15", steps = [1, 2], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=1e-14" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [3, 4], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-15" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-15", steps = [1, 2] }
+"DM(Is)=1e-14" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [3, 4] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested2_source_decade_param_octave"]
 at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
-"Vin=0.1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "mixed", axis = "Vin", step_value = "0.1", steps = [1, 3], not_established = "how each build names a stepped source in its .step lines" }
-"Vin=1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "mixed", axis = "Vin", step_value = "1", steps = [2, 4], not_established = "how each build names a stepped source in its .step lines" }
+"Vin=0.1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "mixed", axis = "Vin", step_value = "0.1", steps = [1, 3] }
+"Vin=1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "mixed", axis = "Vin", step_value = "1", steps = [2, 4] }
 "rv=1k" = { sweep = "octave", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "1k", steps = [1, 2] }
 "rv=2k" = { sweep = "octave", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "2k", steps = [3, 4] }
 
@@ -5275,15 +5274,15 @@ at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
 "temp=25" = { sweep = "octave", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "25", steps = [1, 3] }
 "temp=50" = { sweep = "octave", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "50", steps = [2, 4] }
-"DM(Is)=1e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 2], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=2e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [3, 4], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 2] }
+"DM(Is)=2e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [3, 4] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested2_source_octave_param_list"]
 at = { nesting = "2", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3] }
+"VIN=2" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4] }
 "rv=1k" = { sweep = "list", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "1k", steps = [1, 2] }
 "rv=2k" = { sweep = "list", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "2k", steps = [3, 4] }
 
@@ -5295,15 +5294,15 @@ at = { nesting = "3", kept = "log" }
 "rv=2k" = { sweep = "list", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "2k", steps = [2, 4, 6, 8] }
 "temp=-40" = { sweep = "list", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "-40", steps = [1, 2, 5, 6] }
 "temp=27" = { sweep = "list", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "27", steps = [3, 4, 7, 8] }
-"DM(Is)=1e-14" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 2, 3, 4], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=1e-13" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-13", steps = [5, 6, 7, 8], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 2, 3, 4] }
+"DM(Is)=1e-13" = { sweep = "list", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-13", steps = [5, 6, 7, 8] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested3_list_source_linear_param_temp"]
 at = { nesting = "3", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3, 5, 7], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4, 6, 8], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3, 5, 7] }
+"VIN=2" = { sweep = "list", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4, 6, 8] }
 "rv=1k" = { sweep = "linear", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "1k", steps = [1, 2, 5, 6] }
 "rv=2k" = { sweep = "linear", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "2k", steps = [3, 4, 7, 8] }
 "temp=0" = { sweep = "linear", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "0", steps = [1, 2, 3, 4] }
@@ -5313,10 +5312,10 @@ at = { nesting = "3", kept = "log" }
 cases = ["raw/step_grid_nested3_linear_model_source_decade_param"]
 at = { nesting = "3", kept = "log" }
 [grid.step-value.cell.items]
-"DM(Is)=1e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 3, 5, 7], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=2e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [2, 4, 6, 8], not_established = "how each build names a stepped model parameter in its .step lines" }
-"VIN=1" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 2, 5, 6], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [3, 4, 7, 8], not_established = "how each build names a stepped source in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 3, 5, 7] }
+"DM(Is)=2e-14" = { sweep = "linear", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [2, 4, 6, 8] }
+"VIN=1" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 2, 5, 6] }
+"VIN=2" = { sweep = "linear", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [3, 4, 7, 8] }
 "rv=1k" = { sweep = "decade", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "1k", steps = [1, 2, 3, 4] }
 "rv=10k" = { sweep = "decade", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "10k", steps = [5, 6, 7, 8] }
 
@@ -5326,10 +5325,10 @@ at = { nesting = "3", kept = "log" }
 [grid.step-value.cell.items]
 "temp=1" = { sweep = "decade", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "1", steps = [1, 3, 5, 7] }
 "temp=10" = { sweep = "decade", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "10", steps = [2, 4, 6, 8] }
-"DM(Is)=1e-15" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-15", steps = [1, 2, 5, 6], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=1e-14" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [3, 4, 7, 8], not_established = "how each build names a stepped model parameter in its .step lines" }
-"VIN=0.1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "0.1", steps = [1, 2, 3, 4], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [5, 6, 7, 8], not_established = "how each build names a stepped source in its .step lines" }
+"DM(Is)=1e-15" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-15", steps = [1, 2, 5, 6] }
+"DM(Is)=1e-14" = { sweep = "decade", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [3, 4, 7, 8] }
+"VIN=0.1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "0.1", steps = [1, 2, 3, 4] }
+"VIN=1" = { sweep = "decade", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [5, 6, 7, 8] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested3_octave_param_temp_model"]
@@ -5339,15 +5338,15 @@ at = { nesting = "3", kept = "log" }
 "rv=2k" = { sweep = "octave", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "2k", steps = [2, 4, 6, 8] }
 "temp=25" = { sweep = "octave", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "25", steps = [1, 2, 5, 6] }
 "temp=50" = { sweep = "octave", stepped = "temp", value = "degree", name_case = "lower", axis = "temp", step_value = "50", steps = [3, 4, 7, 8] }
-"DM(Is)=1e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 2, 3, 4], not_established = "how each build names a stepped model parameter in its .step lines" }
-"DM(Is)=2e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [5, 6, 7, 8], not_established = "how each build names a stepped model parameter in its .step lines" }
+"DM(Is)=1e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "1e-14", steps = [1, 2, 3, 4] }
+"DM(Is)=2e-14" = { sweep = "octave", stepped = "model", value = "plain", name_case = "mixed", axis = "DM(Is)", step_value = "2e-14", steps = [5, 6, 7, 8] }
 
 [[grid.step-value.cell]]
 cases = ["raw/step_grid_nested3_octave_source_list_param_decade_param"]
 at = { nesting = "3", kept = "log" }
 [grid.step-value.cell.items]
-"VIN=1" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3, 5, 7], not_established = "how each build names a stepped source in its .step lines" }
-"VIN=2" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4, 6, 8], not_established = "how each build names a stepped source in its .step lines" }
+"VIN=1" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "1", steps = [1, 3, 5, 7] }
+"VIN=2" = { sweep = "octave", stepped = "source", value = "plain", name_case = "upper", axis = "VIN", step_value = "2", steps = [2, 4, 6, 8] }
 "c=100n" = { sweep = "list", stepped = "param", value = "suffix", name_case = "lower", axis = "c", step_value = "100n", steps = [1, 2, 5, 6] }
 "c=200n" = { sweep = "list", stepped = "param", value = "suffix", name_case = "lower", axis = "c", step_value = "200n", steps = [3, 4, 7, 8] }
 "rv=1k" = { sweep = "decade", stepped = "param", value = "suffix", name_case = "lower", axis = "rv", step_value = "1k", steps = [1, 2, 3, 4] }
