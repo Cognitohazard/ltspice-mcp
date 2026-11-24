@@ -34,7 +34,7 @@ from ltspice_mcp.lib.encoding import (
     read_spice_text_with_encoding,
     rewrite_codec,
 )
-from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner, _saves_observation
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.hierarchy_expr import evaluate
@@ -53,6 +53,7 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
     values_equal,
 )
+from ltspice_mcp.lib.raw_parser import first_plot_traces
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.schematic_ops import netlist_card_value
@@ -2642,3 +2643,62 @@ def test_the_lint_reads_a_part_exported_with_a_section_sign_on_either_copy(tmp_p
     part = ExportedPart("X§U1", "XU1", "U1")
     assert exported_part("X§U1", exported_names(lex(text).cards)) == part
     assert exported_part("XU1", exported_names(lex(copy).cards)) == part
+
+
+_MISSING_NODE_SAVES = ["raw/save_one_missing", "raw/save_only_missing"]
+
+
+@pytest.mark.parametrize("case_id", _MISSING_NODE_SAVES)
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_save_of_a_node_the_circuit_lacks_is_said_before_and_after_the_run(
+    build: str, case_id: str, tmp_path: Path
+):
+    """``.save V(nothere)``, a node the divider lacks: neither build stores a
+    trace for it, beside ``V(b)`` or alone (recorded). The lint warns before
+    the run and the run names the entry after it, with the same reason."""
+    text = deck_text(case_id)
+    deck = INPUTS / rec.CASES.case(case_id).source
+    producer = rec.producer(build)
+    traces = [name for name, _ in first_plot_traces(rec.recorded(build, f"{case_id}.raw")) or []]
+    assert not any("nothere" in name.lower() for name in traces), traces
+    (warned,) = [
+        f
+        for f in lint_deck(text, deck, "ltspice", "LTspice", reader=producer)
+        if f["rule_id"] == "save-name-not-stored"
+    ]
+    assert warned["subject"] == "V(nothere)"
+    reason = warned["evidence"]["reason"]
+    assert "no node nothere" in reason
+    staged = tmp_path / deck.name
+    shutil.copyfile(deck, staged)
+    observed = _saves_observation(
+        rec.recorded(build, f"{case_id}.raw"), staged, producer, None, "c"
+    )
+    assert observed is not None
+    assert observed["evidence"]["not_stored"] == [{"save": "V(nothere)", "reason": reason}]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_xvii_saves_every_signal_for_a_save_naming_only_a_node_the_circuit_lacks(
+    build: str,
+):
+    """``raw/save_only_missing``: XVII refuses ``.save V(nothere)`` ("Invalid
+    .save command") and stores every signal; LTspice 26 stores none. So a
+    ``.meas`` of ``V(b)`` beside it is held back on LTspice 26 alone."""
+    case_id = "raw/save_only_missing"
+    traces = [name for name, _ in first_plot_traces(rec.recorded(build, f"{case_id}.raw")) or []]
+    log = _log(build, case_id)
+    text = deck_text(case_id).replace(".op", ".meas op vb find V(b)\n.op")
+    deck = INPUTS / rec.CASES.case(case_id).source
+    blocked = {
+        f["subject"]
+        for f in lint_deck(text, deck, "ltspice", "LTspice", reader=rec.producer(build))
+        if f["rule_id"] == "save-meas-coverage"
+    }
+    if rec.generation(build) == "xvii":
+        assert "Invalid .save command" in log
+        assert "V(b)" in traces
+        assert blocked == set()
+    else:
+        assert traces == []
+        assert blocked == {"vb"}

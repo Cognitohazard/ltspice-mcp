@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -22,7 +22,7 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
     unreadable_references,
 )
-from ltspice_mcp.lib.device_names import DeckSignal, deck_signal, fold_name, naming_for
+from ltspice_mcp.lib.device_names import DeckSignal, Naming, deck_signal, fold_name, naming_for
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.ngspice_compat import reads_lib_as_includes
@@ -57,6 +57,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     probe_refs,
     read_instance,
     save_cards,
+    unread_node_names,
 )
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
@@ -297,6 +298,67 @@ def _instances(context: _LintContext) -> tuple[frozenset[str], frozenset[str]]:
     return frozenset(names), frozenset(marked)
 
 
+def _top_level_words(context: _LintContext) -> frozenset[str] | None:
+    """Every folded word a top-level card of the deck or its staged includes
+    may connect or define as a node (``spice_lex_views.unread_node_names``),
+    a superset of the circuit's top-level nodes; None when the deck reaches
+    an include this reading was not given, whose nodes are not known."""
+    words: set[str] = set()
+    for file in context.files:
+        for card in file.cards:
+            if directive_head(card) in INCLUDE_HEADS and not context.includes:
+                return None
+            if card.scope == () and may_connect_nodes(card):
+                words |= unread_node_names(card)
+    return frozenset(words)
+
+
+def _absent_node(xvii: bool, node: str) -> DeckSignal:
+    """What an LTspice build stores for a ``.save`` of a top-level node the
+    circuit lacks (recorded: raw/save_one_missing, raw/save_only_missing)."""
+    if xvii:
+        return DeckSignal(
+            None,
+            f"the circuit has no node {node}: XVII stores nothing for it, and a .save "
+            "naming only such nodes it refuses (\"Invalid .save command\") and saves "
+            "every signal instead",
+        )
+    return DeckSignal(
+        None,
+        f"the circuit has no node {node}: LTspice 26 stores nothing for it, and a "
+        ".save naming only such nodes stores no signal, without a word in its log",
+    )
+
+
+def _read_absent_nodes(
+    context: _LintContext, saved: list[_Read], naming: Naming
+) -> tuple[list[_Read], set[int]]:
+    """``saved`` with each top-level node voltage the circuit lacks read as
+    LTspice stores it (:func:`_absent_node`), and the indices of those
+    entries; unchanged where the deck's nodes are not known or its reader is
+    not LTspice."""
+    if naming.family != "ltspice":
+        return saved, set()
+    words = _top_level_words(context)
+    if words is None:
+        return saved, set()
+    read = []
+    absent = set()
+    for index, entry in enumerate(saved):
+        key = entry.read.key
+        if key is not None and key[0] == "v" and len(key[1]) == 1:
+            (node,) = key[1]
+            if (
+                node not in words
+                and not set(node) & set(":.")
+                and not is_ground(node, simulator=context.family)
+            ):
+                entry = _Read(entry.card, entry.text, _absent_node(naming.xvii, node))
+                absent.add(index)
+        read.append(entry)
+    return read, absent
+
+
 def _coverage(context: _LintContext) -> _Coverage | None:
     """The deck's ``.save`` and ``.meas`` signals as the run's reader reads
     them, or None when a ``.save`` saves everything or cannot be read: such
@@ -326,6 +388,21 @@ def _coverage(context: _LintContext) -> _Coverage | None:
         for text in _probe_signals(probe, context)
     ]
     patterns = [probe.text for _card, probe in probes if probe_is_pattern(probe)]
+    saved, absent = _read_absent_nodes(context, saved, naming)
+    if (
+        naming.xvii
+        and absent
+        and not patterns
+        and all(index in absent or entry.read.voids_save for index, entry in enumerate(saved))
+    ):
+        # A .save list naming nothing XVII stores, as with a path it does not
+        # store: it refuses the list and saves every signal (recorded:
+        # raw/save_only_missing on XVII; beside V(b), raw/save_one_missing,
+        # it stores V(b) alone).
+        saved = [
+            _Read(entry.card, entry.text, replace(entry.read, voids_save=True))
+            for entry in saved
+        ]
     if any(entry.read.voids_save for entry in saved):
         if len(saves) == 1:
             # XVII refuses the whole .save and saves every signal, as with no

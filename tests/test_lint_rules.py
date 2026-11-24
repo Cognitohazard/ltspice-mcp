@@ -334,7 +334,7 @@ def test_each_seed_rule_stays_quiet_on_clean_deck(
 
 
 def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
-    deck = "V1 in 0 1\n.save V(out)\n.meas tran peak MAX V(out)\n.tran 1u 1m\n.end\n"
+    deck = "V1 in 0 1\nR1 in out 1k\n.save V(out)\n.meas tran peak MAX V(out)\n.tran 1u 1m\n.end\n"
 
     assert "save-meas-coverage" not in _ids(deck, tmp_path)
 

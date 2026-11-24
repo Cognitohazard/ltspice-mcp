@@ -1,0 +1,1 @@
+A `.save` of a top-level node the circuit lacks now gets the `save-name-not-stored` warning before an LTspice run, and the run's `saves_not_stored` observation says why the results hold nothing for it. A `.meas` beside a `.save` naming only such nodes is no longer held back on LTspice XVII, which refuses that `.save` and stores every signal.

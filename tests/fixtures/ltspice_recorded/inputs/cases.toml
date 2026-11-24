@@ -1661,7 +1661,12 @@ inputs = ["export/label_on_nothing.asc", "export/label_on_nothing_absent.asc"]
 
 [behaviour.m-card-subckt-model-traces]
 summary = "Whether a build runs an M card whose model is a .subckt, and under which names it would store that device's currents and inner nodes; and what a build stores for a .save that names a node the circuit lacks, beside one it has or alone."
-model = ["lib/trace_names.py", "lib/device_names.py"]
+model = [
+    "lib/trace_names.py",
+    "lib/device_names.py",
+    "lib/lint_rules.py",
+    "lib/result_observations.py",
+]
 # M1's model msub is a subcircuit with an inner node n1 between Rd and Rs;
 # msub_stored saves nothing by name. save_one_missing and save_only_missing
 # save V(nothere), which their divider lacks, beside V(b) and alone.
