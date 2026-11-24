@@ -871,6 +871,45 @@ _SPELLING_RECORDED = (
 )
 
 
+def _dotted_ltspice_signal(
+    text: str,
+    function: str,
+    node: str,
+    naming: Naming,
+    instances: Collection[str],
+    marked: Collection[str],
+) -> DeckSignal:
+    """:func:`deck_signal` of a path spelled with dots, ngspice's spelling,
+    in an LTspice deck. Recorded (``deck/save_subckt_dotted``) for a path
+    whose first segment names an instance with its X: neither build stores or
+    measures it, and XVII keeps the rest of the ``.save``. Any other dotted
+    path is not recorded."""
+    *scope, name = node.split(".")
+    first = fold_name(scope[0])
+    if (
+        first not in instances
+        or f"x{first}" in instances
+        or first in {fold_name(owner) for owner in marked}
+    ):
+        return DeckSignal(
+            None,
+            "whether LTspice reads a name inside subcircuit instances spelled with dots "
+            "as one spelled with colons is recorded only for a path whose first segment "
+            "names an instance with its X",
+            established=False,
+        )
+    spelled = None
+    if naming.note is None and all(fold_name(segment)[:1] == "x" for segment in scope):
+        spelled = f"{function}({raw_name(scope, name, xvii=naming.xvii)})"
+    return DeckSignal(
+        None,
+        f"LTspice reads no path spelled with dots: {text} names nothing, and LTspice "
+        "26 and XVII store and measure nothing for it (recorded: deck/save_subckt_dotted)"
+        + (f"; it is spelled {spelled}" if spelled else f" ({_SPELLING_RECORDED})"),
+        spelled=spelled,
+    )
+
+
 def deck_signal(
     text: str,
     naming: Naming,
@@ -901,10 +940,13 @@ def deck_signal(
       of the deck. Otherwise LTspice 26 stores and reads nothing for it, and
       XVII reads nothing for it in a ``.meas`` and refuses the whole ``.save``
       that names it, saving every signal instead ("Invalid .save command.
-      Just saving everything...", ``voids_save``). Which spelling a build of
-      no known spelling takes, a dotted path in an LTspice deck, and a
-      segment that names an instance in both spellings or one exported with
-      a ``§`` are not recorded: the reading is not established.
+      Just saving everything...", ``voids_save``). Neither build reads a
+      path spelled with dots whose first segment names an instance with its
+      X: it stores and measures nothing, and XVII keeps the rest of the
+      ``.save`` (:func:`_dotted_ltspice_signal`). Which spelling a build of
+      no known spelling takes, any other dotted path in an LTspice deck, and
+      a segment that names an instance in both spellings or one exported
+      with a ``§`` are not recorded: the reading is not established.
     """
     # A probe's spaces are no part of its name: ``v( a )`` is ``v(a)``.
     text = re.sub(r"\s+", "", text)
@@ -932,12 +974,7 @@ def deck_signal(
             established=False,
         )
     if ":" not in node:
-        return DeckSignal(
-            None,
-            "whether LTspice reads a name inside subcircuit instances spelled with dots "
-            "as one spelled with colons is not recorded",
-            established=False,
-        )
+        return _dotted_ltspice_signal(text, function, node, naming, instances, marked)
     first = fold_name(node.split(":", 1)[0])
     with_x = first in instances
     without_x = f"x{first}" in instances

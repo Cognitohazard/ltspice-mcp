@@ -2579,6 +2579,31 @@ def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_dotted_path_through_an_instance_is_no_name_to_ltspice(build: str, tmp_path: Path):
+    """``.save V(xamp.mid)`` stores nothing and ``.meas ... V(xamp.mid)``
+    reads nothing on either build (LTspice 26 "Voltage not found.", XVII
+    FAIL'ed); XVII does not refuse the ``.save`` for it, which still stores
+    ``V(in)``. Linted for the build that runs it or for none, the ``.save``
+    entry is a warning and the ``.meas`` is refused, both established."""
+    case_id = "deck/save_subckt_dotted"
+    log = rec.recorded(build, f"{case_id}.log")
+    assert "Invalid .save" not in log.read_text(encoding="utf-8", errors="replace").replace("\0", "")
+    values = [entry["values"] for entry in parse_measurements(log)["measurements"].values()]
+    assert values in ([], [[]], [[None]])
+    traces = rec.decode(build, case_id, tmp_path).raw.get_trace_names()
+    assert sorted(name.lower() for name in traces) == ["time", "v(in)"]
+    for options in ({}, {"reader": rec.producer(build)}):
+        findings = lint_input(case_id, **options)
+        rules = {(f["rule_id"], f["severity"]) for f in findings}
+        assert ("save-meas-coverage", "error") in rules, options
+        assert any(
+            f["rule_id"] == "save-name-not-stored" and "xamp.mid" in str(f).lower()
+            for f in findings
+        ), options
+        assert "save-meas-spelling-unestablished" not in {rule for rule, _ in rules}, options
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 def test_options_seed_is_refused_and_draws_repeat_without_it(build: str, tmp_path: Path):
     """Neither build takes ``.options seed`` (LTspice 26 "syntax error", XVII
     "unrecognized option"), which the checks pass. With no seed, ``mc()``,

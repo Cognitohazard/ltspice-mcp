@@ -238,16 +238,23 @@ def test_a_spelling_inside_a_subcircuit_is_not_established_without_the_build(
     assert "save-meas-spelling-unestablished" in found, found
 
 
-def test_a_dotted_name_in_an_ltspice_deck_is_not_established(tmp_path: Path):
-    """Whether LTspice reads ``.`` as ``:`` in a deck is not recorded: the
-    lint says the spelling is not established, and does not block."""
-    deck = (
-        "* dotted\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
-        "V1 in 0 1\nXamp in div\n.save V(in) V(xamp.mid)\n"
-        ".tran 1m\n.meas tran vmid FIND V(xamp.mid) AT=0.5m\n.end\n"
-    )
+def test_a_dotted_name_in_an_ltspice_deck_names_nothing(tmp_path: Path):
+    """Neither LTspice build reads ``.`` as ``:`` in a deck (recorded:
+    ``deck/save_subckt_dotted``): a ``.meas`` of ``V(xamp.mid)`` is refused.
+    A dotted path whose first segment names the instance without its X is
+    not recorded, so the lint says it is not established and does not block."""
+    def deck(path: str) -> str:
+        return (
+            "* dotted\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
+            f"V1 in 0 1\nXamp in div\n.save V(in) V({path})\n"
+            f".tran 1m\n.meas tran vmid FIND V({path}) AT=0.5m\n.end\n"
+        )
+
     for build in rec.BUILDS:
-        found = lint(deck, tmp_path / "dotted.cir", rec.producer(build))
+        found = lint(deck("xamp.mid"), tmp_path / "dotted.cir", rec.producer(build))
+        assert "save-meas-coverage" in found, found
+        assert "save-meas-spelling-unestablished" not in found, found
+        found = lint(deck("amp.mid"), tmp_path / "dotted.cir", rec.producer(build))
         assert "save-meas-coverage" not in found, found
         assert "save-meas-spelling-unestablished" in found, found
 
