@@ -452,10 +452,11 @@ def test_the_value_path_refuses_an_empty_value_at_input():
 # --- what LTspice reads -------------------------------------------------------
 
 
-@pytest.mark.parametrize("build", ["ltspice26", "ltspice17"])
+@pytest.mark.parametrize("build", rec.BUILDS)
 def test_ltspice_runs_the_model_a_leading_digit_name_swaps_to(build: str, tmp_path: Path):
-    pending = rec.CASES.behaviours["model-name-leading-digit"].pending
-    if pending:
-        pytest.skip(pending)
+    """Both builds run the model a swap to 2N5486 names, so the server
+    writes that name and reads it on a card."""
+    assert written_model_name_refusal("2N5486") is None
+    assert is_model_name("2N5486")
     raw = rec.decode(build, "deck/model_name_leading_digit", tmp_path).raw
     assert float(raw.get_wave("V(out)", 0)[0]) == pytest.approx(VOUT_SWAPPED, rel=1e-3)

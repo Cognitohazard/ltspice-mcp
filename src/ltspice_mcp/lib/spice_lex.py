@@ -968,7 +968,10 @@ def written_model_name_refusal(text: str) -> str | None:
     reads whatever name a user's deck declares, while a written name is held
     to what the recordings show LTspice reading in a model name, letters,
     digits and ``_ . : -``, so it never writes a name no recording vouches
-    for. ``tests/test_model_name_swap.py`` pins the difference.
+    for. A leading digit is recorded: both builds run the model a swap to
+    2N5486 names (``model-name-leading-digit``). A name that reads whole as a
+    number is not, and is refused. ``tests/test_model_name_swap.py`` pins the
+    difference.
     """
     fix = "write the model's name as its .model card declares it"
     if not text:
@@ -991,7 +994,9 @@ def written_model_name_refusal(text: str) -> str | None:
         return (
             f"{text!r} reads whole as a number (a number with at most a scale suffix), "
             "which a simulator can take for an area or a value instead of a model "
-            f"name: {fix}; a name with more after the number, as in 2N2222, is fine"
+            "name, and no recording shows LTspice reading such a name as a model: "
+            f"{fix}; a name with more after the number is fine, as LTspice 26 and "
+            "XVII both run a model named 2N5486"
         )
     return None
 
