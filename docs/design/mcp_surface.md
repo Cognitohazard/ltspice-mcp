@@ -1639,7 +1639,7 @@ answers, so a page reads the steps its first reply read.
   names. A path that no row on the page reaches is reported in `warnings`
   with the keys that are there.
 - `include.fields` changes only the row view. A fact a row's value states
-  (`failed_measurements`, `not_finite`, `unreadable`, `answer_unknown`,
+  (`failed_measurements`, `unreadable`, `answer_unknown`,
   `not_established`, `printed_once`, `diagnostics`, `diagnostics_coverage`)
   is kept by the lean row and by any `include.fields`.
 - Every recipe of a call is evaluated in it, and its complete answer is

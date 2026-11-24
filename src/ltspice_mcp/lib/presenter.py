@@ -46,7 +46,8 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
@@ -58,7 +59,7 @@ from ltspice_mcp.lib.cursor_codec import CursorError, canonical_hash
 from ltspice_mcp.lib.cursor_codec import decode_cursor as _decode_body
 from ltspice_mcp.lib.cursor_codec import encode_cursor as _encode_body
 from ltspice_mcp.lib.reply_cuts import ITEMS, schema_lists
-from ltspice_mcp.lib.response_budget import estimate_tokens
+from ltspice_mcp.lib.response_budget import append_hint, estimate_tokens
 from ltspice_mcp.lib.store import KIND_STORED_ANSWER, Store, accept, atomic_write_json, envelope
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,46 @@ Annotate = Callable[[dict[str, Any], Mapping[str, ListCut], StoredAnswer | None,
 #: Says, once, that a reply went out over its target: ``(reply, size, target)``.
 #: Called on the reply sent, after the cut, only when it is still over.
 Over = Callable[[dict[str, Any], int, int], None]
+
+
+# ---------------------------------------------------------------------------
+# The closing note
+# ---------------------------------------------------------------------------
+
+#: A sentence the reply being answered closes its ``hint`` with, asked for
+#: when the reply is built (the server's read-the-guide reminder on a
+#: session's first reply). A function, so a handler that changes what it
+#: says (a call that reads the guide) is answered by what holds when its
+#: reply is presented; it returns None when there is nothing to add.
+_closing: ContextVar[Callable[[], str | None] | None] = ContextVar("closing", default=None)
+
+
+@contextlib.contextmanager
+def closing_note(note: Callable[[], str | None]) -> Iterator[None]:
+    """Close every reply presented inside this block with ``note()``.
+
+    The note is in the reply the target is measured on, so it is never
+    added after the cut: a reply the note takes over its target has its
+    lists cut further, and the note is not what is cut. It is never part of
+    a stored answer, whose id is the same with or without it.
+    """
+    token = _closing.set(note)
+    try:
+        yield
+    finally:
+        _closing.reset(token)
+
+
+def with_closing_note(reply: dict[str, Any]) -> dict[str, Any]:
+    """``reply`` with the pending closing note at the end of its ``hint``, as
+    a copy; ``reply`` itself when no note is pending."""
+    note = _closing.get()
+    said = note() if note is not None else None
+    if not said:
+        return reply
+    noted = dict(reply)
+    append_hint(noted, said)
+    return noted
 
 
 # ---------------------------------------------------------------------------
@@ -877,7 +918,7 @@ def _present_lists(
                     part.stored,
                     _relative(paged, root) if paged is not None and _within(paged, root) else None,
                 )
-        return reply
+        return with_closing_note(reply)
 
     keep = dict(counts) if counts is not None else _fit(sources, build, target, caps, apart)
     reply = build(keep)
@@ -953,9 +994,10 @@ def present_many(
         for pointer, cap in caps.items()
         if isinstance(entries := resolve_pointer(reply, pointer, default=None), list)
     )
-    size = _size(reply) if target is not None else 0
+    whole = with_closing_note(reply)
+    size = _size(whole) if target is not None else 0
     if (target is None or size <= target) and not capped:
-        return Presented(reply, {}, None, size, target)
+        return Presented(whole, {}, None, size, target)
     lists = _all_lists(reply, placed)
     pointers = [pointer for pointer, _ in lists if len(resolve_pointer(reply, pointer)) > 1]
     # Stored as computed, before any series is thinned: a page thins its own.
@@ -1007,6 +1049,7 @@ def present_many(
 
     document, thinned = _thin(reply, placed, series, target, measured)
     if not pointers and not thinned:
+        document = with_closing_note(document)
         if target is not None and size > target and over is not None:
             document = dict(document)
             over(document, size, target)
@@ -1190,9 +1233,10 @@ def present_record_page(
     """
     whole = resolve_pointer(answer, pointer)
     if offset == 0 and (cap is None or len(whole) <= cap):
-        size = _size(answer) if target is not None else 0
+        sent = with_closing_note(answer)
+        size = _size(sent) if target is not None else 0
         if target is None or size <= target:
-            return Presented(answer, {}, None, size, target)
+            return Presented(sent, {}, None, size, target)
     placed = _place([Answer("", {}, "", {}, annotate, {pointer: record}, None, apart)])
     if cap is not None:
         placed[0].caps[pointer] = cap

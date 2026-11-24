@@ -827,11 +827,10 @@ def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 
 #: The fields of a row's value that state a fact a row left out is named by
 #: (``rows_not_shown``): why a step has no number, read from the one list of
-#: those reasons (``log_types.NO_NUMBER_REASONS``), and this tool's own kinds,
-#: a value that is not a finite number and one printed once for several steps.
+#: those reasons (``log_types.NO_NUMBER_REASONS``), and this tool's own kind,
+#: a value printed once for several steps.
 _ROW_FACT_KINDS: tuple[str, ...] = (
     *(reason.field for reason in NO_NUMBER_REASONS),
-    "not_finite",
     "printed_once",
 )
 

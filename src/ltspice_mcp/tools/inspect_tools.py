@@ -143,6 +143,7 @@ from ltspice_mcp.lib import (
     NETLIST_SUFFIXES,
     capabilities,
     guide,
+    presenter,
     response_budget,
     services,
     simulator_docs,
@@ -3557,19 +3558,21 @@ async def _negotiate_inspect(
         _degrade_inspect(rendered, rung)
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
+        # Each envelope the ladder measures closes with the server's closing
+        # note, so the budget holds the reply as it is sent.
         if not rung.shrink:
             await build(_View(lean=rung.answer_channel), rung)
-            return rendered
+            return presenter.with_closing_note(rendered)
         view = shrunk(rung, rung.measured, _PAGE_SIZE, _COORD_PAGE_SIZE)
         await build(view, rung)
-        measured = response_budget.estimate_tokens(rendered)
+        measured = response_budget.estimate_tokens(presenter.with_closing_note(rendered))
         if measured > rung.body_budget:
             # A cut adds what the uncut envelope never showed — a cursor for
             # every query it cut — so the estimate is taken once more from this
             # envelope, which carries them. Once, not a search: each limit
             # re-asks every query in the batch.
             await build(shrunk(rung, measured, view.limit, view.coord_limit), rung)
-        return rendered
+        return presenter.with_closing_note(rendered)
 
     assert budget.tokens is not None  # the undegraded path never reaches here
     result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)

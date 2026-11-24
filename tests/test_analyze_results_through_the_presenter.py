@@ -437,7 +437,7 @@ def test_rows_not_shown_holds_its_bound_and_gives_a_kind_every_row_carries_by_it
     value = {
         "diagnostics": diagnostics,
         "diagnostics_coverage": "log_unread",
-        **{key: ["m"] for key in ("failed_measurements", "not_finite")},
+        "failed_measurements": ["m"],
         **{key: {"m": "x"} for key in ("unreadable", "answer_unknown", "not_established")},
         "printed_once": {"m": {}},
     }

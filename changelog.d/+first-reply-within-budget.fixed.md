@@ -1,0 +1,1 @@
+A session's first reply now fits the reply target with the read-the-guide reminder in it: the reminder is part of the reply that is measured and cut, so a long list is cut a little further instead of the reply going over.

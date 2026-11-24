@@ -23,7 +23,7 @@ from ltspice_mcp.api._session import acquire_session_lease, release_session_leas
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
-from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, progress
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, presenter, progress, response_budget
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.observability import (
     capturing_request,
@@ -462,7 +462,12 @@ async def _answer_tool_call(
     await _notice_circuit(arguments, state)
 
     # A wait that holds the call open reports its progress (``lib/progress``).
-    with progress.reporting_to(ctx.session.report_progress):
+    # The reminder is in the reply the presenter measures, so a first reply
+    # fits its target with it (``presenter.closing_note``).
+    with (
+        progress.reporting_to(ctx.session.report_progress),
+        presenter.closing_note(lambda: _pending_reminder(state)),
+    ):
         answer = await _invoke(registered, name, arguments, state)
     return _with_serialized_text(_with_guide_reminder(answer, state))
 
@@ -494,33 +499,35 @@ def _with_serialized_text(result: types.CallToolResult) -> types.CallToolResult:
     return result.model_copy(update={"content": [*others, serialized]})
 
 
+def _pending_reminder(state: SessionState) -> str | None:
+    """The read-the-guide reminder, while a reply of this session still owes it."""
+    return None if state.guide_read or state.guide_reminded else GUIDE_REMINDER
+
+
 def _with_guide_reminder(
     result: types.CallToolResult, state: SessionState
 ) -> types.CallToolResult:
-    """Add the read-the-guide reminder to the first reply of a session that has
-    not read the guide, once.
+    """Give the first reply of a session that has not read the guide the
+    read-the-guide reminder, once.
 
-    The reminder goes in ``structuredContent["hint"]``, which the text block
-    then carries serialized; a reply with no ``structuredContent`` gets it as
+    A reply the presenter built holds it already, measured against its target
+    (``presenter.closing_note``). Any other reply, an error among them, has
+    no target and gets it here: in ``structuredContent["hint"]``, which the
+    text block then carries serialized, or, with no ``structuredContent``, as
     a text block of its own. The result is copied, never edited in place: a
     replayed receipt's payload can be shared.
     """
-    if state.guide_read or state.guide_reminded:
+    reminder = _pending_reminder(state)
+    if reminder is None:
         return result
     state.guide_reminded = True
     structured = result.structured_content
     if structured is None:
-        reminder = types.TextContent(type="text", text=GUIDE_REMINDER)
-        return result.model_copy(update={"content": [*result.content, reminder]})
-    hint = structured.get("hint")
-    return result.model_copy(
-        update={
-            "structured_content": {
-                **structured,
-                "hint": f"{hint} {GUIDE_REMINDER}" if hint else GUIDE_REMINDER,
-            }
-        }
-    )
+        block = types.TextContent(type="text", text=reminder)
+        return result.model_copy(update={"content": [*result.content, block]})
+    noted = dict(structured)
+    response_budget.append_hint(noted, reminder)
+    return result.model_copy(update={"structured_content": noted})
 
 
 async def _invoke(
