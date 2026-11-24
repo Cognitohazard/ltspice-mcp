@@ -1564,6 +1564,27 @@ def test_ltspice_reads_a_lib_section_name_as_part_of_the_file_name(build: str):
     assert [f["rule_id"] for f in findings if f["severity"] == "error"] == ["lib-section-ltspice"]
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("stem", ["rout", "rtt", "rff"])
+def test_ltspice_refuses_a_lib_with_no_section_of_a_file_that_declares_sections(
+    build: str, stem: str
+):
+    """``.lib sections.lib`` on a file that declares sections tt and ff: LTspice
+    has no sections, so it reads the file's own ``.lib tt`` as an include of a
+    file ``tt`` that does not exist, and runs none of the three decks, whether
+    the parameter they read sits outside every section or inside one. The
+    server reads none of the file's cards, and the lint refuses each deck."""
+    case_id = f"deck/lib_whole_sectioned_{stem}"
+    assert not ran(build, case_id)
+    log = read_spice_text(rec.recorded(build, f"{case_id}.log"))
+    if rec.generation(build) == "xvii":
+        assert 'Could not open library file "tt"' in log
+    else:
+        assert "File not found." in log
+        assert ".lib tt" in log
+    assert refusals(case_id) == {"lib-section-ltspice"}
+
+
 # --------------------------------------------------------------------------
 # Three-node transistors
 # --------------------------------------------------------------------------

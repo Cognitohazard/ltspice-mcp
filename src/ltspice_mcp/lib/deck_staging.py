@@ -1342,9 +1342,12 @@ def library_read(
 
     - LTspice reads the rest of the line as one path
       (``scan_include_references``) and a file by that name whole. No such
-      file brings in nothing. What LTspice makes of a file that declares
-      sections, named by a ``.lib`` with no section, is not recorded: it is
-      read whole, as before (to record: ``lib-whole-sectioned`` in ``inputs/cases.toml``).
+      file brings in nothing, and neither does a ``.lib`` of a file that
+      declares sections: LTspice 26 and XVII read the file's own ``.lib tt``
+      as a library file ``tt`` that does not exist and run nothing
+      (``lib-whole-sectioned`` in ``inputs/cases.toml``). What an
+      ``.include`` of such a file brings in is not recorded: it is read
+      whole, as before.
     - ngspice, measured on ngspice-42 and, where it differs, ngspice-45
       (``tests/test_library_card_read.py``):
       with a section named, only that section's cards, not the cards outside
@@ -1372,6 +1375,18 @@ def library_read(
     if reader.family != "ngspice":
         if sections is None:
             return missing
+        if reader.family == "ltspice" and reference.head == ".lib":
+            named = sorted({owner for owner in sections if owner is not None}, key=str.casefold)
+            if named:
+                return LibraryRead(
+                    unread=(
+                        f"LTspice has no library sections: it reads {reference.raw_path} "
+                        f"whole, and the file's own section line (.lib {named[0]}) as a "
+                        f"library file {named[0]!r} that does not exist, so it runs nothing. "
+                        "Include a file that holds only the section's cards"
+                    ),
+                    rule_id="lib-section-ltspice",
+                )
         if reference.head != ".lib" or reader.family == "ltspice":
             return WHOLE_FILE
         return LibraryRead(selected=reference.section) if reference.section else WHOLE_FILE

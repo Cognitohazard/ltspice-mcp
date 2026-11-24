@@ -216,7 +216,10 @@ C1 out 0 {C}
   the path, quoted or not: `.lib my models/amp.lib` reads `my models/amp.lib`.
   LTspice has no library sections, so `.lib file section` makes it look for a
   file named `file section`, and `run_experiments` refuses that deck (lint
-  `lib-section-ltspice`).
+  `lib-section-ltspice`). It refuses too a `.lib` of a file that declares
+  sections (`.lib tt` ... `.endl tt`): LTspice reads the file's own `.lib tt`
+  as a file named `tt`, finds none and runs nothing. Include a file that
+  holds only the section's cards.
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 
 

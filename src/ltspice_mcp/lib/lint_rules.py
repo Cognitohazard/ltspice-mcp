@@ -812,7 +812,9 @@ def _lib_section_ltspice(
     ``deck/lib_section``), and runs when one does
     (``deck/lib_path_space_unquoted``). A path of more than one word that
     names no file is refused, with what LTspice reads
-    (``deck_staging.library_read``)."""
+    (``deck_staging.library_read``). So is a ``.lib`` of a file that declares
+    sections, whose own ``.lib tt`` LTspice reads as a missing file ``tt``
+    (recorded on both builds: ``deck/lib_whole_sectioned_*``)."""
     findings = []
     for reference in context.reached_models.unread_libraries:
         if reference.read.rule_id != rule.rule_id or reference.path != context.path:
