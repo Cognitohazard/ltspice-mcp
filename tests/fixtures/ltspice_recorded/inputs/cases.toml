@@ -531,8 +531,8 @@ inputs = [
 ]
 
 [behaviour.declaration-grid]
-summary = "The cells of the declaration grid (at the end of this file) that no other recording fills: a .param card of one assignment, of two, in braces, in quotes and with spaces round its sign; a .model card's parameters in parentheses and bare, its level as a number and computed; and a subcircuit whose default follows its ports with no params:, used and overridden. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/spice_lex_views.py", "lib/hierarchy.py", "lib/result_observations.py", "lib/variations.py", "lib/spice_lex_views.py:ParamCard", "lib/spice_lex_views.py:ModelCard", "lib/spice_lex_views.py:SubcktCard", "lib/spice_lex_views.py:assigned_params"]
+summary = "The cells of the declaration grid (at the end of this file) that no other recording fills: a .param card of one assignment, of two, in braces, in quotes and with spaces round its sign; a .model card's parameters in parentheses and bare, its level as a number and computed; and a subcircuit whose default follows its ports with no params:, used and overridden. Both builds read each form as written: a value in single quotes as its number, a level computed in braces as the level it computes, and a default with no params: before it as the subcircuit's default."
+model = ["lib/spice_lex_views.py", "lib/hierarchy.py", "lib/result_observations.py", "lib/variations.py", "lib/library_parser.py", "lib/montecarlo.py", "lib/netlist_diff.py", "lib/lint_rules.py", "lib/spice_lex_views.py:ParamCard", "lib/spice_lex_views.py:ModelCard", "lib/spice_lex_views.py:SubcktCard", "lib/spice_lex_views.py:assigned_params"]
 # Each parameter sets one source's voltage, each model parameter one switch's
 # resistance, and each default one subcircuit's resistor, so the node voltage
 # in the .op raw is the value LTspice read. The computed level is read
@@ -7858,7 +7858,7 @@ pf = { param_form = "spaced_after", via = "V07", node = "n07", volts = { "7000" 
 [[grid.declaration.cell]]
 cases = ["deck/decl_grid_param_quotes"]
 [grid.declaration.cell.items]
-pq = { param_form = "quotes", via = "V01", node = "n01", volts = { "8000" = 8000.0, "absent" = "refused" }, not_established = "No recording shows LTspice read a .param value in single quotes, which ngspice reads as an expression." }
+pq = { param_form = "quotes", via = "V01", node = "n01", volts = { "8000" = 8000.0, "absent" = "refused" }, reads = "8000" }
 
 [[grid.declaration.cell]]
 cases = ["deck/decl_grid_model"]
@@ -7866,12 +7866,12 @@ cases = ["deck/decl_grid_model"]
 swp = { model_params = "parens", subject = "model swp ron", node = "n01", volts = { "2000" = 2.0, "absent" = "refused" }, reads = "2000" }
 swb = { model_params = "bare", subject = "model swb ron", node = "n02", volts = { "3000" = 3.0, "absent" = "refused" }, reads = "3000" }
 mlit = { model_level = "number", subject = "level mlit", node = "n04", volts = { "8" = "!=n03", "1" = "=n03" }, reads = "8" }
-mcomp = { model_level = "computed", subject = "level mcomp", node = "n05", volts = { "8" = "=n04", "1" = "=n03" }, not_established = "No recording shows a level computed in braces." }
+mcomp = { model_level = "computed", subject = "level mcomp", node = "n05", volts = { "8" = "=n04", "1" = "=n03" }, reads = "8" }
 
 [[grid.declaration.cell]]
 cases = ["deck/decl_grid_subckt"]
 [grid.declaration.cell.items]
-r = { subckt_params = "first_assignment", subject = "default simp r", node = "n01", volts = { "2000" = 2000.0, "absent" = "refused" }, not_established = "No recording shows a subcircuit default with no params: before it." }
+r = { subckt_params = "first_assignment", subject = "default simp r", node = "n01", volts = { "2000" = 2000.0, "absent" = "refused" }, reads = "2000" }
 
 [[grid.element-node.cell]]
 cases = ["deck/wavefile_nodes"]
