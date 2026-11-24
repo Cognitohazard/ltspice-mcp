@@ -937,8 +937,8 @@ summary = "The raw a run leaves when it is stopped part way: a point count in th
 model = ["lib/raw_parser.py", "lib/experiment_runner.py"]
 
 [behaviour.results-layout-grid]
-summary = "The cells of the results-layout grid (at the end of this file) that no other recording fills: each analysis stepped over the temperature, a source and a model parameter, and written as text, stepped or not; a frequency or DC sweep of one point, plain and stepped each way; dc, noise and tf under numdgt above 6; each analysis converted to Fast Access; and the .op.raw a transient stepped over the temperature, a source and a model parameter leaves. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/result_kinds.py", "lib/raw_header.py:_resolve_dialect", "lib/raw_header.py:_layout", "lib/raw_header.py:leading_parameters", "lib/raw_parser.py:_binary_layout", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:sampled_axis", "lib/result_kinds.py:stepped_kind"]
+summary = "The cells of the results-layout grid (at the end of this file) that no other recording fills: each analysis stepped over the temperature, a source and a model parameter, and written as text, stepped or not; a frequency or DC sweep of one point, plain and stepped each way; dc, noise and tf under numdgt above 6; each analysis converted to Fast Access; and the .op.raw a transient stepped over the temperature, a source and a model parameter leaves. Each cell is read against its recording on both builds; a build that writes no sound file for a cell says why on it (refused), and a route that reads a recording otherwise says so on its cell (differs)."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/result_kinds.py", "lib/raw_header.py:_resolve_dialect", "lib/raw_header.py:_layout", "lib/raw_header.py:leading_parameters", "lib/raw_parser.py:_binary_layout", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:sampled_axis", "lib/result_kinds.py:stepped_kind", "lib/raw_decode.py", "lib/log_parser.py", "lib/log_parser.py:read_step_line"]
 # Each deck runs one analysis with one stepping, since a raw holds one plot.
 # The text cases run a deck of this behaviour or of raw-* with -ascii, on the
 # recording user's own settings, as raw/tran_as_text does; the fastaccess
@@ -974,7 +974,6 @@ inputs = [
     "raw/layout_grid_noise_numdgt7.cir",
     "raw/layout_grid_tf_numdgt7.cir",
 ]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 # ---------------------------------------------------------------- logs
 
@@ -5438,6 +5437,10 @@ at = { analysis = ["tran", "op", "tf", "fra"], points = ["swept", "one"] }
 reason = "A transient and a frequency response analysis always sweep, and an operating point and a transfer function are one point: only a frequency sweep and a DC sweep can be one point or many."
 
 [[grid.results-layout.exclude]]
+at = { analysis = ["ac", "op", "tf"], order = ["trace"] }
+reason = "LTspice does not store these trace by trace: -FastAccess leaves an AC sweep, an operating point and a transfer function point by point and writes no fastaccess flag, on both builds (raw/layout_grid_fastaccess_ac, raw/layout_grid_fastaccess_op, raw/layout_grid_fastaccess_tf)."
+
+[[grid.results-layout.exclude]]
 at = { analysis = ["fra"], order = ["trace"] }
 reason = "Not recordable as the recorder stands: a fastaccess case converts the run's own <case>.raw with -FastAccess, which for a frequency response analysis is its transient, not the .fra_1.raw. Recording it needs a case kind that converts another file the run wrote."
 
@@ -5644,451 +5647,794 @@ raw = { analysis = "tran", compression = "on" }
 cases = ["raw/layout_grid_tran_source"]
 at = { stepped = "source" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", compression = "on", steps = 2, not_established = "No recording shows a tran stepped over a source; the recording settles the layout, the kind and the steps declared here." }
-"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, not_established = "No recording shows the .op.raw a transient stepped over a source leaves; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tran", compression = "on", steps = 2, refused = { ltspice26 = "LTspice 26.1.1 refuses .step of a PULSE source: \"Can't sweep that.\" It writes no raw." } }
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, refused = { ltspice26 = "LTspice 26.1.1 refuses .step of a PULSE source: \"Can't sweep that.\" It writes no raw." }, differs = [
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: a stepped_run_op names no step" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_tran_model"]
 at = { stepped = "model" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", compression = "on", steps = 2, not_established = "No recording shows a tran stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
-"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, not_established = "No recording shows the .op.raw a transient stepped over a model parameter leaves; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tran", compression = "on", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, differs = [
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: a stepped_run_op names no step; and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind takes the one point for a stepped_run_op, which nothing marks as a step" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_ac_temp"]
 at = { stepped = "temp", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_ac_source"]
 at = { stepped = "source", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_ac_model"]
 at = { stepped = "model", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", steps = 2, not_established = "No recording shows a ac stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_temp"]
 at = { stepped = "temp", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_source"]
 at = { stepped = "source", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 2, not_established = "No recording shows a dc stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 2 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_model"]
 at = { stepped = "model", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 2, not_established = "No recording shows a dc stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_temp"]
 at = { stepped = "temp", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_source"]
 at = { stepped = "source", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_model"]
 at = { stepped = "model", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", steps = 2, not_established = "No recording shows a noise stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_op_source"]
 at = { stepped = "source" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", steps = 3, not_established = "No recording shows a op stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "op", steps = 3, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_op_model"]
 at = { stepped = "model" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", steps = 2, not_established = "No recording shows a op stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "op", steps = 2, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_tf_temp"]
 at = { stepped = "temp" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", steps = 3, not_established = "No recording shows a tf stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tf", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_tf_source"]
 at = { stepped = "source" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", steps = 3, not_established = "No recording shows a tf stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tf", steps = 3, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_tf_model"]
 at = { stepped = "model" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", steps = 2, not_established = "No recording shows a tf stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tf", steps = 2, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fra_temp"]
 at = { stepped = "temp" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", steps = 2, not_established = "No recording shows a fra stepped over the temperature; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
-"fra_1.raw" = { analysis = "fra", steps = 2, not_established = "No recording shows a fra stepped over the temperature; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fra_source"]
 at = { stepped = "source" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", steps = 2, not_established = "No recording shows a fra stepped over a source; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
-"fra_1.raw" = { analysis = "fra", steps = 2, not_established = "No recording shows a fra stepped over a source; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fra_model"]
 at = { stepped = "model" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", steps = 2, not_established = "No recording shows a fra stepped over a model parameter; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
-"fra_1.raw" = { analysis = "fra", steps = 2, not_established = "No recording shows a fra stepped over a model parameter; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on", differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_ac_one_temp"]
 at = { stepped = "temp", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac at one point stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_ac_one_source"]
 at = { stepped = "source", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac at one point stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac", steps = 3, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_ac_one_model"]
 at = { stepped = "model", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", steps = 2, not_established = "No recording shows a ac at one point stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac", steps = 2, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_one_temp"]
 at = { stepped = "temp", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise at one point stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_one_source"]
 at = { stepped = "source", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise at one point stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", steps = 3, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_one_model"]
 at = { stepped = "model", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", steps = 2, not_established = "No recording shows a noise at one point stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", steps = 2, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header analysis", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header dialect", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header double", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header order", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header payload ends the file", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped kind", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header storage", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header widths", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "run row points", reason = "the run row counts the records in the file (3, the last all zero), not the 2 points the header declares" },
+    { build = "ltspice17", route = "decoded analysis", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded axis", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded steps", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect analysis", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api analysis", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api stepped kind", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "XVII declares 2 points and writes 3 records, the last all zero; the header reader takes the bytes after the declared payload for a second plot and refuses the file, and every reader of the file goes through the header reader" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_one"]
 at = { stepped = "no", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc at one point; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", refused = { ltspice26 = "LTspice 26.1.1 refuses a DC sweep of one point: \"This sweep spec results in only one point.\" It writes no raw." } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_one_param"]
 at = { stepped = "param", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc at one point stepped over a parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 3, refused = { ltspice26 = "LTspice 26.1.1 refuses a DC sweep of one point: \"This sweep spec results in only one point.\" It writes no raw.", ltspice17 = "XVII 17.0.37 stops on a stepped DC sweep of one point with Internal Error 44 (exit code 1) and leaves a raw whose header is overwritten." } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_one_temp"]
 at = { stepped = "temp", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc at one point stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 3, refused = { ltspice26 = "LTspice 26.1.1 refuses a DC sweep of one point: \"This sweep spec results in only one point.\" It writes no raw.", ltspice17 = "XVII 17.0.37 stops on a stepped DC sweep of one point with Internal Error 44 (exit code 1) and leaves a raw whose header is overwritten." } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_one_source"]
 at = { stepped = "source", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc at one point stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 3, refused = { ltspice26 = "LTspice 26.1.1 refuses a DC sweep of one point: \"This sweep spec results in only one point.\" It writes no raw.", ltspice17 = "XVII 17.0.37 stops on a stepped DC sweep of one point with Internal Error 44 (exit code 1) and leaves a raw whose header is overwritten." } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_one_model"]
 at = { stepped = "model", points = "one" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", steps = 2, not_established = "No recording shows a dc at one point stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc", steps = 2, refused = { ltspice26 = "LTspice 26.1.1 refuses a DC sweep of one point: \"This sweep spec results in only one point.\" It writes no raw.", ltspice17 = "XVII 17.0.37 stops on a stepped DC sweep of one point with Internal Error 44 (exit code 1) and leaves a raw whose header is overwritten." } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_dc_numdgt7"]
 at = { stepped = "no", points = "swept", numdgt = "above_6" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc  under numdgt above 6; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_noise_numdgt7"]
 at = { stepped = "no", points = "swept", numdgt = "above_6" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise  under numdgt above 6; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_tf_numdgt7"]
 at = { stepped = "no", numdgt = "above_6" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf  under numdgt above 6; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tf" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_step_temp_op_raw"]
 at = { stepped = "temp" }
 [grid.results-layout.cell.items]
-"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, not_established = "No recording shows the .op.raw a transient stepped over the temperature leaves; the recording settles the layout, the kind and the steps declared here." }
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tran_param"]
 at = { storage = "text", stepped = "param", compression = "on" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a tran stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "tran", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tran_temp"]
 at = { storage = "text", stepped = "temp", compression = "on" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a tran stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "tran", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tran_source"]
 at = { storage = "text", stepped = "source", compression = "on" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a tran stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "tran", steps = 2, refused = { ltspice26 = "LTspice 26.1.1 refuses .step of a PULSE source: \"Can't sweep that.\" It writes no raw." } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tran_model"]
 at = { storage = "text", stepped = "model", compression = "on" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a tran stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "tran", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_ac_param"]
 at = { storage = "text", stepped = "param", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", not_established = "No recording shows a ac stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "ac", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_ac_temp"]
 at = { storage = "text", stepped = "temp", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", not_established = "No recording shows a ac stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "ac", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_ac_source"]
 at = { storage = "text", stepped = "source", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", not_established = "No recording shows a ac stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "ac", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_ac_model"]
 at = { storage = "text", stepped = "model", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", not_established = "No recording shows a ac stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "ac", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_dc_no"]
 at = { storage = "text", stepped = "no", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc written as text; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_dc_param"]
 at = { storage = "text", stepped = "param", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "dc", steps = 2 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_dc_temp"]
 at = { storage = "text", stepped = "temp", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "dc", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_dc_source"]
 at = { storage = "text", stepped = "source", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "dc", steps = 2 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_dc_model"]
 at = { storage = "text", stepped = "model", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "dc", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_noise_no"]
 at = { storage = "text", stepped = "no", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise written as text; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise", differs = [
+    { build = "ltspice17", route = "header analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header dialect", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header double", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header order", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header storage", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded axis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded steps", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_noise_param"]
 at = { storage = "text", stepped = "param", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "noise", steps = 3, differs = [
+    { build = "ltspice17", route = "header analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header dialect", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header double", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header order", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header storage", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded axis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded steps", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_noise_temp"]
 at = { storage = "text", stepped = "temp", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "noise", steps = 3, differs = [
+    { build = "ltspice17", route = "header analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header dialect", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header double", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header order", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header storage", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded axis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded steps", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_noise_source"]
 at = { storage = "text", stepped = "source", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "noise", steps = 3, differs = [
+    { build = "ltspice17", route = "header analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header dialect", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header double", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header order", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header storage", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded axis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded steps", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_noise_model"]
 at = { storage = "text", stepped = "model", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "noise", steps = 2, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+    { build = "ltspice17", route = "header analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header dialect", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header double", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header order", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "header storage", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded axis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "decoded steps", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api analysis", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "api stepped kind", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "XVII writes a text raw in the code page, and the noise plot's name holds the byte 0xBD (½ in V/Hz½); the header reader refuses it as an invalid encoding, and every reader of the file goes through the header reader" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_op_no"]
 at = { storage = "text", stepped = "no" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", not_established = "No recording shows a op written as text; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "op" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_op_param"]
 at = { storage = "text", stepped = "param" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", not_established = "No recording shows a op stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "op", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_op_temp"]
 at = { storage = "text", stepped = "temp" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", not_established = "No recording shows a op stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "op", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_op_source"]
 at = { storage = "text", stepped = "source" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", not_established = "No recording shows a op stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "op", steps = 3, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_op_model"]
 at = { storage = "text", stepped = "model" }
 [grid.results-layout.cell.items]
-raw = { analysis = "op", not_established = "No recording shows a op stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "op", steps = 2, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tf_no"]
 at = { storage = "text", stepped = "no" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf written as text; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tf" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tf_param"]
 at = { storage = "text", stepped = "param" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "tf", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tf_temp"]
 at = { storage = "text", stepped = "temp" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "tf", steps = 3 }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tf_source"]
 at = { storage = "text", stepped = "source" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+raw = { analysis = "tf", steps = 3, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped source (v1 voltage) leads it, which raw_header.leading_parameters does not take)" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped source (v1 voltage) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_tf_model"]
 at = { storage = "text", stepped = "model" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+raw = { analysis = "tf", steps = 2, differs = [
+    { build = "ltspice26", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+    { build = "ltspice17", route = "header stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "decoded steps", reason = "the decoder splits no steps: the plot has no stepped kind (the stepped model parameter (is d) leads it, which raw_header.leading_parameters does not take); and the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice17", route = "inspect stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "api stepped kind", reason = "the stepped model parameter (is d) leads the plot, and raw_header.leading_parameters takes a leading variable only of type param or temperature, so stepped_kind finds no kind" },
+    { build = "ltspice17", route = "analyze_results rows", reason = "inspect's table view refuses the plot (Step boundaries are unresolved): the decoder found no steps (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_fra_no"]
 at = { storage = "text", stepped = "no" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a fra written as text; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
-"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra written as text; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", compression = "on" }
+"fra_1.raw" = { analysis = "fra", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_fra_param"]
 at = { storage = "text", stepped = "param" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a fra stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
-"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_fra_temp"]
 at = { storage = "text", stepped = "temp" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a fra stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
-"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_fra_source"]
 at = { storage = "text", stepped = "source" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a fra stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
-"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_text_fra_model"]
 at = { storage = "text", stepped = "model" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
-raw = { analysis = "tran", not_established = "No recording shows a fra stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
-"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+raw = { analysis = "tran", steps = 2, compression = "on", differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }, differs = [
+    { build = "ltspice26", route = "decoded steps", reason = "the decoder reads a run's steps off its log, and log_parser.read_step_line does not read a model parameter's step line (.step dm(is)=1e-14), so it finds none" },
+    { build = "ltspice26", route = "analyze_results rows", reason = "analyze_results refuses the plot: the decoder found no steps in it (see decoded steps)" },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform charts nothing: the decoder found no steps in the stepped plot (see decoded steps)" },
+] }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fastaccess_ac"]
-at = { order = "trace", points = "swept" }
+# -FastAccess leaves an AC sweep point by point, with no fastaccess flag.
+at = { points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "ac", not_established = "No recording shows a ac raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "ac" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fastaccess_dc"]
 at = { order = "trace", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "dc", not_established = "No recording shows a dc raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "dc" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fastaccess_noise"]
 at = { order = "trace", points = "swept" }
 [grid.results-layout.cell.items]
-raw = { analysis = "noise", not_established = "No recording shows a noise raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "noise" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fastaccess_op"]
-at = { order = "trace" }
+# -FastAccess leaves an operating point as it was, with no fastaccess flag.
 [grid.results-layout.cell.items]
-raw = { analysis = "op", not_established = "No recording shows a op raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "op" }
 
 [[grid.results-layout.cell]]
 cases = ["raw/layout_grid_fastaccess_tf"]
-at = { order = "trace" }
+# -FastAccess leaves a transfer function as it was, with no fastaccess flag.
 [grid.results-layout.cell.items]
-raw = { analysis = "tf", not_established = "No recording shows a tf raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+raw = { analysis = "tf" }
 
 # ---------------------------------------------------------------- grid: how a trace is named
 

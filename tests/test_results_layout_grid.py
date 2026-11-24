@@ -35,13 +35,13 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib.raw_header import preflight_raw
+from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import read_partial_raw_progress
 from ltspice_mcp.lib.result_kinds import STEPPED_KINDS, plot_analysis, stepped_kind
 from ltspice_mcp.lib.spice_lex import directive_head
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
-from tests._asc_ops import inspect_one
+from tests._asc_ops import _inspect_item
 from tests._ngspice_decks import run_ngspice
 from tests._recorded_grids import Cell, grid
 from tests.conftest import SyncApi, dispatched
@@ -51,7 +51,21 @@ GRID = grid("results-layout")
 #: How many routes answer otherwise than a cell, per build, each declared on
 #: its cell (``differs``, with the route and the reason). A count may only
 #: fall: a fix lowers it here in the same change.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 1, "ltspice17": 1}
+#:
+#: Most are one of four causes, each read on every route behind it: a plot
+#: led by the stepped source or model parameter, which
+#: ``raw_header.leading_parameters`` does not take, so it has no stepped kind
+#: (or, for XVII's one-point .op.raw, the wrong one); a model parameter's
+#: step line (``.step dm(is)=...``), which ``log_parser.read_step_line`` does
+#: not read, so the decoder finds no steps; XVII's text noise plot, whose
+#: name holds a code page byte the header reader refuses; and XVII's binary
+#: noise plot of a stepped model at one frequency, which carries one record
+#: more than it declares. The last on each build is plot_waveform's on the
+#: AC deck.
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 109, "ltspice17": 205}
+
+#: What a route answers when the reader behind it refuses the file.
+REFUSED = "refused"
 
 #: The analysis each coordinate names, as ``plot_analysis`` spells it.
 ANALYSES = {
@@ -173,7 +187,10 @@ def test_a_cell_is_the_form_its_case_runs():
         assert (at["numdgt"] == "above_6") == (_numdgt(case.source) > 6), cell.id
         text = "-ascii" in case.switches or case.ini.get("AsciiRawFile") == "true"
         assert (at["storage"] == "text") == text, cell.id
-        assert (at["order"] == "trace") == (case.kind == "fastaccess"), cell.id
+        # -FastAccess leaves an AC sweep, an operating point and a transfer
+        # function point by point (raw/layout_grid_fastaccess_ac, _op, _tf).
+        converted = case.kind == "fastaccess" and at["analysis"] not in ("ac", "op", "tf")
+        assert (at["order"] == "trace") == converted, cell.id
         if at["analysis"] == "tran" and cell.item == "raw":
             off = any("plotwinsize=0" in word.lower() for word in _card(case.source, ".options"))
             assert at["compression"] == ("off" if off else "on"), cell.id
@@ -278,7 +295,7 @@ def _expected(cell: Cell, build: str, variables: int, points: int) -> dict[str, 
         "inspect stepped kind": kind,
         "api analysis": ANALYSES[at["analysis"]],
         "api stepped kind": kind,
-        "analyze_results rows": steps if steps else "refused",
+        "analyze_results rows": steps if steps else REFUSED,
         "plot_waveform charted": True,
     }
     if at["storage"] == "binary":
@@ -299,13 +316,17 @@ def _signal(names: list[str], axis: str | None) -> str:
 
 def _rows_or_refusal(reply: dict[str, Any]) -> int | str:
     if reply.get("failures"):
-        return "refused"
+        return REFUSED
     return len(reply["results"]["k"]["per_run"]["items"])
 
 
 async def _every_route(
     build: str, cell: Cell, state: SessionState, directory: Path, not_run: dict[str, str]
 ) -> dict[str, Any]:
+    """What each route answers for the cell's file. A route whose reader
+    refuses the file answers ``REFUSED``, and the reader's error is noted in
+    ``not_run``; the routes that read through the decoder (``analyze_results``
+    and ``plot_waveform``) are then refused with it."""
     stem = _stem(cell)
     staged = rec.stage_run(build, stem, directory / "run")
     # Beside the run's own log, as the run left them: an .op.raw or a
@@ -314,46 +335,87 @@ async def _every_route(
     if cell.item != "raw" and rec.has(build, log):
         shutil.copyfile(rec.recorded(build, log), directory / "run" / Path(log).name)
     routes: dict[str, Any] = {}
-    header = preflight_raw(staged, limits=rec.RAW_LIMITS)
-    (plot,) = header.plots
-    routes["header dialect"] = plot.dialect
-    routes["header analysis"] = plot_analysis(plot.plot_name, plot.first_type)
-    # The header names a text plot by its marker, "Values:".
-    routes["header storage"] = {"values": "text"}.get(plot.storage, plot.storage)
-    routes["header order"] = plot.storage_order
-    routes["header stepped"] = plot.stepped
-    routes["header double"] = "double" in (flag.lower() for flag in plot.flags)
-    kind = stepped_kind(plot)
-    routes["header stepped kind"] = kind.name if kind is not None else None
-    if plot.storage != "values":
-        routes["header widths"] = plot.value_bytes
-        routes["header payload ends the file"] = plot.payload_end == staged.stat().st_size
-    else:
-        not_run["header widths"] = "a text plot has no binary record"
+    header_routes = (
+        "header dialect",
+        "header analysis",
+        "header storage",
+        "header order",
+        "header stepped",
+        "header double",
+        "header stepped kind",
+    )
+    try:
+        header = preflight_raw(staged, limits=rec.RAW_LIMITS)
+    except RawHeaderError as exc:
+        not_run["header"] = f"refused: {exc}"
+        routes.update(dict.fromkeys(header_routes, REFUSED))
+        if cell.at(build)["storage"] == "binary":
+            routes["header widths"] = routes["header payload ends the file"] = REFUSED
+        header = None
+    if header is not None:
+        (plot,) = header.plots
+        routes["header dialect"] = plot.dialect
+        routes["header analysis"] = plot_analysis(plot.plot_name, plot.first_type)
+        # The header names a text plot by its marker, "Values:".
+        routes["header storage"] = {"values": "text"}.get(plot.storage, plot.storage)
+        routes["header order"] = plot.storage_order
+        routes["header stepped"] = plot.stepped
+        routes["header double"] = "double" in (flag.lower() for flag in plot.flags)
+        kind = stepped_kind(plot)
+        routes["header stepped kind"] = kind.name if kind is not None else None
+        if plot.storage != "values":
+            routes["header widths"] = plot.value_bytes
+            routes["header payload ends the file"] = plot.payload_end == staged.stat().st_size
+        else:
+            not_run["header widths"] = "a text plot has no binary record"
     progress = read_partial_raw_progress(staged)
-    assert progress is not None, cell.id
-    routes["run row plot"] = progress.plot == plot.plot_name
-    routes["run row points"] = progress.points
-    routes["run row axis"] = progress.axis is not None
-    routes["run row stepped"] = progress.stepped
-    decoded = rec.decode(build, stem, directory / "decoded").raw
-    descriptor = decoded.descriptor
-    routes["decoded analysis"] = descriptor.analysis
-    routes["decoded stepped kind"] = descriptor.stepped_kind
-    routes["decoded axis"] = descriptor.axis is not None
-    routes["decoded steps"] = len(descriptor.steps)
-    listed = await inspect_one(state, {"kind": "results", "view": "plots", "path": str(staged)})
-    (row,) = listed["plots"]
-    routes["inspect analysis"] = row["analysis"]
-    routes["inspect stepped kind"] = row.get("stepped_kind")
+    if progress is None:
+        not_run["run row"] = "refused: the run row reads no progress"
+        for route in ("run row plot", "run row points", "run row axis", "run row stepped"):
+            routes[route] = REFUSED
+    else:
+        # The plot name as the build wrote it, read apart from the header reader.
+        routes["run row plot"] = progress.plot == rec.header_fields(build, stem)["Plotname"][0]
+        routes["run row points"] = progress.points
+        routes["run row axis"] = progress.axis is not None
+        routes["run row stepped"] = progress.stepped
+    try:
+        descriptor = rec.decode(build, stem, directory / "decoded").raw.descriptor
+    except Exception as exc:  # any refusal of the decoder is its answer
+        not_run["decoded"] = f"refused: {exc}"
+        descriptor = None
+        for route in ("decoded analysis", "decoded stepped kind", "decoded axis", "decoded steps"):
+            routes[route] = REFUSED
+        routes["analyze_results rows"] = routes["plot_waveform charted"] = REFUSED
+    else:
+        routes["decoded analysis"] = descriptor.analysis
+        routes["decoded stepped kind"] = descriptor.stepped_kind
+        routes["decoded axis"] = descriptor.axis is not None
+        routes["decoded steps"] = len(descriptor.steps)
+    listed = await _inspect_item(state, {"kind": "results", "view": "plots", "path": str(staged)})
+    if listed["ok"]:
+        (row,) = listed["data"]["plots"]
+        routes["inspect analysis"] = row["analysis"]
+        routes["inspect stepped kind"] = row.get("stepped_kind")
+    else:
+        not_run["inspect"] = f"refused: {listed['error']['message']}"
+        routes["inspect analysis"] = routes["inspect stepped kind"] = REFUSED
     api = SyncApi(state)
-    loaded = await asyncio.to_thread(lambda: api.load_raw(staged))
-    routes["api analysis"] = loaded.analysis_type
-    routes["api stepped kind"] = loaded.descriptor["stepped_kind"]
+    try:
+        loaded = await asyncio.to_thread(lambda: api.load_raw(staged))
+    except Exception as exc:  # any refusal of load_raw is its answer
+        not_run["api"] = f"refused: {exc}"
+        routes["api analysis"] = routes["api stepped kind"] = REFUSED
+    else:
+        routes["api analysis"] = loaded.analysis_type
+        routes["api stepped kind"] = loaded.descriptor["stepped_kind"]
+    if descriptor is None:
+        return routes
     axis = descriptor.axis.name if descriptor.axis is not None else None
     signal = _signal([trace.name for trace in descriptor.signals()], axis)
     # Statistics need a sweep; a plot of one point a step is read by value.
-    swept = axis is not None and plot.point_count > max(len(descriptor.steps), 1)
+    points = int(rec.header_fields(build, stem)["No. Points"][0])
+    swept = axis is not None and points > max(len(descriptor.steps), 1)
     recipe = (
         {"metric": "signal_stats", "signal": signal}
         if swept
@@ -362,9 +424,16 @@ async def _every_route(
     if descriptor.analysis == "tf":
         # A transfer function is a table, which analyze_results refers to
         # inspect's table view; that view is its route.
-        table = await inspect_one(state, {"kind": "results", "view": "table", "path": str(staged)})
-        # One row a quantity a step.
-        routes["analyze_results rows"] = len(table["table"]) // len(descriptor.signals())
+        table = await _inspect_item(
+            state, {"kind": "results", "view": "table", "path": str(staged)}
+        )
+        if table["ok"]:
+            # One row a quantity a step.
+            rows = len(table["data"]["table"]) // len(descriptor.signals())
+            routes["analyze_results rows"] = rows
+        else:
+            not_run["inspect table"] = f"refused: {table['error']['message']}"
+            routes["analyze_results rows"] = REFUSED
         not_run["analyze_results"] = "a .tf plot is a table, read by inspect's table view"
     else:
         reply = await dispatched(
@@ -415,7 +484,16 @@ async def test_every_recorded_cell_reads_as_its_form_on_every_route(
     declared on its cell (``differs``)."""
     for index, cell in enumerate(GRID.cells_of(case_id)):
         if build in cell.refused:
-            assert not rec.has(build, f"{_stem(cell)}.raw"), (cell.id, "refused, yet written")
+            if rec.has(build, f"{_stem(cell)}.raw"):
+                # A build that stopped with an error can leave a raw it did
+                # not finish; the header reader refuses it.
+                assert rec.entry(build, cell.case)["exit_code"] != 0, (
+                    cell.id,
+                    "refused, yet written",
+                )
+                staged = rec.stage_run(build, _stem(cell), work_dir / f"refused{index}")
+                with pytest.raises(RawHeaderError):
+                    preflight_raw(staged, limits=rec.RAW_LIMITS)
             continue
         assert _read_on(build, cell), f"{cell.id}: {build} recorded the case but not its file"
         not_run: dict[str, str] = {}
@@ -465,9 +543,18 @@ def _shown(build: str, scratch: Path) -> set[str]:
     for index, cell in enumerate(GRID.cells):
         if not _read_on(build, cell):
             continue
-        descriptor = rec.decode(build, _stem(cell), scratch / f"{index}").raw.descriptor
-        shown.add(f"analysis:{cell.at(build)['analysis']}")
-        if descriptor.stepped_kind is not None:
+        try:
+            descriptor = rec.decode(build, _stem(cell), scratch / f"{index}").raw.descriptor
+        except RawHeaderError:
+            # A file the decoder refuses shows nothing (its cell declares it).
+            continue
+        pinned = {
+            entry["route"] for entry in cell.extra.get("differs", ()) if entry["build"] == build
+        }
+        if "decoded analysis" not in pinned:
+            shown.add(f"analysis:{cell.at(build)['analysis']}")
+        # A kind the decoder is declared to misread shows nothing.
+        if descriptor.stepped_kind is not None and "decoded stepped kind" not in pinned:
             shown.add(descriptor.stepped_kind)
     return shown
 

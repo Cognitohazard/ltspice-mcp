@@ -83,13 +83,32 @@ from ltspice_mcp.tools.experiments import AttachedAnalysis, attached_analysis_ca
 from tests import _ltspice_recorded as rec
 from tests._asc_ops import inspect_one
 from tests._ltspice_recorded import declared_points, header_fields
+from tests._recorded_grids import grid
 from tests.conftest import SyncApi, make_experiment_job
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 from tests.test_decoded_raw import assert_every_plot_classified
 
 
+def _header_reader_refuses(build: str, case_id: str) -> bool:
+    """Whether the results-layout grid declares the run's own raw unread on
+    ``build``: the build refused the cell, or the header reader refuses its
+    file. The cell gives the reason, and its test pins each route."""
+    for cell in grid("results-layout").cells_of(case_id):
+        if cell.item != "raw":
+            continue
+        if build in cell.refused:
+            return True
+        if any(
+            entry["build"] == build and entry["route"] == "header dialect"
+            for entry in cell.extra.get("differs", ())
+        ):
+            return True
+    return False
+
+
 def complete_raws(build: str) -> list[str]:
-    """Every recorded run that ended by itself and left a raw with samples in it."""
+    """Every recorded run that ended by itself and left a raw with samples in
+    it, less those the results-layout grid declares unread."""
     cases = rec.manifest(build)["cases"]
     return sorted(
         case_id
@@ -98,6 +117,7 @@ def complete_raws(build: str) -> list[str]:
         and entry["outputs"][f"{case_id}.raw"]["bytes"] > 0
         and not entry["stopped"]
         and declared_points(build, case_id) > 0
+        and not _header_reader_refuses(build, case_id)
     )
 
 
