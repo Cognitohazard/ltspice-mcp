@@ -388,6 +388,7 @@ _NOT_A_SIGNAL = {
     "lib/recovery_records.py:_strict_fields": "a JSON Schema reference",
     "lib/reply_cuts.py:schema_lists.walk": "a JSON Schema reference",
     "lib/symbol_library.py:spellings": "a symbol's library path",
+    "lib/symbol_library.py:_walk": "a symbol's library path, one folder at a time",
     "tools/_schema.py:_referenced_defs": "a JSON Schema reference",
 }
 

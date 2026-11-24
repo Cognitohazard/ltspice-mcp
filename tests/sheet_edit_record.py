@@ -72,7 +72,7 @@ import pytest
 from ltspice_mcp.errors import LTSpiceMCPError
 from ltspice_mcp.lib import asc_document, wsl
 from ltspice_mcp.lib.plot_settings import plot_settings_path
-from ltspice_mcp.lib.symbol_library import SymbolResolver
+from ltspice_mcp.lib.symbol_library import AmbiguousName, SymbolResolver
 from ltspice_mcp.tools import schematic_edit
 from ltspice_mcp.tools._base import as_sent, safe_path
 from tests._proposal_record import write_record
@@ -268,7 +268,11 @@ def _symbols(target: Path, names: set[str], resolver: SymbolResolver) -> list[An
     """Each symbol name with the digest of the file ``resolver`` finds for it."""
     found = []
     for name in sorted(names):
-        path = resolver.resolve(name)
+        try:
+            path = resolver.resolve(name)
+        except AmbiguousName as ambiguous:
+            found.append([name, [[one.name, _digest_of(one)] for one in ambiguous.files]])
+            continue
         inside = path is None or path.is_relative_to(TESTS) or path.is_relative_to(target.parent)
         if not inside:
             _foreign.add(f"{name} ({path})")

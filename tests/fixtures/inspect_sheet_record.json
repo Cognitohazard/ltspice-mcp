@@ -78180,6 +78180,7 @@
      "reference": "X1",
      "rotation": "R0",
      "symbol": "outer",
+     "symbol_problem": "not found",
      "value": ""
     }
    ],
@@ -92563,6 +92564,7 @@
      "reference": "J1",
      "rotation": "R0",
      "symbol": "njf",
+     "symbol_problem": "not found",
      "value": ""
     },
     {
@@ -92573,6 +92575,7 @@
      "reference": "J2",
      "rotation": "R0",
      "symbol": "pjf",
+     "symbol_problem": "not found",
      "value": ""
     },
     {
@@ -92654,6 +92657,7 @@
      "reference": "M2",
      "rotation": "R0",
      "symbol": "pmos",
+     "symbol_problem": "not found",
      "value": ""
     },
     {
@@ -92703,6 +92707,7 @@
      "reference": "Q2",
      "rotation": "R0",
      "symbol": "pnp",
+     "symbol_problem": "not found",
      "value": ""
     },
     {
@@ -107757,6 +107762,7 @@
      "reference": "R1",
      "rotation": "R0",
      "symbol": "part",
+     "symbol_problem": "not found",
      "value": "1k"
     }
    ],
@@ -107794,6 +107800,7 @@
      "reference": "V1",
      "rotation": "R0",
      "symbol": "battery",
+     "symbol_problem": "not found",
      "value": "5"
     }
    ],
@@ -107831,6 +107838,7 @@
      "reference": "V1",
      "rotation": "R0",
      "symbol": "Misc\\\\battery",
+     "symbol_problem": "not found",
      "value": "5"
     }
    ],
@@ -107868,6 +107876,7 @@
      "reference": "V1",
      "rotation": "R0",
      "symbol": "Wrong\\\\battery",
+     "symbol_problem": "not found",
      "value": "5"
     }
    ],
@@ -108014,6 +108023,7 @@
      "reference": "R1",
      "rotation": "R0",
      "symbol": "lib\\\\part",
+     "symbol_problem": "not found",
      "value": "1k"
     }
    ],

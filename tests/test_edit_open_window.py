@@ -27,7 +27,12 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import ltspice_window
-from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
+from ltspice_mcp.lib.encoding import (
+    WHOLE_BYTE_CP1252,
+    decode_spice_bytes,
+    decode_windows_1252,
+    eight_bit_reading_note,
+)
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession
 from ltspice_mcp.lib.ltspice_window import OpenSheet, OpenWindows
 from ltspice_mcp.state import SessionState
@@ -56,6 +61,15 @@ from tests.ltspice_recorder import NEUTRAL_DIR
 #: The stand-in bridge runs under this interpreter, which is what a message names.
 BRIDGE_PROGRAM = Path(sys.executable).name
 SET_VALUE = [{"op": "set_component_value", "reference": "R1", "value": "2.2k"}]
+
+
+#: What every reply on the recorded sheet says of its 8-bit text, which holds a µ.
+_READING_NOTE = eight_bit_reading_note(b"\xb5", WHOLE_BYTE_CP1252)
+
+
+def window_notes(data: dict[str, Any]) -> list[str]:
+    """The reply's observations other than the note on how its text was read."""
+    return [one for one in data.get("observations", []) if one != _READING_NOTE]
 
 
 def file_bytes(sheet: Path) -> bytes:
@@ -166,7 +180,7 @@ async def test_a_committed_edit_is_shown_in_the_window_that_has_the_sheet_open(
     assert window.text(asc_file) == as_the_server_reads(asc_file)
     assert "SYMATTR Value 2.2k" in window.text(asc_file)
     assert "now shows it" in data["hint"]
-    assert "observations" not in data
+    assert window_notes(data) == []
 
 
 async def test_an_edit_is_refused_while_the_window_holds_a_different_sheet(
@@ -755,16 +769,16 @@ async def test_a_dry_run_reports_a_window_that_differs_and_is_not_refused(
 
     assert data["outcome"] == "complete"
     assert data["commit_state"] == "not_committed"
-    assert len(data["observations"]) == 1
-    assert "holds a different one from the file" in data["observations"][0]
-    assert "A commit is refused until the window's copy is saved" in data["observations"][0]
+    assert len(window_notes(data)) == 1
+    assert "holds a different one from the file" in window_notes(data)[0]
+    assert "A commit is refused until the window's copy is saved" in window_notes(data)[0]
     assert window.text(asc_file) == held
     assert "open_in_ltspice" not in data
 
     # The call the note names, with the reply's sha256, drops the window's copy.
     assert data["sha256"] == digest(asc_file)
     settled = await follow_open_window_referral(
-        asc_state, data["observations"][0], asc_file, "discard", sha256=data["sha256"]
+        asc_state, window_notes(data)[0], asc_file, "discard", sha256=data["sha256"]
     )
     assert settled["outcome"] == "complete", settled
     assert window.text(asc_file) == as_ltspice_reads(asc_file)
@@ -783,7 +797,7 @@ async def test_each_call_a_dry_run_under_two_different_windows_names_is_taken(
 
     settled = await follow_open_window_referral(
         asc_state,
-        data["observations"][0],
+        window_notes(data)[0],
         asc_file,
         choice,
         sha256=data["sha256"],
@@ -807,7 +821,7 @@ async def test_a_sheet_no_window_has_open_is_edited_as_before(
     assert "open_in_ltspice" not in data
     assert data["hint"].startswith("Committed.")
     assert "LTspice" not in data["hint"]
-    assert "observations" not in data
+    assert window_notes(data) == []
 
 
 @pytest.mark.parametrize(
@@ -828,7 +842,7 @@ async def test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window(
     data = await edit(asc_state, asc_file, ops=ops)
 
     assert data["outcome"] == "complete"
-    assert "observations" not in data
+    assert window_notes(data) == []
     assert "open_in_ltspice" not in data
     assert "window_check" not in [stage["stage"] for stage in data.get("stages", [])]
     assert file_bytes(asc_file) == before
@@ -849,7 +863,7 @@ async def test_a_new_sheet_asks_no_window(asc_state: SessionState, work_dir: Pat
     )
 
     assert data["outcome"] == "complete"
-    assert "observations" not in data
+    assert window_notes(data) == []
 
 
 async def test_a_window_that_does_not_take_the_edit_is_closed_and_opened_again(
@@ -1006,7 +1020,7 @@ async def test_a_bridge_that_cannot_say_does_not_stop_the_edit(
     assert data["outcome"] == "complete"
     assert data["commit_state"] == "committed"
     assert "open_in_ltspice" not in data
-    assert data["observations"] == [
+    assert window_notes(data) == [
         "LTspice could not be asked whether Draft1.asc is open in a window "
         f"({BRIDGE_PROGRAM} did not answer within 1 s and was ended); one that has "
         "it open still shows the sheet as it was."

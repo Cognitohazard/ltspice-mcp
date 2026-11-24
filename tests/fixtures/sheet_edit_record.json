@@ -48,7 +48,7 @@
  },
  "03826ee7b8917926": {
   "answer": {
-   "reply": "df68aef58088fbe1",
+   "reply": "bd643fd4a4bff711",
    "sheet": null
   },
   "tests": [
@@ -74,6 +74,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_end_on_wire_interior]"
   ]
  },
+ "0437b86da4845fdf": {
+  "answer": {
+   "reply": "0194d1b715c3f1f7",
+   "sheet": "bef8a9a99b05719e"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_sheet_with_more_than_ascii_says_its_reading_is_uncertain",
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_micro_sign_and_accented_label_read_alike_and_keep_their_bytes"
+  ]
+ },
  "04fe530b589e1cc9": {
   "answer": {
    "reply": "a9da0ff376825a40",
@@ -92,16 +102,6 @@
    "tests/test_edit_schematic.py::test_a_dry_run_reports_a_mismatch_with_the_netlist"
   ]
  },
- "0645ad16881e6983": {
-  "answer": {
-   "reply": "ba38933d9ecd1329",
-   "sheet": "c064b176635b7503"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
-  ]
- },
  "078875ffcb92330e": {
   "answer": {
    "reply": "b764808779f76a17",
@@ -113,7 +113,7 @@
  },
  "092435e76931010d": {
   "answer": {
-   "reply": "334504975be3db4c",
+   "reply": "5422ace984097cbe",
    "sheet": "15598c6f7ef7c69d"
   },
   "tests": [
@@ -191,6 +191,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_attribute]"
+  ]
+ },
+ "0cb91bb954c2e2c7": {
+  "answer": {
+   "reply": "fa63c15c168a9bba",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf16_le_with_a_mark_is_read_alike_and_written_without_it"
   ]
  },
  "0cc4c501bd638db6": {
@@ -328,6 +337,15 @@
    "tests/test_edit_schematic.py::test_dry_run_needs_no_expected_sha_and_hands_back_the_digest"
   ]
  },
+ "10948f3f16e6b3f4": {
+  "answer": {
+   "reply": "f6ae3b934e8a9ede",
+   "sheet": "47b51366026c28d8"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf16_le_without_a_mark_is_read_alike_and_written_back_as_it_was"
+  ]
+ },
  "117f44aede9319b5": {
   "answer": {
    "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
@@ -344,6 +362,15 @@
   },
   "tests": [
    "tests/test_remove_component_cleanup.py::TestTheOrderOfTheRecords::test_the_reply_and_the_sheet_do_not_depend_on_the_order_of_records"
+  ]
+ },
+ "13a3050ba0c897df": {
+  "answer": {
+   "reply": "5ec231ec62822cf1",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf8_without_a_mark_is_read_alike_and_written_back_as_it_was"
   ]
  },
  "13c2e21dc0562fc2": {
@@ -376,7 +403,7 @@
  },
  "145baa30b9d55584": {
   "answer": {
-   "reply": "01df5a9f208c3be8",
+   "reply": "e8e7ac931ebbe07f",
    "sheet": "43a2822eb408c09d"
   },
   "tests": [
@@ -466,16 +493,6 @@
    "tests/test_edit_schematic.py::test_reference_outside_sandbox_names_the_text_alternative"
   ]
  },
- "19642cc2b293eb8d": {
-  "answer": {
-   "reply": "0b34a05f166a3180",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
-  ]
- },
  "19aca848f42578fd": {
   "answer": {
    "reply": "9d25dc6cc4b4680a",
@@ -560,7 +577,7 @@
  },
  "1c6a16e40f111919": {
   "answer": {
-   "reply": "5de202bd0c6004e3",
+   "reply": "15d6c78e0eb866cb",
    "sheet": "e0a8aa7acd9b20b5"
   },
   "tests": [
@@ -596,7 +613,7 @@
  },
  "1dfb74428729788d": {
   "answer": {
-   "reply": "7d057144f1a22f76",
+   "reply": "9f7419bf082ab906",
    "sheet": "6e9880d2e1a04bf2"
   },
   "tests": [
@@ -786,6 +803,15 @@
    "tests/test_remove_component_cleanup.py::TestWhatTheCleanupTakes::test_a_chain_from_the_pin_to_nothing_goes_whole"
   ]
  },
+ "27b5460407b81f9e": {
+  "answer": {
+   "reply": "ce426fee4c0f01a0",
+   "sheet": "0de06556a6716d54"
+  },
+  "tests": [
+   "tests/test_symbol_name_case.py::TestCaseSensitiveFileSystem::test_case_sensitive_fs_the_symbol_spelled_as_the_sheet_spells_it_wins"
+  ]
+ },
  "282bedee7f0b2ce4": {
   "answer": {
    "reply": "6dbfde1e161685f7",
@@ -829,6 +855,15 @@
   ],
   "varies": true
  },
+ "2a281c22b16d8b5e": {
+  "answer": {
+   "reply": "fe8510e8e0e4f786",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_byte_cp1252_leaves_undefined_is_read_alike_and_not_refused[0x81]"
+  ]
+ },
  "2a34f41928fc501b": {
   "answer": {
    "reply": "3cc34a936e604cac",
@@ -857,6 +892,15 @@
    "tests/test_recorded_ltspice_schematics.py::TestSheetRecords::test_an_edit_keeps_the_data_labels_where_the_sheet_has_them[ltspice26]"
   ]
  },
+ "2bb10075ac865c5c": {
+  "answer": {
+   "reply": "4b1d0533e5d99068",
+   "sheet": "bef8a9a99b05719e"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestReadUnderTheLock::test_an_edit_reads_the_encoding_and_line_ends_a_peer_wrote_under_the_lock"
+  ]
+ },
  "2c255a72e90ef8a6": {
   "answer": {
    "reply": "3061ed06b156ee7f",
@@ -865,6 +909,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[empty-gone]",
    "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[holding a sheet of the block's name-gone]"
+  ]
+ },
+ "2d4f9429d17f4913": {
+  "answer": {
+   "reply": "edcb2b89da13865d",
+   "sheet": "2389890c8985c530"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_cp936_comment_keeps_its_bytes"
   ]
  },
  "2df07f3c6190d0e4": {
@@ -1059,16 +1112,6 @@
    "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_attribute]"
   ]
  },
- "3a12e3fea4f4a741": {
-  "answer": {
-   "reply": "2856784b14be9f22",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_recursive_subcircuit_compare.py::test_edit_schematic_reference_stage_states_the_failure"
-  ]
- },
  "3b41f2c13f80fac4": {
   "answer": {
    "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
@@ -1170,6 +1213,15 @@
    "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[same_session]"
   ]
  },
+ "4037044855cf8d9e": {
+  "answer": {
+   "reply": "3773857bad8d8def",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestReadUnderTheLock::test_an_edit_reads_the_encoding_and_line_ends_a_peer_wrote_under_the_lock"
+  ]
+ },
  "404cfe05ef42758e": {
   "answer": {
    "reply": "a0b7cddb28916f46",
@@ -1206,6 +1258,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[attribute]"
+  ]
+ },
+ "41d89994a20e74a8": {
+  "answer": {
+   "reply": "c8db1a4ba0074dc2",
+   "sheet": "bef8a9a99b05719e"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_crlf_line_ends_stay_crlf"
   ]
  },
  "4273c285db7f3c56": {
@@ -1428,6 +1489,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate"
+  ]
+ },
+ "4f67d9d77d46674a": {
+  "answer": {
+   "message": "Cannot open WORK/utf8bom.asc: it starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf8_with_a_mark_is_read_by_inspect_and_refused_by_an_edit_naming_it"
   ]
  },
  "4fe16a60027d1550": {
@@ -1748,6 +1818,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_second_pin-same_instance_wire]"
   ]
  },
+ "62419bdca3464b04": {
+  "answer": {
+   "reply": "e066c2df266dc8be",
+   "sheet": "1c7558f5f79e917f"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_symbol_read_in_the_codec_the_sheet_is_read_in"
+  ]
+ },
  "62fdc94bc2f78ab8": {
   "answer": {
    "reply": "3ef784adad94cb04",
@@ -1991,16 +2070,6 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_detour]"
   ]
  },
- "6d66d0050941af71": {
-  "answer": {
-   "reply": "cc07821330ec65a6",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
-  ]
- },
  "6d78df2f4a93c062": {
   "answer": {
    "reply": "76a0f4764b352f70",
@@ -2201,6 +2270,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_fact_of_the_finished_sheet_is_said_once"
+  ]
+ },
+ "790bb818419bd2c7": {
+  "answer": {
+   "reply": "9a48788bdc763a34",
+   "sheet": "f18109e512784061"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf8_without_a_mark_is_read_alike_and_written_back_as_it_was"
   ]
  },
  "7981ed46eaca025f": {
@@ -2618,7 +2696,7 @@
  },
  "8dace3d48cec3322": {
   "answer": {
-   "reply": "fecdaa7860746831",
+   "reply": "a75135704cccf293",
    "sheet": "afc8aa383e2e8640"
   },
   "tests": [
@@ -2892,6 +2970,15 @@
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-add_component attributes]"
   ]
  },
+ "9cde3c8dc39e5377": {
+  "answer": {
+   "reply": "0c7413f38518007c",
+   "sheet": "3e14ddb4dd47a9b2"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_an_ascii_sheet_has_no_reading_to_doubt"
+  ]
+ },
  "9e2161b1929171b5": {
   "answer": {
    "reply": "730df546e0c878f9",
@@ -2930,7 +3017,7 @@
  },
  "9f64c626d9159a73": {
   "answer": {
-   "reply": "31d44c5b58cdc90e",
+   "reply": "55dd37b7c38d1a1e",
    "sheet": "018d0b7888b32527"
   },
   "tests": [
@@ -2939,7 +3026,7 @@
  },
  "9fcfbfdbcc1afe2d": {
   "answer": {
-   "reply": "261b978501e8389b",
+   "reply": "5096f95dcf4bf58c",
    "sheet": null
   },
   "tests": [
@@ -3074,6 +3161,15 @@
    "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-source-symbol-made-a-current-source]"
   ]
  },
+ "a66e9da26b854232": {
+  "answer": {
+   "reply": "a66166ee92fe62ff",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_character_the_sheets_encoding_lacks_is_refused_naming_it"
+  ]
+ },
  "a715ba8289da03cd": {
   "answer": {
    "reply": "edd81f689090636a",
@@ -3139,6 +3235,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_from_second_pin]"
   ]
  },
+ "a885602f34f04beb": {
+  "answer": {
+   "reply": "00cf440e802dcf9e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_byte_cp1252_leaves_undefined_is_read_alike_and_not_refused[0x8D]"
+  ]
+ },
  "a8858bc369732461": {
   "answer": {
    "reply": "795b47cff57d07f9",
@@ -3189,11 +3294,19 @@
   "tests": [
    "tests/test_edit_open_window.py::test_a_window_pid_without_a_different_copy_saves_nothing[4243-holds the file's copy]",
    "tests/test_edit_open_window.py::test_a_window_that_does_not_take_the_chosen_copy_is_opened_again_from_the_file",
-   "tests/test_edit_open_window.py::test_each_call_a_dry_run_under_two_different_windows_names_is_taken[save]",
    "tests/test_edit_open_window.py::test_each_call_a_refusal_under_two_different_windows_names_is_taken[save]",
    "tests/test_edit_open_window.py::test_the_copy_the_user_chose_is_saved_and_the_other_window_is_handed_it"
   ],
   "varies": true
+ },
+ "aa76b96bb823256d": {
+  "answer": {
+   "reply": "a02b812bb253bb5a",
+   "sheet": "532caf93b7551e70"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_byte_cp1252_leaves_undefined_is_read_alike_and_not_refused[0x81]"
+  ]
  },
  "ab6f6ba1108367bf": {
   "answer": {
@@ -3256,6 +3369,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_first_edit_commits_with_the_digest_inspect_reported"
+  ]
+ },
+ "ad7394a203fad9dd": {
+  "answer": {
+   "reply": "fa63c15c168a9bba",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf16_le_without_a_mark_is_read_alike_and_written_back_as_it_was"
   ]
  },
  "ad8051471be4dd5a": {
@@ -3323,6 +3445,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_t_junction_endpoint_commits_through_the_whole_transaction"
+  ]
+ },
+ "b4297011ba0ed40c": {
+  "answer": {
+   "reply": "a02b812bb253bb5a",
+   "sheet": "9fda8de040dd170c"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_a_byte_cp1252_leaves_undefined_is_read_alike_and_not_refused[0x8D]"
   ]
  },
  "b48c5d3ec93c4daf": {
@@ -3427,6 +3558,24 @@
    "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]"
   ]
  },
+ "b992eb3bec2e3e6d": {
+  "answer": {
+   "reply": "4c47a79e84496190",
+   "sheet": "0de06556a6716d54"
+  },
+  "tests": [
+   "tests/test_symbol_name_case.py::TestAnyFileSystem::test_a_symbol_beside_the_sheet_named_in_another_case"
+  ]
+ },
+ "bb9faaa1cb4b25e2": {
+  "answer": {
+   "reply": "7a3e90c4426a3ac6",
+   "sheet": "c18bee2520949d28"
+  },
+  "tests": [
+   "tests/test_symbol_name_case.py::TestAnyFileSystem::test_a_symbol_in_a_folder_named_in_another_case[backslash]"
+  ]
+ },
  "bc323e68f1775378": {
   "answer": {
    "reply": "62bdcc19ba8a4be9",
@@ -3497,6 +3646,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
   ]
  },
+ "be8549aacef6cde1": {
+  "answer": {
+   "reply": "f6ae3b934e8a9ede",
+   "sheet": "47b51366026c28d8"
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestUnicodeSheet::test_utf16_le_with_a_mark_is_read_alike_and_written_without_it"
+  ]
+ },
  "bec0e67ca59f4455": {
   "answer": {
    "reply": "858efdf7646fad90",
@@ -3504,6 +3662,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
+ },
+ "beccb6066dfdde60": {
+  "answer": {
+   "reply": "806f0c98bf989ac5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_micro_sign_and_accented_label_read_alike_and_keep_their_bytes"
   ]
  },
  "bf656c3e0b84c5d3": {
@@ -3703,16 +3870,6 @@
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
   ]
  },
- "c6f24b40036b9874": {
-  "answer": {
-   "reply": "ba38933d9ecd1329",
-   "sheet": "44202d5c22063149"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
-  ]
- },
  "c724bc2b25cc8a51": {
   "answer": {
    "reply": "eb7c64f494fc5a75",
@@ -3778,7 +3935,7 @@
  },
  "cc67fe2e6fb86894": {
   "answer": {
-   "reply": "371ee98e8e5f9034",
+   "reply": "3e242e76d5ec06c9",
    "sheet": "047439922969956b"
   },
   "tests": [
@@ -3794,6 +3951,15 @@
    "tests/test_circuit_asc.py::TestWirePinsTJunction::test_a_label_then_a_wire_to_it_in_one_batch_leaves_nothing_loose"
   ]
  },
+ "cde111adcf70cd35": {
+  "answer": {
+   "reply": "7a3e90c4426a3ac6",
+   "sheet": "3296b805189a2282"
+  },
+  "tests": [
+   "tests/test_symbol_name_case.py::TestAnyFileSystem::test_a_symbol_in_a_folder_named_in_another_case[slash]"
+  ]
+ },
  "ce83de869ccb0293": {
   "answer": {
    "reply": "7a55a1452b1aefa2",
@@ -3805,7 +3971,7 @@
  },
  "cf90017ff085bd97": {
   "answer": {
-   "reply": "58530619b78143fc",
+   "reply": "05686b09f423b261",
    "sheet": null
   },
   "tests": [
@@ -4014,6 +4180,15 @@
    "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_a_chained_batch_applies_in_order"
   ]
  },
+ "df07a6b81ff34d4e": {
+  "answer": {
+   "message": "Cannot open .asc schematic: Symbol 'amp' is ambiguous: 2 files differ from it only in letter case (AMP.asy, Amp.asy) and none is spelled exactly so; rename all but one",
+   "raised": "SymbolResolutionError"
+  },
+  "tests": [
+   "tests/test_symbol_name_case.py::TestCaseSensitiveFileSystem::test_case_sensitive_fs_a_symbol_neither_file_spells_is_ambiguous"
+  ]
+ },
  "e0d6d2fa5889688f": {
   "answer": {
    "reply": "40bcea797eca185f",
@@ -4035,7 +4210,7 @@
  },
  "e1926262379df960": {
   "answer": {
-   "reply": "35e1ff4fa888f996",
+   "reply": "a66166ee92fe62ff",
    "sheet": null
   },
   "tests": [
@@ -4087,6 +4262,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/pin_on_wire_interior]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/pin_on_wire_interior]"
+  ]
+ },
+ "e400f07b267393e0": {
+  "answer": {
+   "reply": "89745d9aecb4f3a0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_sheet_text_encoding.py::TestEightBitSheet::test_crlf_line_ends_stay_crlf"
   ]
  },
  "e43a9ebd6a92a95b": {
@@ -4166,7 +4350,7 @@
  },
  "e7854c7b2f7551f4": {
   "answer": {
-   "reply": "c79a8970927d1d1c",
+   "reply": "680bfaf7120b7f37",
    "sheet": "5fc5da36b17f4a93"
   },
   "tests": [
@@ -4510,11 +4694,9 @@
  },
  "fca2672cec880bd2": {
   "tests": [
-   "tests/test_edit_open_window.py::test_a_dry_run_reports_a_window_that_differs_and_is_not_refused",
    "tests/test_edit_open_window.py::test_a_window_changed_while_ltspice_asks_is_left_open",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[closes the sheet]",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[quits LTspice]",
-   "tests/test_edit_open_window.py::test_each_call_a_dry_run_under_two_different_windows_names_is_taken[discard]",
    "tests/test_edit_open_window.py::test_each_call_a_refusal_under_two_different_windows_names_is_taken[discard]",
    "tests/test_edit_open_window.py::test_every_window_with_a_different_copy_is_closed_and_opened_from_the_file",
    "tests/test_edit_open_window.py::test_nothing_is_done_where_no_window_holds_a_different_sheet[discard-dropped-closed]",

@@ -98,7 +98,12 @@ from ltspice_mcp.lib.connectivity import (
     named_nets,
     point_on_segment,
 )
-from ltspice_mcp.lib.encoding import read_spice_text, refused_sheet_mark, refused_sheet_mark_note
+from ltspice_mcp.lib.encoding import (
+    read_spice_text,
+    refused_sheet_mark,
+    refused_sheet_mark_note,
+    sheet_codec,
+)
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
@@ -152,7 +157,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
 from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, usable_symbol_info
-from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver
+from ltspice_mcp.lib.symbol_library import AmbiguousName, SymbolLibrary, SymbolResolver
 from ltspice_mcp.state import SessionState
 
 
@@ -1059,15 +1064,16 @@ def _unreadable_record(path: Path, exc: NotImplementedError) -> NetlistError:
 
 
 def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
-    """The refusal for a sheet spicelib finds no codec for.
+    """The refusal for a sheet the schematic editor finds no codec for
+    (``encoding.sheet_codec``): one behind a UTF-8 byte order mark, or whose
+    text does not start with its ``Version`` line.
 
-    spicelib looks for the ``Version`` line in each codec it tries, and none of
-    them reads past a UTF-8 byte order mark, so such a sheet is refused as if
-    it had no ``Version`` line (docs/spicelib_bugs.md, Bug 27). Both LTspice
-    builds refuse it too, recorded as ``export/micro_utf8_bom``.
+    spicelib refused a sheet behind a UTF-8 mark as if it had no ``Version``
+    line (docs/spicelib_bugs.md, Bug 27). Both LTspice builds refuse it too,
+    recorded as ``export/micro_utf8_bom``.
     """
-    names = _refusing_read(exc, AscEditor.__init__.__code__)
-    sheet = Path(names["self"].asc_file_path) if names else path
+    names = _refusing_read(exc, _AscEditor.__init__.__code__)
+    sheet = Path(names["asc_file"]) if names else path
     try:
         with open(sheet, "rb") as stream:
             mark = refused_sheet_mark(stream.read(4))
@@ -1135,8 +1141,18 @@ class _PlacedSymbol(AsyReader):
     """A part's symbol as the editor read it, with the name the sheet gives it."""
 
     def __init__(self, path: Path, placed_as: str) -> None:
+        # Read in the codec ``lib/encoding.py`` decides, as a sheet is
+        # (docs/spicelib_bugs.md, Bug 46).
+        codec = sheet_codec(path.read_bytes())
+        if codec is None:
+            raise NetlistError(
+                f"Cannot read the symbol {path}: it does not start with a Version line "
+                "in any encoding the schematic editor reads. Save it as UTF-8 or "
+                "8-bit text with no byte order mark.",
+                show_hint=False,
+            )
         try:
-            super().__init__(path)
+            super().__init__(path, codec)
         except ValueError as exc:
             short = _short_window_in(path)
             if short is None:
@@ -1182,6 +1198,15 @@ class _AscEditor(AscEditor):
         self, asc_file: str | Path, encoding: str = "autodetect", *, symbols: SymbolResolver
     ) -> None:
         self._symbols = symbols
+        if encoding == "autodetect":
+            # The codec ``lib/encoding.py`` reads the sheet's bytes with, not
+            # spicelib's guess, which reads an 8-bit sheet holding byte 0x8D
+            # as cp1250 and one holding 0x81 as Shift-JIS or not at all
+            # (docs/spicelib_bugs.md, Bug 46).
+            codec = sheet_codec(Path(asc_file).read_bytes())
+            if codec is None:
+                raise EncodingDetectError(f"No Version line read in {asc_file}")
+            encoding = codec
         super().__init__(asc_file, encoding)
 
     def _get_symbol(self, symbol: str) -> AsyReader:
@@ -1321,6 +1346,9 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
             raise _short_window_refusal(path, e) from e
         _refuse_lost_records(path, editor)
         return editor
+    except AmbiguousName as e:
+        # Every file the name could mean is there, so no library is missing.
+        raise SymbolResolutionError(f"Cannot open .asc schematic: {e}") from e
     except FileNotFoundError as e:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e

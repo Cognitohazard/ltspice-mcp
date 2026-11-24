@@ -46,10 +46,15 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import InvalidCursorError, NetlistError
 from ltspice_mcp.lib import O_BINARY, fsync_dir, fsync_fd, replace_file
+from ltspice_mcp.lib.asc_document import sheet_newline
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text, stage_sheet
-from ltspice_mcp.lib.encoding import leading_byte_order_mark
+from ltspice_mcp.lib.encoding import (
+    WHOLE_BYTE_CP1252,
+    eight_bit_reading_note,
+    leading_byte_order_mark,
+)
 from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
@@ -665,9 +670,36 @@ def _stage_bytes(data: bytes, target: Path, build_id: str) -> Path:
     return tmp
 
 
-def _stage_asc(text: str, target: Path, build_id: str, encoding: str) -> Path:
+class _SheetEncoding(NamedTuple):
+    """How an edited sheet's text is written back: its codec and line ending.
+
+    spicelib renders a sheet with ``"\n"`` line ends (docs/spicelib_bugs.md,
+    Bug 46), so a sheet that had another ending gets it back here, and every
+    line an edit did not change keeps its bytes.
+    """
+
+    codec: str
+    newline: str = "\n"
+
+    def encode(self, text: str) -> bytes:
+        if self.newline != "\n":
+            text = text.replace("\n", self.newline)
+        try:
+            return text.encode(self.codec)
+        except UnicodeEncodeError as exc:
+            shown = "Windows-1252" if self.codec == WHOLE_BYTE_CP1252 else self.codec
+            raise NetlistError(
+                f"The sheet is written in {shown}, which has no {exc.object[exc.start]!r} "
+                "(an edit keeps a sheet's encoding, so every other line keeps its "
+                "bytes). Use characters it has, or save the sheet as UTF-16 LE "
+                "in LTspice first.",
+                show_hint=False,
+            ) from exc
+
+
+def _stage_asc(text: str, target: Path, build_id: str, encoding: _SheetEncoding) -> Path:
     """Write ``text`` to a fsync'd temp sibling of ``target`` (pre-rename)."""
-    return _stage_bytes(text.encode(encoding), target, build_id)
+    return _stage_bytes(encoding.encode(text), target, build_id)
 
 
 def _commit_rename(tmp: Path, target: Path) -> None:
@@ -704,7 +736,7 @@ def _commit_asc(
     text: str | None,
     target: Path,
     build_id: str,
-    encoding: str,
+    encoding: _SheetEncoding,
     plot: SheetPlotSettings | None = None,
 ) -> _CommitOutcome:
     """The whole commit write path (stage + fsync + atomic rename + dir fsync).
@@ -1163,7 +1195,7 @@ async def _exported_reference(
 
 async def _run_reference_stage(
     committed_text: str,
-    encoding: str,
+    encoding: _SheetEncoding,
     ref: str | Path,
     spec: VerifyCompareSpec,
     build_id: str,
@@ -1192,7 +1224,7 @@ async def _run_reference_stage(
     verification["_warnings"] = notes
     try:
         copy_asc, note = await asyncio.to_thread(
-            lambda: stage_sheet(target, export_root / "sheet", committed_text.encode(encoding))
+            lambda: stage_sheet(target, export_root / "sheet", encoding.encode(committed_text))
         )
         notes.extend([note] if note else [])
         try:
@@ -1254,7 +1286,7 @@ def _reference_label(ref: str | Path) -> str:
 
 async def _reference_verdict(
     sheet_text: str,
-    encoding: str,
+    encoding: _SheetEncoding,
     ref: str | Path,
     spec: VerifyCompareSpec,
     build_id: str,
@@ -1867,6 +1899,10 @@ async def _evaluate_edit_schematic(
         editor = _build_editor(target, use_template, state)
         loaded_as = getattr(editor, "encoding", "utf-8") or "utf-8"
         data_flags = _data_flag_lines(original, loaded_as)
+        newline = (
+            "\n" if original is None else sheet_newline(original.decode(loaded_as, "replace"))
+        )
+        reading_notes = list(filter(None, [eight_bit_reading_note(original or b"", loaded_as)]))
         # Set once the atomic rename lands. From that point every escape must be
         # reported on a committed envelope instead of re-raised (see the except
         # clauses below); post_commit_stage names the stage that was in flight,
@@ -1966,7 +2002,7 @@ async def _evaluate_edit_schematic(
             # what it did in ``results``, and judges nothing.
             warnings = [one.detail for one in findings_reported]
             op_results = _op_results(results)
-            encoding = _commit_codec(loaded_as, original, committed_text)
+            encoding = _SheetEncoding(_commit_codec(loaded_as, original, committed_text), newline)
 
             # --- dry run: validate-only, nothing written, target dir untouched
             if dry_run:
@@ -2007,7 +2043,7 @@ async def _evaluate_edit_schematic(
                     legend,
                     pins_reported,
                     preexisting_rows,
-                    hashlib.sha256(committed_text.encode(encoding)).hexdigest(),
+                    hashlib.sha256(encoding.encode(committed_text)).hexdigest(),
                 )
                 wiring, presented_views = _paged_edit_views(
                     args,
@@ -2036,7 +2072,7 @@ async def _evaluate_edit_schematic(
                             applied=len(results),
                             warnings=warnings,
                             failures=failures,
-                            observations=revision_notes + window_notes,
+                            observations=revision_notes + reading_notes + window_notes,
                             hint=" ".join(
                                 filter(
                                     None,
@@ -2082,7 +2118,7 @@ async def _evaluate_edit_schematic(
             committed_sha = (
                 current
                 if sheet_kept and current is not None
-                else hashlib.sha256(committed_text.encode(encoding)).hexdigest()
+                else hashlib.sha256(encoding.encode(committed_text)).hexdigest()
             )
 
             # --- post-commit: everything below keeps commit_state='committed'
@@ -2160,7 +2196,7 @@ async def _evaluate_edit_schematic(
                         results=op_results,
                         applied=len(results),
                         warnings=warnings,
-                        observations=window_notes,
+                        observations=reading_notes + window_notes,
                         open_in_ltspice=shown,
                         hint=hint,
                     ),
@@ -2285,14 +2321,15 @@ def _commit_codec(loaded_as: str, original: bytes | None, text: str) -> str:
     LTspice does not read a sheet as UTF-8: it decodes cp1252 (or UTF-16), so
     a micro sign stored as the two UTF-8 bytes comes out of its netlister as
     ``Âµ``. The first non-ASCII character an edit adds to such a sheet is
-    therefore written in cp1252, where cp1252 has it. A sheet that already
+    therefore written in cp1252 (the whole-byte table ``lib/encoding.py``
+    reads 8-bit sheets with), where cp1252 has it. A sheet that already
     held non-ASCII text keeps the encoding it came in.
 
     A UTF-16 sheet that starts with a byte order mark is written as UTF-16 LE
     without it. Neither LTspice build reads a sheet that starts with one, and
     both read UTF-16 LE without it (``export/micro_utf16le_bom`` and
     ``export/micro_utf16le``). A UTF-16 LE sheet stored without a mark keeps
-    none: the loader names it ``utf_16_le``, whose encoder writes no mark.
+    none: the loader names it ``utf-16-le``, whose encoder writes no mark.
     """
     if leading_byte_order_mark(original or b"") in ("utf-16-le", "utf-16-be"):
         return "utf-16-le"
@@ -2304,10 +2341,10 @@ def _commit_codec(loaded_as: str, original: bytes | None, text: str) -> str:
     if not (loaded_as_utf8 and sheet_was_ascii) or text.isascii():
         return loaded_as
     try:
-        text.encode("cp1252")
+        text.encode(WHOLE_BYTE_CP1252)
     except UnicodeEncodeError:
         return loaded_as
-    return "cp1252"
+    return WHOLE_BYTE_CP1252
 
 
 def _render_editor_text(editor: AscEditor, data_flags: tuple[str, ...] = ()) -> str:

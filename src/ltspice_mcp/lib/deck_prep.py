@@ -55,7 +55,7 @@ from ltspice_mcp.lib.spice_lex import emit, lex
 from ltspice_mcp.lib.spice_lex_ops import strip_instance_section_signs
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import sanitize_stem
-from ltspice_mcp.lib.symbol_library import spellings
+from ltspice_mcp.lib.symbol_library import block_sheet_named, spellings
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -289,8 +289,7 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
         atomic_write_bytes(staged, data, durable=False)
     origin = asc_path.parent
     found: list[Path] = []
-    blocks: set[tuple[str, str]] = set()
-    sheets: list[tuple[str, str, str]] = []
+    paired: list[Path] = []
     for folder, folders, files in os.walk(origin):
         folders[:] = [name for name in folders if not name.startswith(".")]
         for name in files:
@@ -301,14 +300,11 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
             if suffix in _STAGED_SUFFIXES:
                 found.append(Path(folder, name))
                 if suffix == ".asy":
-                    blocks.add((folder, stem.casefold()))
-            elif is_asc(Path(name)) and Path(folder, name) != asc_path:
-                sheets.append((folder, stem.casefold(), name))
-    paired = [Path(folder, name) for folder, stem, name in sheets if (folder, stem) in blocks]
+                    paired += block_sheet_named(Path(folder), stem)
+    paired = [path for path in dict.fromkeys(paired) if path != asc_path]
     found += paired
-    beside = {stem: Path(folder, name) for folder, stem, name in sheets if folder == str(origin)}
-    found += _sheets_beside_the_export(asc_path, data, paired, beside)
-    found = sorted(path for path in found if path.is_file())
+    found += _sheets_beside_the_export(asc_path, data, paired)
+    found = sorted(dict.fromkeys(path for path in found if path.is_file()))
     for src in found[:_STAGE_FILE_CAP]:
         target = dest / src.relative_to(origin)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -321,14 +317,12 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
     )
 
 
-def _sheets_beside_the_export(
-    sheet: Path, data: bytes | None, paired: list[Path], beside: dict[str, Path]
-) -> list[Path]:
+def _sheets_beside_the_export(sheet: Path, data: bytes | None, paired: list[Path]) -> list[Path]:
     """The sheets beside the sheet being exported that LTspice may read as a
     block's own sheet: one named for any part the exported sheet (``data``,
     else its file), a block's sheet beside its symbol (``paired``), or a sheet
-    found here places, among ``beside``, the sheets in the exported sheet's
-    folder by their casefolded names.
+    found here places, as ``symbol_library.block_sheet_named`` matches the
+    name.
 
     Beside the block's symbol, then beside the sheet exported, is where both
     builds look (``symbol_library.find_block_sheet``). ``stage_sheet`` stages
@@ -348,11 +342,11 @@ def _sheets_beside_the_export(
         except (OSError, NetlistError):
             continue
         for symbol in placed:
-            named = beside.get(spellings(symbol.symbol)[1].casefold())
-            if named is not None and named not in seen:
-                seen.add(named)
-                found.append(named)
-                pending.append((named, None))
+            for named in block_sheet_named(sheet.parent, spellings(symbol.symbol)[1]):
+                if named not in seen:
+                    seen.add(named)
+                    found.append(named)
+                    pending.append((named, None))
     return found
 
 

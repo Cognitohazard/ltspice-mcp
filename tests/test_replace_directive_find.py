@@ -334,6 +334,6 @@ class TestWhatTheBatchWrites:
         before = sheet.read_bytes()
         done = await _edit(asc_state, "omega.asc", [_find("c=1µ", "c=1µ R=2Ω")])
         assert done["commit_state"] == "not_committed", done
-        # The save path names the character by its code point.
-        assert "\\u03a9" in done["error"]["message"], done
+        # The refusal names the character and the sheet's encoding.
+        assert "Windows-1252, which has no 'Ω'" in done["error"]["message"], done
         assert sheet.read_bytes() == before
