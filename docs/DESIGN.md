@@ -31,17 +31,15 @@ An agent can also write a script for each step. The tools differ from such a scr
 - **They use little context.** A call is about 50 tokens. A reply omits empty fields. Long data stays on disk, and a later call reads it by its id.
 - **They stay.** A later session uses the same tools and the same stored results. It does not write the script again.
 
-## Scope, reader and direction
+In short, this project strives to direct the LLM's attention to issues before a person must correct them, to reveal potential problems the AI isn't looking for, and to increase efficiency with tested tools.
 
-An engineer opens Claude Code on a Windows machine that has LTspice and asks for the phase margin of an LDO. That agent is the first reader of this server. The second reader is a person in a chat client such as Claude Desktop, who sees charts in the chat. The third reader is a script or a notebook that imports the Python API.
+## Scope
 
-The agent comes to the machine that has the simulator and the circuit files. The server runs locally and speaks MCP on stdio. A circuit is a file on that machine, and each tool takes its path. The agent works on that machine directly, through Claude Code's Remote Control, or in a cloud container that runs ngspice.
+The server runs locally and speaks MCP on stdio. Each tool takes the path of a circuit file. The server is for an agent in Claude Code, for a person in a chat client such as Claude Desktop, and for scripts that import the Python API.
 
-LTspice comes first, and Windows is the primary platform. WSL2 and Linux under Wine also run LTspice. ngspice runs simulations and analyses on Linux and Windows. It differs from LTspice in some behaviour, and the lint and the ngspice section of the packaged guide describe each difference.
+LTspice comes first, and Windows is the primary platform. WSL2 and Wine also run LTspice. ngspice runs on Linux and Windows, and the lint and the ngspice section of the packaged guide list where it differs from LTspice. QSPICE and Xyce have the support that spicelib gives. Schematic editing is for LTspice schematics only, because it reads LTspice's symbol files.
 
-QSPICE and Xyce have the support that spicelib provides. Schematic editing is for LTspice schematics only, because the server reads LTspice's symbol files.
-
-The roadmap has a later platform phase. In that phase, the server gives ngspice full support and works with xschem for IC design. This is a direction, and no date is set for it.
+Later, ngspice will get full support, and the server will work with xschem for IC design. No date is set.
 
 ## The two surfaces
 
