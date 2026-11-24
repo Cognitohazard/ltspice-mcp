@@ -1597,10 +1597,9 @@ model = ["lib/log_conditions.py", "lib/log_parser.py", "lib/log_conditions.py:_R
 inputs = ["log/timestep_collapse_mid.cir"]
 
 [behaviour.log-transient-convergence-progress]
-summary = "What each build writes to the log while a transient fights for convergence at an edge and then finishes: whether XVII repeats its Heightened Def Con line and 26 its tolerance warning, how often, and where, beside the points the run stored. Nothing reads these lines as a count yet: the recording establishes what such a count would read."
+summary = "What each build writes to the log while a transient fights for convergence at an edge and then finishes. Neither build writes a line while it fights: LTspice 26 logs only the operating point and its iteration total, and XVII its operating point and its counts (3 time points rejected of 5089), so there is no repeated Heightened Def Con line or tolerance warning for a count to read."
 model = ["lib/log_conditions.py"]
 inputs = ["log/tran_convergence_recovers.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.random-seed]
 summary = "Whether .options seed=N makes mc(), gauss() and flat() repeat across runs, and change with N, against two runs with no seed."
