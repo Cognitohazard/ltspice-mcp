@@ -1,0 +1,1 @@
+On LTspice, a MOSFET card whose model names a `.subckt` is now refused before the run (`model-missing`), with the reason and the fix (name it with the prefix `X`). LTspice 26 and XVII both refuse such a card, and the run used to fail with only the simulator's log to go on.

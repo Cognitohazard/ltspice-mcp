@@ -944,6 +944,7 @@ def _model_missing(
         # unreadable-card rule reports that card and that this rule was quiet.
         return []
     declared = _declared_models(context.cards) | reached.declared
+    names = {name for _kind, name in declared}
     findings = []
     for card in context.cards:
         if card.kind != "instance" or not card.name:
@@ -952,9 +953,23 @@ def _model_missing(
             instance = InstanceLine.from_card(card)
         except ValueError:
             continue
-        if instance.ref[:1].upper() not in _MODEL_PREFIXES or not instance.model:
+        prefix = instance.ref[:1].upper()
+        if prefix not in _MODEL_PREFIXES or not instance.model:
             continue
-        if instance.model.casefold() in declared:
+        model = instance.model.casefold()
+        evidence: dict[str, object] = {}
+        if context.family == "ltspice" and prefix == "M" and ("model", model) not in declared:
+            # LTspice reads an M card's model as a .model only: both builds
+            # refuse M1 whose model is a .subckt, LTspice 26 asking for the
+            # prefix X, XVII finding no model (recorded: raw/msub_stored).
+            if model in names:
+                evidence["reason"] = (
+                    f"{instance.model} is a .subckt, and LTspice runs an M card only "
+                    "with a .model: both LTspice 26 and XVII refuse the card "
+                    "(recorded: raw/msub_stored). Name the instance with the prefix X "
+                    "to run the subcircuit."
+                )
+        elif model in names:
             continue
         findings.append(
             _finding(
@@ -965,16 +980,20 @@ def _model_missing(
                 evidence={
                     "model": instance.model,
                     "directive": card.body,
-                    "declared_models": sorted(declared),
+                    "declared_models": sorted(names),
+                    **evidence,
                 },
             )
         )
     return findings
 
 
-def _declared_models(cards: list[SpiceCard]) -> set[str]:
+def _declared_models(cards: list[SpiceCard]) -> set[tuple[str, str]]:
+    """Each ``.model`` and ``.subckt`` the cards declare, as (kind, folded name)."""
     return {
-        card.name.casefold() for card in cards if card.kind in {"model", "subckt"} and card.name
+        (card.kind, card.name.casefold())
+        for card in cards
+        if card.kind in {"model", "subckt"} and card.name
     }
 
 
@@ -995,7 +1014,7 @@ class _ReachedModels(NamedTuple):
     them; those in a live file that could not; and each card from which the
     reader reads nothing, with why."""
 
-    declared: set[str]
+    declared: set[tuple[str, str]]
     complete: bool
     unread: list[tuple[Path, SpiceCard, SpiceLexError]]
     unread_libraries: list[_UnreadLibrary]
@@ -1021,7 +1040,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     models it declares. Staging refuses such a card in every file it stages,
     and the unreadable-card rule reports one in the deck or a staged file.
     """
-    declared: set[str] = set()
+    declared: set[tuple[str, str]] = set()
     complete = True
     unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
     unread_libraries: list[_UnreadLibrary] = []

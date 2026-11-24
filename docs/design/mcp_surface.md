@@ -2831,7 +2831,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-without-values-ltspice` | blocking | refused by LTspice 26 and XVII: a `.step` with nothing after it, or `.step param <name>` with no values. `edit_schematic` refuses to write it and `verify_circuit`'s `syntax` check reports it |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
-| `model-missing` | blocking at staging | a missing model; the model token is read after a BJT/JFET/MOSFET area factor or `off`, and before a subckt call's `params:` |
+| `model-missing` | blocking at staging | a missing model; the model token is read after a BJT/JFET/MOSFET area factor or `off`, and before a subckt call's `params:`. On LTspice an M card's model must be a `.model`: a `.subckt` of that name does not count, since both builds refuse the card |
 | `element-arity` | blocking | fewer nodes than terminals |
 | `bsource-value-prefix` | blocking | no `V=`/`I=`, or on LTspice `R=`/`P=` |
 | `value-keyword-ltspice` | blocking | LTspice: `C=`/`L=` as the primary value |

@@ -2702,3 +2702,24 @@ def test_xvii_saves_every_signal_for_a_save_naming_only_a_node_the_circuit_lacks
     else:
         assert traces == []
         assert blocked == {"vb"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_an_m_card_whose_model_is_a_subcircuit_is_refused_before_the_run(build: str):
+    """``raw/msub_stored``: M1 names ``msub``, a ``.subckt``. Neither build
+    runs it (recorded: no raw, and each log refuses the card), so the lint
+    holds M1 back as a model the deck does not declare."""
+    case_id = "raw/msub_stored"
+    log = _log(build, case_id)
+    if rec.generation(build) == "xvii":
+        assert 'Unable to find definition of model "m1"' in log
+    else:
+        assert 'Consider using the prefix "X" instead of "M"' in log
+    deck = INPUTS / rec.CASES.case(case_id).source
+    refused = [
+        f
+        for f in lint_deck(deck_text(case_id), deck, "ltspice", "LTspice", reader=rec.producer(build))
+        if f["rule_id"] == "model-missing"
+    ]
+    assert [(f["subject"], f["severity"]) for f in refused] == [("M1", "error")]
+    assert "raw/msub_stored" in refused[0]["evidence"]["reason"]
