@@ -102,6 +102,8 @@ Each principle has a short explanation and one case. The first nine are the prin
 - **Refusals say how to fix the request, so mistakes usually cost no more than one turn.** A refusal names the field, the place and the way round. A misspelled argument is refused with the list of the fields that the tool accepts.
 - **A finding gives its place.** The place is the part, the net, the line or the coordinates. Text drawn across a wire is reported with the anchor of the text and the two ends of the wire.
 
+In agent development, checks of this kind are called feedback sensors. They report a fault to the agent in the reply to the call that caused it. Their effect is also called backpressure, because the agent corrects the fault before later work depends on it.
+
 ### Schematic edits
 
 - **Schematic layout is directed by the AI, with every edit validated before it is written. There is no auto-router, because auto-routed schematics are hard to read.** A batch of ops is one transaction, so a refused op leaves the sheet as it was. `wire_pins` refuses a diagonal wire and a short between two named nets.
