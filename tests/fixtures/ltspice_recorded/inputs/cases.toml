@@ -1084,7 +1084,7 @@ inputs = ["log/device_op_numdgt.cir", "log/device_op_numdgt_off.cir", "raw/op_sa
 
 [behaviour.log-diagnostics]
 summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage, a model parameter the device does not know."
-model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py", "lib/log_conditions.py:_RULES", "lib/log_conditions.py:classify", "lib/log_conditions.py:run_diagnostics", "lib/log_conditions.py:decoded_run_diagnostics", "lib/log_conditions.py:rules_for", "lib/log_parser.py:classify_line"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py", "lib/log_conditions.py:_RULES", "lib/log_conditions.py:classify", "lib/log_conditions.py:run_diagnostics", "lib/log_conditions.py:decoded_run_diagnostics", "lib/log_conditions.py:rules_for", "lib/log_parser.py:classify_line", "lib/spice_lex_views.py:repeated_references", "lib/lint_rules.py"]
 inputs = [
     "log/err_unknown_directive.cir",
     "log/err_bad_card.cir",

@@ -486,6 +486,20 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ("analysis.handle_plot_waveform", "ltspice.left_in_place"): (
         "at most one per file beside a sheet its run goes to (sheet_results.ResultFiles.every)"
     ),
+    # A repeated reference's own parts: one per card that carries it, and one
+    # per .subckt body it is nested in.
+    **{
+        (handler, f"{at}repeated_references[].{key}"): bound
+        for handler, at in (
+            ("inspect_tools.handle_inspect", "results[].data."),
+            ("verify.handle_verify_circuit", "comparison."),
+            ("schematic_edit.handle_edit_schematic", "verification.comparison."),
+        )
+        for key, bound in (
+            ("lines", "one per card of one scope that carries the reference"),
+            ("subcircuit", "one per .subckt body the scope is nested in"),
+        )
+    },
     # A sheet finding's own parts, in edit_schematic's preexisting view.
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,

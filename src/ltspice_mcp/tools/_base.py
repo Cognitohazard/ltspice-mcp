@@ -649,9 +649,6 @@ STORED_ANSWER_SCHEMA: dict[str, Any] = {
     },
 }
 
-# Output-schema fragment for the optional ``hint`` key: caller guidance a
-# reply carries in its data (see format_response). Sites needing a custom
-# description inline their own dict.
 #: A reference more than one instance card of one scope of a netlist carries
 #: (``spice_lex_views.RepeatedReference.as_dict``).
 REPEATED_REFERENCE_SCHEMA: dict[str, Any] = {
@@ -661,17 +658,22 @@ REPEATED_REFERENCE_SCHEMA: dict[str, Any] = {
         "subcircuit": {
             "type": "array",
             "items": {"type": "string"},
+            CUT: NEVER,
             "description": "The .subckt bodies it is in, outermost first; absent at the top level.",
         },
         "lines": {
             "type": "array",
             "items": {"type": "integer"},
+            CUT: NEVER,
             "description": "The first line of each card that carries it.",
         },
     },
     "required": ["reference", "lines"],
 }
 
+# Output-schema fragment for the optional ``hint`` key: caller guidance a
+# reply carries in its data (see format_response). Sites needing a custom
+# description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
 # Free-text measurement caveats (see the observations-vs-warnings rule in

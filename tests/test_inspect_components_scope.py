@@ -3,7 +3,7 @@
 A netlist's components are the cards of its top level; a card inside a
 ``.subckt`` body belongs to that body, names the body as its ``subcircuit``,
 and never replaces a top-level card of the same reference.
-``spice_lex_views.instances_by_scope`` decides it, and these readers of a
+Each card's ``scope`` decides it, and these readers of a
 deck's cards by reference ask it: the components listing of ``inspect`` and of
 the Python API, the members of a netlist net query, and the transistors a
 Monte Carlo run rewrites.

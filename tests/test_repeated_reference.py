@@ -21,10 +21,13 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.montecarlo import extract_mosfet_instances, rewrite_instance_model
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
 from tests.conftest import SyncApi, dispatched
+from tests.ltspice_recorder import INPUTS
 
 ROUTES = pytest.mark.parametrize("route", ["mcp", "api"])
 
@@ -120,6 +123,48 @@ async def test_a_pin_of_a_repeated_reference_is_refused_naming_its_lines(
 
 
 @ROUTES
+async def test_a_pin_of_a_repeated_reference_is_refused_when_one_of_its_cards_does_not_read(
+    route: str, work_dir: Path, state_no_sim: SessionState
+):
+    # The second R1 card's nodes do not read, yet it carries the reference:
+    # answering from the first card alone would name a node of one of two.
+    deck = _deck(work_dir, "* t\nV1 a 0 1\nR1 a 0 1k\nR1 a b {1k\n.op\n.end\n")
+    result = await _query(state_no_sim, route, {"kind": "net", "path": str(deck), "at": "R1.1"})
+    assert not result["ok"], result
+    assert result["error"]["code"] == "invalid_at"
+    assert "lines 3, 4" in result["error"]["message"]
+
+
+@ROUTES
+async def test_a_prefix_lists_only_the_repeats_it_selects(
+    route: str, work_dir: Path, state_no_sim: SessionState
+):
+    deck = str(_deck(work_dir, TWO_TOP))
+    result = await _query(state_no_sim, route, {"kind": "components", "path": deck, "prefix": "V"})
+    assert result["ok"], result
+    assert [r["reference"] for r in result["data"]["components"]] == ["V1"]
+    assert "repeated_references" not in result["data"]
+    result = await _query(state_no_sim, route, {"kind": "components", "path": deck, "prefix": "R"})
+    assert result["data"]["repeated_references"] == [{"reference": "R1", "lines": [3, 4]}]
+
+
+@ROUTES
+async def test_the_recorded_deck_both_builds_refuse_is_read_as_a_repeat(
+    route: str, work_dir: Path, state_no_sim: SessionState
+):
+    # Both builds refuse log/err_duplicate_name, which carries R1 on two
+    # top-level cards; the grid of log conditions pins each build's words.
+    for build in rec.BUILDS:
+        assert "R1" in read_spice_text(rec.recorded(build, "log/err_duplicate_name.log"))
+    text = (INPUTS / "log" / "err_duplicate_name.cir").read_text()
+    (finding,) = _lint(text, work_dir)
+    assert (finding["evidence"]["reference"], finding["evidence"]["lines"]) == ("R1", [3, 4])
+    data = await _components(state_no_sim, route, _deck(work_dir, text))
+    assert [r["reference"] for r in data["components"]] == ["R1", "R1", "V1"]
+    assert data["repeated_references"] == [{"reference": "R1", "lines": [3, 4]}]
+
+
+@ROUTES
 async def test_verify_reports_a_repeated_reference_with_its_lines(
     route: str, work_dir: Path, state_no_sim: SessionState
 ):
@@ -157,6 +202,38 @@ async def test_equivalence_names_the_repeat_and_is_not_equivalent(
     assert comparison["repeated_references"] == [
         {"reference": "R1", "lines": [3, 4], "side": "candidate"}
     ]
+
+
+@ROUTES
+async def test_equivalence_names_a_repeat_in_an_included_definition(
+    route: str, work_dir: Path, state_no_sim: SessionState
+):
+    # Both decks define A in an included file with R1 on two cards; the second
+    # cards differ. Pairing one card per reference would call them equivalent.
+    _deck(work_dir, ".subckt A p\nR1 p 0 1k\nR1 p 0 2k\n.ends\n", "a.lib")
+    _deck(work_dir, ".subckt A p\nR1 p 0 1k\nR1 p 0 9k\n.ends\n", "b.lib")
+    top = "* t\n.include {}\nV1 a 0 1\nX1 a A\n.op\n.end\n"
+    candidate = _deck(work_dir, top.format("a.lib"))
+    reference = _deck(work_dir, top.format("b.lib"), "ref.cir")
+    reply = await _call(
+        state_no_sim,
+        route,
+        "verify_circuit",
+        path=str(candidate),
+        checks=["compare"],
+        compare={"reference": str(reference)},
+    )
+    comparison = reply["comparison"]
+    assert comparison["equivalent"] is False
+    repeats = comparison["repeated_references"]
+    assert {(r["side"], Path(r["file"]).name) for r in repeats} == {
+        ("candidate", "a.lib"),
+        ("reference", "b.lib"),
+    }
+    assert all(
+        r["reference"] == "R1" and r["subcircuit"] == ["A"] and r["lines"] == [2, 3]
+        for r in repeats
+    )
 
 
 @ROUTES

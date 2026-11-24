@@ -2288,9 +2288,10 @@ says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
 A reference that more than one card of one scope carries (compared under
-`fold_name`) is not paired on either side, since which card stands for which
-is not known; `repeated_references` names each with its `side`, its lines and,
-inside a definition, its `subcircuit`, and `equivalent` is false.
+`fold_name`), in the deck or in a definition of a file it includes, makes
+`equivalent` false, since which card stands for which is not known;
+`repeated_references` names each with its `side`, its lines, inside a
+definition its `subcircuit`, and, when an included file holds it, that `file`.
 In either mode `values_read_otherwise` summarizes the values of each side's
 files that an LTspice build the session may run reads as another number than
 the comparison does, one summary per build and kind of reading (see

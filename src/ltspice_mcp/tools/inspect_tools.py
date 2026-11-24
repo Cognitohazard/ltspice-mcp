@@ -1554,19 +1554,24 @@ def _netlist_node_from_at(
             "(at='net:NAME' or at='REF.<terminal>')",
         )
     spellings = _node_spellings(nodes_of)
+    repeats = {
+        fold_name(repeat.reference): repeat
+        for repeat in repeated_references(cards)
+        if not repeat.scope
+    }
 
     def card_nodes(ref: str) -> list[str] | None:
         key = fold_name(ref)
-        same = [(card, nodes) for card, nodes in nodes_of if fold_name(card.name or "") == key]
-        if len(same) > 1:
-            lines = ", ".join(str(card.line_start) for card, _ in same)
+        repeat = repeats.get(key)
+        if repeat is not None:
+            lines = ", ".join(str(line) for line in repeat.lines)
             raise _QueryError(
                 "invalid_at",
-                f"'{ref}' is the reference of {len(same)} cards of this netlist (lines "
-                f"{lines}), so a terminal of it names no one node: give each card its "
-                f"own reference, or use at='net:NAME'",
+                f"'{ref}' is the reference of {len(repeat.lines)} cards of this netlist "
+                f"(lines {lines}), so a terminal of it names no one node: give each card "
+                f"its own reference, or use at='net:NAME'",
             )
-        return same[0][1] if same else None
+        return next((nodes for card, nodes in nodes_of if fold_name(card.name or "") == key), None)
 
     if at.startswith("net:"):
         return _deck_node(at[4:], spellings, cards=cards, unread=unread, reader=reader)
@@ -2002,7 +2007,11 @@ def _components_netlist_payload(
         f"delete all but one definition of {answer.name}."
         for answer in definitions.unsettled.values()
     ]
-    repeats = [repeat.as_dict() for repeat in repeated_references(cards)]
+    repeats = [
+        repeat.as_dict()
+        for repeat in repeated_references(cards)
+        if prefix is None or matches_prefix(repeat.reference, prefix)
+    ]
     return rows, _lex_warnings(lexed) + unlisted, repeats
 
 
@@ -3257,7 +3266,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             },
                             "repeated_references": {
                                 "type": "array",
-                                CUT: NEVER,
+                                CUT: ITEMS,
                                 "description": (
                                     "A netlist's references that more than one card of "
                                     "one scope carries, each with the first line of every "

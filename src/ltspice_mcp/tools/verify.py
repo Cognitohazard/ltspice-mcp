@@ -756,6 +756,10 @@ _REPEATED_REFERENCE_SCHEMA: dict[str, Any] = {
     "properties": {
         **REPEATED_REFERENCE_SCHEMA["properties"],
         "side": {"type": "string", "description": "'reference' or 'candidate'."},
+        "file": {
+            "type": "string",
+            "description": "The included file whose definition holds it; absent for the deck.",
+        },
     },
     "required": [*REPEATED_REFERENCE_SCHEMA["required"], "side"],
 }
@@ -922,7 +926,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "items": _REPEATED_REFERENCE_SCHEMA,
             "description": (
                 "equivalence: a reference more than one card of one scope carries; "
-                "its cards are not compared, so 'equivalent' is false."
+                "which card stands for which is not known, so 'equivalent' is false."
             ),
         },
         **STRUCTURAL_DELTA_PROPS,
