@@ -1,0 +1,26 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\step_grid_nested2_model_list_temp_linear.cir
+Start Time: Thu Jan 15 00:00:00 2026
+
+.step dm(is)=1e-14 temp=0°
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 0
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+
+.step dm(is)=1e-13 temp=0°
+Direct Newton iteration succeeded in finding operating point.
+
+.step dm(is)=1e-14 temp=50°
+Direct Newton iteration succeeded in finding operating point.
+
+.step dm(is)=1e-13 temp=50°
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 82
+
+Files loaded:
+C:\recording\step_grid_nested2_model_list_temp_linear.cir
+

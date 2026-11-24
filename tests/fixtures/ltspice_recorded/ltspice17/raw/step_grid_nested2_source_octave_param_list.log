@@ -1,0 +1,24 @@
+Circuit: * two nested .step cards, read for which step each value belongs to
+
+Direct Newton iteration for .op point succeeded.
+.step vin=1 rv=1000
+.step vin=2 rv=1000
+.step vin=1 rv=2000
+.step vin=2 rv=2000
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 82
+traniter = 74
+tranpoints = 38
+accept = 38
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)

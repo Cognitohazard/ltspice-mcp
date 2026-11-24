@@ -1,0 +1,48 @@
+Circuit: * a .dc sweep whose first point Newton iteration alone does not find (the circuit of log/op_stepping)
+
+ERROR: Node Y is floating and connected to current source B1
+
+Direct Newton iteration failed to find .op point.  (Use ".option noopiter" to skip.)
+Starting Gmin stepping
+Increasing initial diagonal Gmin to 100
+Increasing initial diagonal Gmin to 1000
+Increasing initial diagonal Gmin to 10000
+Gmin = 10000
+Gmin = 1073.74
+Gmin = 115.292
+Gmin = 12.3794
+Gmin = 1.32923
+Gmin = 0.142725
+Gmin = 0.015325
+Gmin = 0.0016455
+Gmin = 0.000176685
+Gmin = 1.89714e-005
+Gmin = 2.03704e-006
+Gmin = 2.18725e-007
+Gmin = 2.34854e-008
+Gmin = 2.52173e-009
+Gmin = 2.70769e-010
+Gmin = 2.90735e-011
+Gmin = 3.12175e-012
+Gmin = 3.35195e-013
+Gmin = 0
+Gmin stepping succeeded in finding the operating point.
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 923
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 9
+fillins = 2
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

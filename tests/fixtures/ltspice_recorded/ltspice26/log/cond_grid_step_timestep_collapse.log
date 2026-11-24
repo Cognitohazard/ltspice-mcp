@@ -1,0 +1,23 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\cond_grid_step_timestep_collapse.cir
+Start Time: Thu Jan 15 00:00:00 2026
+
+.step r=1000
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+Warning: Simulation tolerance relaxed to achieve convergence from 4.9999999999998683e-06 
+Convergence Failure:  Time step too small; time = 5e-06, timestep = 1.25e-19: trouble with node "a"
+
+Simulation Failed: Iteration limit reached
+
+Total elapsed time: 0.000 seconds.
+Total iterations: 1860
+
+Files loaded:
+C:\recording\cond_grid_step_timestep_collapse.cir
+

@@ -1,0 +1,9 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\cond_grid_model_value_word.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\cond_grid_model_value_word.cir(5): No such parameter defined.
+.model DX D(Is=abc)
+               ^^^
+C:\recording\cond_grid_model_value_word.cir(4): Undefined model "dx".
+D1 out 0 DX
+         ^^

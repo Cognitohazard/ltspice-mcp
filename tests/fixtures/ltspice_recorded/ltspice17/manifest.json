@@ -8481,6 +8481,529 @@
         ".net"
       ]
     },
+    "log/cond_grid_dc_fallback_first": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_dc_fallback_first.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_dc_fallback_first.cir": "d94cad8e7a21eaff9720249a6ec6f59a3fe5547035c9dc64fd3d7eb68e094fcf"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_dc_fallback_first.log": {
+          "bytes": 1079,
+          "sha256": "c0fb00ee434d44a9258261106b57f00c1ecd56f0ab0183a7efadb0a9ba01f327"
+        },
+        "log/cond_grid_dc_fallback_first.raw": {
+          "bytes": 2004,
+          "sha256": "06eb31cebe018a5af10712583a549b321781e16a1b8cc7979511ba143b667c92"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_dc_fallback_later": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_dc_fallback_later.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_dc_fallback_later.cir": "a6a137cc4abb9c6437e7c09c3c8cee20c3db0abcefb470ae327fcd10c6374731"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_dc_fallback_later.log": {
+          "bytes": 507,
+          "sha256": "8c23552f26a7cbdc365edb8f521638353ac7faddaf2bfa95c17a47c96f410817"
+        },
+        "log/cond_grid_dc_fallback_later.raw": {
+          "bytes": 1132,
+          "sha256": "884c20e58a39e88733e84b9eaa27fb9f7c6a1e4a2128d7cf71f7442bd0bf682a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_model_value_word": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_model_value_word.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_model_value_word.cir": "8c321489336f89f80f45fb1344bdf0377a01c477e62a5191a97948e090f4cb9a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_model_value_word.log": {
+          "bytes": 765,
+          "sha256": "2a84b1933fe7ecd2a89b31e7141757b73af3b68f328f5b8a9e0a7198f21ad5d5"
+        },
+        "log/cond_grid_model_value_word.raw": {
+          "bytes": 802,
+          "sha256": "210f94a4fcf3a62678d80336fa48edf8664d57cc66b424861c2617601e6b04ba"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_deck_error": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_deck_error.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/cond_grid_step_deck_error.cir": "103c256edfa31af92055adbb5a071e59e6f43009841151ea8001235bdbd99c1a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_deck_error.log": {
+          "bytes": 196,
+          "sha256": "ed46504dd07d6640a002573f5afb9b3ebc838a7d00147b594b3b58eb80a0bde0"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/cond_grid_step_floating_node": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_floating_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_floating_node.cir": "bb8b0bfee9a726ee4efc6e808f455bc1b2e2055a437769bb36390c601cf935a3"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_floating_node.log": {
+          "bytes": 456,
+          "sha256": "e076e5e5c5ea96d0e915fd3ce13be83c2f6afc986b6d867d5b03d5218f7434cd"
+        },
+        "log/cond_grid_step_floating_node.raw": {
+          "bytes": 754,
+          "sha256": "7faf9d81dbf0ca63b7046d54cd902701031f0117a19da5907896e85ef37852d4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_meas_failed": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_meas_failed.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_meas_failed.cir": "b012be6530fee38901bf9b5f730b9f849609d8504c615867123700639617b296"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_meas_failed.log": {
+          "bytes": 658,
+          "sha256": "4486114d3e6819f3a9d24cb78cde26b3532ba6e8c3e759e8420bc022262e6443"
+        },
+        "log/cond_grid_step_meas_failed.raw": {
+          "bytes": 4282,
+          "sha256": "9b6dbed3c3f1dbe280314fdbc7e67c2158c0f7cb53da726e590ec7c958546765"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_meas_unsaved": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_meas_unsaved.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_meas_unsaved.cir": "da6ee7fb25391111c01b841df13aed8019ce16364070630cccc50c2649caf006"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_meas_unsaved.log": {
+          "bytes": 454,
+          "sha256": "99764cf6e224b298ecfa9f633e726c6ebd5245fb00c9ee612024f75d2e99e385"
+        },
+        "log/cond_grid_step_meas_unsaved.raw": {
+          "bytes": 746,
+          "sha256": "11e61511d58f35bb04a91cb5266cd8f12f00fb04dda38f36017f9c6034cedfb4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_missing_include": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_missing_include.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/cond_grid_step_missing_include.cir": "07fdedbeb7c946fd0ce5c5d3a40dd5b825e11751bae69589fefc2c7e97372efc"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_missing_include.log": {
+          "bytes": 116,
+          "sha256": "4fe91ddfe86169d71098505eee336c50d960ed015f44d010343ee403b4adb940"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/cond_grid_step_missing_model": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_missing_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/cond_grid_step_missing_model.cir": "9bbe8e8076462e7a426f534953b66ce004ddc08744653dc189882621eef4b8e5"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_missing_model.log": {
+          "bytes": 240,
+          "sha256": "7607b2fdde56782592cad2536c01d5f75796677ea26c514f4ac8958ea5d5db35"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/cond_grid_step_op_fallback": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_op_fallback.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_op_fallback.cir": "b52db91bbf4e8672768cc793139114e501cdb913ace051cec7420d5333825e4f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_op_fallback.log": {
+          "bytes": 1998,
+          "sha256": "c4d044f818e0ac8bcc3215e536bcce072b4aaa261037695d2d7f48c3944d3db4"
+        },
+        "log/cond_grid_step_op_fallback.raw": {
+          "bytes": 1986,
+          "sha256": "78ed08d5ef7db93021e1b060c4a812fdc1d031f9414237be3d8dd942294cb7a8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_source_loop": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_source_loop.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/cond_grid_step_source_loop.cir": "cefa46f9d453181f0ad8df302c205f7dba8ae74d17fe41625a392c0489ffb212"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_source_loop.log": {
+          "bytes": 470,
+          "sha256": "314d486236df17e566d7ca01285bf5542682017e75241ac9221a3c91426fd4ba"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/cond_grid_step_timestep_collapse": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_timestep_collapse.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/cond_grid_step_timestep_collapse.cir": "f950915ba4467cd97de30e5ed952321ad95b2b7303001e7544e3e95fe25f2d34"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_timestep_collapse.log": {
+          "bytes": 696,
+          "sha256": "1e810d37ad92b31f03be8e194144d01157043809f15837c5a34ee08692168505"
+        },
+        "log/cond_grid_step_timestep_collapse.raw": {
+          "bytes": 1048,
+          "sha256": "21230bea689b64f72108800fbaae53fd2b23c52f6d37c161983f2dc72ba9cf6c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_undefined_parameter": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_undefined_parameter.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/cond_grid_step_undefined_parameter.cir": "51eb32941451db0664fb4f58e561dfa3d4c3b638d07aef16957416a6396877d9"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_undefined_parameter.log": {
+          "bytes": 484,
+          "sha256": "b2141993080729235de532c62bf1272b19ae8a150bf0e06ed89fbcaff15cc6b8"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/cond_grid_step_unknown_directive": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_unknown_directive.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_unknown_directive.cir": "40a5c20f12e0938aaeece88ae6bdbfb7f9877c661a9c71f3d0dfa35611698dc7"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_unknown_directive.log": {
+          "bytes": 452,
+          "sha256": "0fe6fd3e3122c21b011afa3346268286cb41bdb5d6accc7f46a10cf78a600d7c"
+        },
+        "log/cond_grid_step_unknown_directive.raw": {
+          "bytes": 756,
+          "sha256": "0dad17d8de6f69d0491a058c5b8fa26774152fe6545a927cb04a300c3c9dd8a0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_unknown_instance_param": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_unknown_instance_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_unknown_instance_param.cir": "e1a05aebe44f845dddbed8bcff514905ccded8456dd10c587d7f0da3daac2fd3"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_unknown_instance_param.log": {
+          "bytes": 798,
+          "sha256": "b229da212620ab78959340d2b00e9ca4b7e8041778d67c35bbaa46c831abde71"
+        },
+        "log/cond_grid_step_unknown_instance_param.raw": {
+          "bytes": 1158,
+          "sha256": "ca07d84c95cb1e808ea1b98eb73ce035ed7d21f4e018029fe11848ca24e81e6b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_step_warnings": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_step_warnings.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_step_warnings.cir": "66ad3825c7cd6050f88f0237e477df8cb4983f43e257f32f4abc4a734d71324e"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_step_warnings.log": {
+          "bytes": 972,
+          "sha256": "08a1f5f80e8f7dc0c2c5d40946ef8d814640f1e73b24cab1c484a08f35ecb42f"
+        },
+        "log/cond_grid_step_warnings.raw": {
+          "bytes": 1726,
+          "sha256": "ded6f963ce6e81b537a427fe37bf9b35af1090a859d5eae0c0d704d6a10f3ece"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/cond_grid_unknown_model_param": {
+      "behaviour": "log-condition-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/cond_grid_unknown_model_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/cond_grid_unknown_model_param.cir": "38a2226121396c1efd1f4d24549a5aacd57387d4c5ed307b3f4acda63fd58029"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/cond_grid_unknown_model_param.log": {
+          "bytes": 697,
+          "sha256": "de8384019576984f9abb69f83eb0254187fbe766688def2a93f04a0a0971c410"
+        },
+        "log/cond_grid_unknown_model_param.raw": {
+          "bytes": 846,
+          "sha256": "b618f5a170a358771a02abc89c6e80075624419445ba2f73e9689a76b6315e62"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/device_op": {
       "behaviour": "log-device-op",
       "command": [
@@ -13150,6 +13673,39 @@
         ".raw"
       ]
     },
+    "log/tran_convergence_recovers": {
+      "behaviour": "log-transient-convergence-progress",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/tran_convergence_recovers.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/tran_convergence_recovers.cir": "b05fdb4bc8266e243a21420ee71115a8be01e2ac54fa8935b089a1141e93899a"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/tran_convergence_recovers.log": {
+          "bytes": 420,
+          "sha256": "7169a4df2e3e3e919b7591a26f9d1b2bbd7c6cf02e5237c53b9ad7c0797aa104"
+        },
+        "log/tran_convergence_recovers.raw": {
+          "bytes": 204446,
+          "sha256": "1b9843a3a55a9040849077968e0c6b6005b1e1706e15ff87e880585398439331"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/unknown_model_param": {
       "behaviour": "log-diagnostics",
       "command": [
@@ -14683,6 +15239,962 @@
         "raw/step_digits.raw": {
           "bytes": 6626,
           "sha256": "8d6c661ca7acc5c9ba6c947879f0322e90f5b582c73561d3fe7ab2f9535a6d34"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_decade_model": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_decade_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_decade_model.cir": "a181058961a702ce65b3f121b8a3247f804e975ee2800cf5571d94695497cb8b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_decade_model.log": {
+          "bytes": 488,
+          "sha256": "f49d5d5f32cdbd14de40d087629b458f6c91b62c8f32d47a857c281a155287a2"
+        },
+        "raw/step_grid_decade_model.raw": {
+          "bytes": 1246,
+          "sha256": "ce4b44ff06c2f8b16684fede74f175dcd6145353a740f9ea5dd2d4f94abefa45"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_decade_param": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_decade_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_decade_param.cir": "fa13dd27e8108201192b1ff0569a51374cca2223b5ed2de16577588c38c24d77"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_decade_param.log": {
+          "bytes": 467,
+          "sha256": "7c1270182dfad2ad3aa21700aec57f56903a0b7d82e5463ab92c19d9c31b52f1"
+        },
+        "raw/step_grid_decade_param.raw": {
+          "bytes": 1162,
+          "sha256": "6d695a258e01e44509ba1e954d352e70793e100367bd41bb7fb46bc3331d5b65"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_decade_source": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_decade_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_decade_source.cir": "c93b78778eab828d196ee22a54b6002d26e4c5e65e9d11f5700b478dedb25a12"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_decade_source.log": {
+          "bytes": 465,
+          "sha256": "e6b19ff0a7384acc31398a12d8f9f7e03c8dc6126b4e764656b4be0b14d51a57"
+        },
+        "raw/step_grid_decade_source.raw": {
+          "bytes": 1164,
+          "sha256": "a0cc7a6e725289997b462cb2605b66b7873c0fa1113f00e05817beadfc82c27b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_decade_temp": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_decade_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_decade_temp.cir": "9355f64c1e3eafabb707c08a295d9c17a287766861ca8ed0c8756fc4e0641805"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_decade_temp.log": {
+          "bytes": 468,
+          "sha256": "607be007c7488d3623f5dd71f6876f7c8b5c17f8b0616f99e13a62fbb3ef752b"
+        },
+        "raw/step_grid_decade_temp.raw": {
+          "bytes": 1192,
+          "sha256": "1f46a90300e67f94df9a905b216e1260e36bcab169389a8195b64ae8452aacef"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_linear_model": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_linear_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_linear_model.cir": "cd91d0feafd0e38376981f229ac648ba7a5bd166c4f23b4e2f569fbe48f35be4"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_linear_model.log": {
+          "bytes": 488,
+          "sha256": "998de9b8d1bde44e69ce0e987755e8c599d919486c92cac4e7433bfcee5ee8ee"
+        },
+        "raw/step_grid_linear_model.raw": {
+          "bytes": 1182,
+          "sha256": "6020694a9a98437507acb4ee166d41e60f753fa9016479165fe48a17be2627bd"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_linear_source": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_linear_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_linear_source.cir": "252cc597a9dba24e4b97945a75298f811882585f91b72fdf92c77c33786d6da5"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_linear_source.log": {
+          "bytes": 463,
+          "sha256": "56bc8e4c36413d7bf1ba785021c10cb294c80f878515be8614ee114248785999"
+        },
+        "raw/step_grid_linear_source.raw": {
+          "bytes": 1164,
+          "sha256": "f6b9178ee90c98574a326589308effdd257b226f922337bce2260ac1921dfd16"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_linear_temp": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_linear_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_linear_temp.cir": "dd5a8cc2db5e8ff1e880b7eb73b79b1c108f66c23416555bce1cfc7683af5955"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_linear_temp.log": {
+          "bytes": 468,
+          "sha256": "b65d677144745a091d040562cdb1e9e8c5caafbd7393fc414b4e6b7a0660203f"
+        },
+        "raw/step_grid_linear_temp.raw": {
+          "bytes": 1192,
+          "sha256": "41b75e3b774a1e65728add98197058a547328f514d02a62fb19f3234d36f47ee"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_list_model": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_list_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_list_model.cir": "fc9b7b493dda07a0e30d2bcb353b388cd5aa84ded582a58453b7e68504d407a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_list_model.log": {
+          "bytes": 486,
+          "sha256": "bd34b37bef939f9cbee0c44caada04810b864a68ae1290e5644df84069df4b9b"
+        },
+        "raw/step_grid_list_model.raw": {
+          "bytes": 1178,
+          "sha256": "92f63197ec7e27d0367a5aac428312091ea8dd6cb518bbb223b8eefbc4f565f6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_list_source": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_list_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_list_source.cir": "a0bd85c141b599a5a34054d6567c1f0b731bd08c359d74092110212511c32c93"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_list_source.log": {
+          "bytes": 461,
+          "sha256": "85dd2e64173ccc9ac089bdf390eccc3ed71930c8f0156f33e5bb2eef8dd5dee3"
+        },
+        "raw/step_grid_list_source.raw": {
+          "bytes": 1160,
+          "sha256": "e931f794fb3e2504a9e0e603805398edf3ac5d9d3c0fbd89d884d7eafe574314"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_model_list_temp_linear": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_model_list_temp_linear.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_model_list_temp_linear.cir": "ebc107f2c318193c9bbf7109b813bc975aac62c174c3a8b8fb78c422f26da51f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_model_list_temp_linear.log": {
+          "bytes": 542,
+          "sha256": "e72065695881019ac4e7281472f6de1366f00a23c3c2d7a466669d8c0a185a87"
+        },
+        "raw/step_grid_nested2_model_list_temp_linear.raw": {
+          "bytes": 1358,
+          "sha256": "51c680e608c62ba680881e6dfdbe780304a673fb0ef1c52594ec0d478e569a78"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_source_decade_param_octave": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_source_decade_param_octave.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_source_decade_param_octave.cir": "efe35e0e5e0a8153f936a0bddf447888520756439ffcfccf7f0065ea9500c789"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_source_decade_param_octave.log": {
+          "bytes": 508,
+          "sha256": "8c45540976cbca9f4ba5e8b6b1867c60ecff1088c19854153bbd5a9979d40b7f"
+        },
+        "raw/step_grid_nested2_source_decade_param_octave.raw": {
+          "bytes": 1326,
+          "sha256": "61be1bd927881bee5d05f4f2fe1b57ea31aa794e8ab65536acdb827009480c18"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_source_linear_param_decade": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_source_linear_param_decade.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_source_linear_param_decade.cir": "a7363d688dc4d9398771291e16bb57fe68a249e0dfa17c256f261cdc59354ee2"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_source_linear_param_decade.log": {
+          "bytes": 506,
+          "sha256": "cb71b2f6847b0c04508c53f86b5cb24bedf54cea5a3af7448ae938e016c2234b"
+        },
+        "raw/step_grid_nested2_source_linear_param_decade.raw": {
+          "bytes": 1326,
+          "sha256": "9acdfb4cc3e3e888e4c3fce6594aca0ade41fe5292855791e786de9052a6df7f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_source_list_model_linear": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_source_list_model_linear.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_source_list_model_linear.cir": "deb362ef09ac92d4e50c78eb39b550729deb3587496620730418d21c3beee6bf"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_source_list_model_linear.log": {
+          "bytes": 528,
+          "sha256": "5f47e46277860c2f6adbaab4a8c2df51a82236af2dfa8c4b718697a22602791e"
+        },
+        "raw/step_grid_nested2_source_list_model_linear.raw": {
+          "bytes": 1326,
+          "sha256": "b6505f356d7c05f4c908c84dd78872f01c5ca6123de248f625a6eb750d1be895"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_source_octave_param_list": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_source_octave_param_list.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_source_octave_param_list.cir": "352f1613ba10970c01983a156c23a385c102abbebf05ee0143bf1af46687a4e2"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_source_octave_param_list.log": {
+          "bytes": 504,
+          "sha256": "881e44037e76d26aaa876141d0a53ec54fb1033aa16d56ca904f71000dde86e6"
+        },
+        "raw/step_grid_nested2_source_octave_param_list.raw": {
+          "bytes": 1326,
+          "sha256": "6b449656f49a607711aec0c93ab1985e2a65aee9507db1f6de4dd662d49e3ec8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_temp_decade_model_decade": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_temp_decade_model_decade.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_temp_decade_model_decade.cir": "171e57eea76653da3a18c6b5a5a7327481d727943eac4a75aa2984c9de19c60f"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_temp_decade_model_decade.log": {
+          "bytes": 542,
+          "sha256": "ccbf64eb28b9851cf41c8c69855186c2159b346cb98a848c4b7101b01b24e8fd"
+        },
+        "raw/step_grid_nested2_temp_decade_model_decade.raw": {
+          "bytes": 1550,
+          "sha256": "cb6aa52fcdfeff5a6fb5a3a6b18c751d8535a5a4e3c9062a82de161694cd827c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_temp_list_param_linear": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_temp_list_param_linear.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_temp_list_param_linear.cir": "77d0f3f7d0a73d5790ef0f8cc1c8a3c53e7c7514a7daf5ab4c14f9e02ad5de51"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_temp_list_param_linear.log": {
+          "bytes": 522,
+          "sha256": "3715ecd4b5541c4bcc3e2e46f66bebae6ca317bd7151955933485f8e5caeb8fc"
+        },
+        "raw/step_grid_nested2_temp_list_param_linear.raw": {
+          "bytes": 1390,
+          "sha256": "1a47969e0fda3b67ddff8327821053f2cb4517a9a4c134d75a71d41c765d14d7"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested2_temp_octave_model_octave": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested2_temp_octave_model_octave.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested2_temp_octave_model_octave.cir": "fde812cf948cda9dfc976e46c3a4ed0fc7ea8bd726326906337ac174a181786b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested2_temp_octave_model_octave.log": {
+          "bytes": 544,
+          "sha256": "c8fd646b1bf3668bc05185416722d1a8dffb54af0a20653308a853fe1aa0ff44"
+        },
+        "raw/step_grid_nested2_temp_octave_model_octave.raw": {
+          "bytes": 1326,
+          "sha256": "6fd17729ba9d185c4a04807954013665d6acec952ba3f2b662576dbd212a0494"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested3_decade_temp_model_source": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested3_decade_temp_model_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested3_decade_temp_model_source.cir": "a3f612ef663c3ee095c4d46300459376350bc9f8c5ad2bda314398810c74ee3a"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested3_decade_temp_model_source.log": {
+          "bytes": 718,
+          "sha256": "4583ff9591957c9220856f804f674504deb4cffe5c05bed1516bd51390c47d9c"
+        },
+        "raw/step_grid_nested3_decade_temp_model_source.raw": {
+          "bytes": 1938,
+          "sha256": "1a6dc145abd3d47dc0c0341473567911e5ab3a68c3a1d0a290dd608095fb468d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested3_linear_model_source_decade_param": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested3_linear_model_source_decade_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested3_linear_model_source_decade_param.cir": "daa56b6766252fdb581047d0c17c029726774102feb3dd7fd9945fd766d18b79"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested3_linear_model_source_decade_param.log": {
+          "bytes": 702,
+          "sha256": "0b8affe4d5485455d33e06148c7d16f873536030c08dc6cc5f97d29c2d8a3eec"
+        },
+        "raw/step_grid_nested3_linear_model_source_decade_param.raw": {
+          "bytes": 1714,
+          "sha256": "29fae1070569da9b1ff8ffb09dc6b70b19759899daf7392febba02a2f5d25588"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested3_list_param_temp_model": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested3_list_param_temp_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested3_list_param_temp_model.cir": "e677768493474f66774baa429d5b917177a601e69f7966cf22886d3bd969895b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested3_list_param_temp_model.log": {
+          "bytes": 734,
+          "sha256": "2953302cb474eb5956043e09814b16f271726248ae5e29a93dc171525dce1c37"
+        },
+        "raw/step_grid_nested3_list_param_temp_model.raw": {
+          "bytes": 1778,
+          "sha256": "6c920eecdb491b3d0ce818e710dce63b0960a8f8ea12b2311729cec2c67e11dd"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested3_list_source_linear_param_temp": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested3_list_source_linear_param_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested3_list_source_linear_param_temp.cir": "1e4823c7c8433f697252cccaeea07f0221be2b144d00c71652d9c01a97e4dcf0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested3_list_source_linear_param_temp.log": {
+          "bytes": 662,
+          "sha256": "893d2524ca73af4823c268d47b5f8e9a63f330d929dd5d65d84e5746c14f26aa"
+        },
+        "raw/step_grid_nested3_list_source_linear_param_temp.raw": {
+          "bytes": 1746,
+          "sha256": "a982cdf1426a6e60c5f662d7dc3429881df5ef8e4c01c9c43ed6a2e533b70f12"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested3_octave_param_temp_model": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested3_octave_param_temp_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested3_octave_param_temp_model.cir": "7aeb11926eb8104f8972743450ec9c29398e10e568847711b0bc83c7ca47276e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested3_octave_param_temp_model.log": {
+          "bytes": 730,
+          "sha256": "477a09c6a3af71fbdee089f15ccde82d8238e48e62ee2c85fe4e7bf9f40976e4"
+        },
+        "raw/step_grid_nested3_octave_param_temp_model.raw": {
+          "bytes": 1714,
+          "sha256": "571675f5e580a92a4cfcc6d194f9b2763e3d813dc8bae164ac1ea4c25ec7e46f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_nested3_octave_source_list_param_decade_param": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_nested3_octave_source_list_param_decade_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_nested3_octave_source_list_param_decade_param.cir": "9365f29c217d0606e5ee56a27a4ef52705684399a786668f9bb576f7d45fc5f3"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_nested3_octave_source_list_param_decade_param.log": {
+          "bytes": 662,
+          "sha256": "33de3450f841bcc4726b6b65fbef5b7f49343008edc9bf20e1c8917304f1390f"
+        },
+        "raw/step_grid_nested3_octave_source_list_param_decade_param.raw": {
+          "bytes": 1746,
+          "sha256": "d4c297f6fe1356674538f95bc3403bed6a5c05d266a4d0bde1efa7375836b04e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_octave_model": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_octave_model.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_octave_model.cir": "bbf988080fab26cf13a6040dfa688c07a89ae2903ba667f6f3a774a89a5e6483"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_octave_model.log": {
+          "bytes": 488,
+          "sha256": "9d50b972e275d80b2572ff1eef5303321b1603720513ba826850a3fc68fed699"
+        },
+        "raw/step_grid_octave_model.raw": {
+          "bytes": 1182,
+          "sha256": "de227797ef40cb533f215e9397cba8c4f2d318a1c38e3bbdd630151e22602055"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_octave_param": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_octave_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_octave_param.cir": "ebaddb9f5f55ebd947d88c89d8507deedf41ff234deeb7a0e7be0bd783ed522d"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_octave_param.log": {
+          "bytes": 466,
+          "sha256": "af5ea519ff48cf9efa414181816d44b0629583361de11027eb899eaf9f33cf04"
+        },
+        "raw/step_grid_octave_param.raw": {
+          "bytes": 1162,
+          "sha256": "0043842393bef84126551fe7d7f5ce234073c6cc3ebba091d04867f3b2dda209"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_octave_source": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_octave_source.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_octave_source.cir": "dc4a8829c5b6e630b140b0770da5bb1f3845f29a4ba78e331709c944490ef434"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_octave_source.log": {
+          "bytes": 463,
+          "sha256": "d9e148db1bf4a59c44ab84b7b341239a7e320141958661501db6e73ae0e693a7"
+        },
+        "raw/step_grid_octave_source.raw": {
+          "bytes": 1164,
+          "sha256": "25496547911e359d21b8e729831933daf86922195b0bbe373385af8aae67664a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_octave_temp": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_octave_temp.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_octave_temp.cir": "678946e65ff5e8fecd1cd2f568222e193a1f11ef50fd701f1d41dac0a2c915f2"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_octave_temp.log": {
+          "bytes": 469,
+          "sha256": "10e9cb3653936db9bf6a0151cf535549da5d07f3c15de68ee8c57c500f5a4e0e"
+        },
+        "raw/step_grid_octave_temp.raw": {
+          "bytes": 1160,
+          "sha256": "95ebfb94c67843afcd336aefe30d2d9833a30e1735b60cf505006bf6b0004c56"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_values_op": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_values_op.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_values_op.cir": "572817b90030fb04975d18fdc7607484b730d20a5f8ef18099814b32a2b3cc26"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_values_op.log": {
+          "bytes": 479,
+          "sha256": "f85792f3c4f60a86810677bc564cf6713a5c3130ab11edff12b3f76e8b69a7cc"
+        },
+        "raw/step_grid_values_op.raw": {
+          "bytes": 1054,
+          "sha256": "f5033322d82d7fcafad27f8cfa46beed47aae530a742160850ca722541799c2e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/step_grid_values_tran": {
+      "behaviour": "step-value-grid",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_grid_values_tran.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_grid_values_tran.cir": "fd7105b9cec4a0cfbca0c01d927f2c4e6bdcdc010f9f12e4464e5d716a8ecd82"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_grid_values_tran.log": {
+          "bytes": 518,
+          "sha256": "e0cea1e6657addcc4e9e7dc544f7894efd36b3b2087cff2f8280545a82e6f7d8"
+        },
+        "raw/step_grid_values_tran.raw": {
+          "bytes": 1226,
+          "sha256": "051007aa744189a10e40b13e9225e1a89ae00b5ac863b7b18c78dce5731f2398"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

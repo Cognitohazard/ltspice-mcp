@@ -1,0 +1,6 @@
+C:\recording\cond_grid_step_deck_error.cir(4): Expected node name here.
+R2 a
+    ^
+C:\recording\cond_grid_step_deck_error.cir(4): Expected device instantiation or directive here.
+R2 a
+^^^^
