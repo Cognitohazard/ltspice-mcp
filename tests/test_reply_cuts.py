@@ -300,6 +300,28 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
             ),
         )
     },
+    **{
+        (handler, f"{at}{key}"): "the parts of one deck that share a name without "
+        "LTspice's §: one per place the § can stand in that name"
+        for handler, at, keys in (
+            ("verify.handle_verify_circuit", "comparison.", ("ambiguous", "components_ambiguous")),
+            ("verify.handle_verify_circuit", "export.diff_vs_prior.", ("components_ambiguous",)),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.",
+                ("ambiguous", "components_ambiguous"),
+            ),
+        )
+        for list_key in keys
+        for key in (
+            (f"{list_key}[].reference_refs", f"{list_key}[].candidate_refs")
+            if list_key == "ambiguous"
+            else (f"{list_key}[].before", f"{list_key}[].after")
+        )
+    },
+    ("inspect_tools.handle_inspect", "results[].data.letter_unknown"): (
+        "the parts of one sheet, those whose element letter no Prefix decides"
+    ),
     ("verify.handle_verify_circuit", "comparison.not_compared"): _NOT_COMPARED,
     ("verify.handle_verify_circuit", "export.diff_vs_prior.not_compared"): _NOT_COMPARED,
     ("schematic_edit.handle_edit_schematic", "verification.comparison.not_compared"): (

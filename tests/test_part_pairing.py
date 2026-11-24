@@ -26,7 +26,8 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib.hierarchy import SemanticProfile
-from ltspice_mcp.lib.netlist_graph import compare_graphs
+from ltspice_mcp.lib.netlist_diff import connection_delta
+from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
@@ -73,9 +74,7 @@ class Case:
 
     @property
     def equivalent(self) -> bool:
-        return not (
-            self.added or self.removed or self.changed or self.values or self.ambiguous
-        )
+        return not (self.added or self.removed or self.changed or self.values or self.ambiguous)
 
 
 def _cases() -> Iterator[Any]:
@@ -164,8 +163,7 @@ def _assert_equivalence(comparison: dict[str, Any], case: Case) -> None:
     assert [row["ref"] for row in comparison.get("added", [])] == case.leaves_added
     assert [row["ref"] for row in comparison.get("removed", [])] == case.leaves_removed
     assert [
-        (row["reference_refs"], row["candidate_refs"])
-        for row in comparison.get("ambiguous", [])
+        (row["reference_refs"], row["candidate_refs"]) for row in comparison.get("ambiguous", [])
     ] == case.ambiguous
     assert comparison.get("renamed", []) == []
     assert comparison["equivalent"] is case.equivalent
@@ -181,6 +179,17 @@ def _assert_equivalence(comparison: dict[str, Any], case: Case) -> None:
 def test_graph_comparison(case: Case, reader: SemanticProfile):
     comparison = compare_graphs(case.baseline, case.compared, reader=reader)
     _assert_equivalence(comparison.as_dict() | {"equivalent": comparison.equivalent}, case)
+
+
+def test_parts_left_unpaired_by_a_shared_fold_are_not_called_rewired_among_numbered_nets():
+    """The parts a fold leaves unpaired are reported as ambiguous, so the
+    wiring comparison does not put their difference down to nets the exporter
+    numbered."""
+    baseline = parse_netlist_graph(_top("R§Load a 0 1k", "RL§oad a 0 1k"), reader=LTSPICE_READER)
+    compared = parse_netlist_graph(_top("RLoad a 0 1k"), reader=LTSPICE_READER)
+    moved, not_compared = connection_delta(baseline, compared)
+    assert moved == []
+    assert not any(note.startswith("connections:") for note in not_compared)
 
 
 # ---------------------------------------------------------------------------

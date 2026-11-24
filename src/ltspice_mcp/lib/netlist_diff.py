@@ -644,7 +644,12 @@ def connection_delta(
     unnamed = len(moved) < len([row for row in rows if row[0] not in certain]) or (
         not moved
         and not comparison.structurally_equivalent
-        and not (comparison.added or comparison.removed or comparison.arity_errors)
+        and not (
+            comparison.added
+            or comparison.removed
+            or comparison.arity_errors
+            or comparison.ambiguous
+        )
     )
     if unnamed:
         not_compared.append(

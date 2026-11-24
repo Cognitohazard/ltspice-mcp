@@ -4574,9 +4574,9 @@ def _first_step_read(
         code="first_step_read",
         kind="coverage",
         detail=(
-            f"The request named no step, so each recipe that read a results file read "
-            f"only step 0 of a stepped run (steps per source: {named}). Name one with "
-            "step, or set all_steps, to read the others."
+            f"The request named no step, so each recipe that read a waveform read only "
+            f"step 0 of a stepped run (steps per source: {named}); measurements read "
+            "every step. Name one with step, or set all_steps, to read the others."
         ),
         evidence={"step_index": 0, "step_counts": counts},
     )

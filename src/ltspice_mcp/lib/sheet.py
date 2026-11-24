@@ -147,21 +147,25 @@ class SheetPart:
         return shown_value(own)
 
     @property
+    def _prefix(self) -> str | None:
+        """The ``Prefix`` that decides the part's element letter: its own,
+        else that of its symbol when the symbol is usable, else ``None``."""
+        own = self.attribute(INSTANCE_PREFIX)
+        if own:
+            return own
+        return self.symbol.file.prefix if self.symbol is not None and self.usable else None
+
+    @property
     def element(self) -> str:
         """The element letter the part netlists as (:func:`element_letter`)."""
-        found = self.symbol if self.usable else None
-        return element_letter(
-            self.attribute(INSTANCE_PREFIX),
-            found.file.prefix if found is not None else None,
-            self.reference,
-        )
+        return element_letter(self._prefix, None, self.reference)
 
     @property
     def element_known(self) -> bool:
-        """Whether :attr:`element` is the letter the part netlists as: it is
-        when the part has its own ``Prefix`` or its symbol is usable, and is
-        only a guess from the reference when neither is so."""
-        return bool(self.attribute(INSTANCE_PREFIX)) or self.usable
+        """Whether :attr:`element` is decided by a ``Prefix``, the part's own or
+        its usable symbol's; when neither gives one it is only a guess from the
+        reference."""
+        return bool(self._prefix)
 
     @property
     def spice_model(self) -> str:

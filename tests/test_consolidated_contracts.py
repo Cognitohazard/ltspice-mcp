@@ -798,7 +798,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # eight-name enum) and the guide query's heading, which ask for one
     # placement's pins or one heading's part instead of all eight or the whole
     # section. Measured 12,540.
-    "inspect": 12545,
+    # Raised by about 200 characters for ``letter_unknown``, which names the
+    # sheet parts a prefix filter could not place because their element letter
+    # is undecided, instead of dropping them silently. Measured 12,743.
+    "inspect": 12745,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

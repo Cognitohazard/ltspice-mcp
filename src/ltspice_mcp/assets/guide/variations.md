@@ -152,7 +152,7 @@ applies to the model card's `VTO`/`KP`:
  "rules": [{"rule": "mismatch", "prefix": "M", "AVT": 2.24e-2, "AK": 0.01}]}
 ```
 
-- `prefix` matches leading characters, so `"M1"` also matches M10 and M11. To
+- `prefix` matches the leading characters of each instance name, so `"M1"` also matches M10 and M11. To
   select exact devices, use one rule per device with `instance`, such as
   `instance: ["XA", "M1"]`; a wrapper path selects all its descendant MOS
   devices. `instance` and `prefix` are mutually exclusive.

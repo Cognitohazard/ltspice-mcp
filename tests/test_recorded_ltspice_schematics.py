@@ -1903,10 +1903,11 @@ class TestExportedNames:
         export = rec.export_text(build, "export/instance_names")
         result = compare_graphs(self.WRITTEN, export, reader=LTSPICE_READER)
         assert (result.added, result.removed) == ([], [])
-        # References are compared without the marker, as LTspice 26 names them.
+        # Each is reported as its deck writes it, LTspice 26's marker included.
+        marker = "X" if rec.generation(build) == "xvii" else "X§"
         assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [
-            ("X2", "XX2"),
-            ("x3", "Xx3"),
+            ("X2", f"{marker}X2"),
+            ("x3", f"{marker}x3"),
         ]
         assert result.equivalent
 

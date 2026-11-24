@@ -1725,7 +1725,8 @@ class TestASheetReadOncePerCall:
 
 #: A sheet whose part names start with a letter other than their element's:
 #: a resistor ``Mload``, a MOSFET ``Q1``, a block ``U1`` whose symbol has
-#: Prefix X, and ``Z9``, whose symbol is nowhere to be found.
+#: Prefix X, ``Z9``, whose symbol is nowhere to be found, and ``U2``, whose
+#: symbol is found but gives no Prefix.
 _MISNAMED_ASC = """Version 4
 SHEET 1 880 680
 SYMBOL res 96 96 R0
@@ -1738,6 +1739,8 @@ SYMBOL blk 480 96 R0
 SYMATTR InstName U1
 SYMBOL nosuch 672 96 R0
 SYMATTR InstName Z9
+SYMBOL bare 864 96 R0
+SYMATTR InstName U2
 """
 
 _BLK_ASY = """Version 4
@@ -1750,9 +1753,19 @@ PINATTR PinName a
 PINATTR SpiceOrder 1
 """
 
+_BARE_ASY = _BLK_ASY.replace("SYMATTR Prefix X\n", "")
+
+
+def _write_misnamed_sheet(work_dir: Path) -> Path:
+    (work_dir / "blk.asy").write_text(_BLK_ASY)
+    (work_dir / "bare.asy").write_text(_BARE_ASY)
+    sheet = work_dir / "misnamed.asc"
+    sheet.write_text(_MISNAMED_ASC)
+    return sheet
+
 
 @pytest.mark.parametrize(
-    ("prefix", "expected"), [("R", ["Mload"]), ("M", ["Q1"]), ("X", ["U1"]), ("Q", [])]
+    ("prefix", "expected"), [("R", ["Mload"]), ("M", ["Q1"]), ("X", ["U1"]), ("Q", []), ("U", [])]
 )
 async def test_components_prefix_on_a_sheet_is_the_element_letter_not_the_name(
     asc_state: SessionState, work_dir: Path, prefix: str, expected: list[str]
@@ -1760,26 +1773,23 @@ async def test_components_prefix_on_a_sheet_is_the_element_letter_not_the_name(
     """On a sheet the prefix matches the name each part's card carries, whose
     first letter is its element letter, as it does on a netlist: a resistor
     named ``Mload`` is an R, not an M. A part whose symbol is not found has no
-    known letter, so it is named apart instead of listed or dropped."""
-    (work_dir / "blk.asy").write_text(_BLK_ASY)
-    sheet = work_dir / "misnamed.asc"
-    sheet.write_text(_MISNAMED_ASC)
+    known letter, nor has one whose symbol gives no Prefix, so each is named
+    apart instead of listed or dropped."""
+    sheet = _write_misnamed_sheet(work_dir)
 
     (res,) = await _run(asc_state, [{"kind": "components", "path": str(sheet), "prefix": prefix}])
 
     assert res["ok"] is True, res
     assert [c["reference"] for c in res["data"].get("components", [])] == expected
-    assert res["data"]["letter_unknown"] == ["Z9"]
+    assert res["data"]["letter_unknown"] == ["U2", "Z9"]
 
 
 async def test_components_on_a_sheet_without_a_prefix_name_no_unknown_letter(
     asc_state: SessionState, work_dir: Path
 ):
-    (work_dir / "blk.asy").write_text(_BLK_ASY)
-    sheet = work_dir / "misnamed.asc"
-    sheet.write_text(_MISNAMED_ASC)
+    sheet = _write_misnamed_sheet(work_dir)
 
     (res,) = await _run(asc_state, [{"kind": "components", "path": str(sheet)}])
 
-    assert {c["reference"] for c in res["data"]["components"]} == {"Mload", "Q1", "U1", "Z9"}
+    assert {c["reference"] for c in res["data"]["components"]} == {"Mload", "Q1", "U1", "Z9", "U2"}
     assert "letter_unknown" not in res["data"]

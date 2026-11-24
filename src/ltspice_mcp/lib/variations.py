@@ -292,7 +292,7 @@ class MismatchRule(VariationModel):
     prefix: str = Field(
         default="M",
         description=(
-            "Device prefix, case-insensitive, matched on leading characters — "
+            "Name prefix, case-insensitive, matched on leading characters — "
             "'M1' also claims M10, 'X' reaches subckt-wrapped FETs, and bare "
             "'M' perturbs every MOSFET."
         ),

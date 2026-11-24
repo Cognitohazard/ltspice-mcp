@@ -279,11 +279,13 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
                 "before": {
                     "type": "array",
                     "items": {"type": "string"},
+                    CUT: NEVER,
                     "description": "The parts in the baseline, as written.",
                 },
                 "after": {
                     "type": "array",
                     "items": {"type": "string"},
+                    CUT: NEVER,
                     "description": "The parts in the compared deck, as written.",
                 },
                 "subckt": _SCOPE_FIELD,
@@ -882,11 +884,13 @@ COMPARISON_SCHEMA: dict[str, Any] = {
                     "reference_refs": {
                         "type": "array",
                         "items": {"type": "string"},
+                        CUT: NEVER,
                         "description": "The parts in the reference, as written.",
                     },
                     "candidate_refs": {
                         "type": "array",
                         "items": {"type": "string"},
+                        CUT: NEVER,
                         "description": "The parts in this circuit, as written.",
                     },
                 },
