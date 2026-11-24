@@ -63,8 +63,8 @@ def require_containment_platform() -> None:
         # containment rests on.
         if os.getuid() == 0 or os.geteuid() == 0:
             raise RuntimeError(
-                "parser containment on macOS needs a non-root user: "
-                "root ignores the process limit"
+                "parser containment on macOS needs a non-root user, because "
+                "root ignores the process limit: run the server as a normal user"
             )
         return
     if sys.platform not in {"linux", "win32"}:
@@ -195,7 +195,9 @@ def _set_limit(name: str, which: int, value: int, base: int) -> None:
         hard = resource.getrlimit(which)[1]
         raise ContainmentFailed(
             f"limits: setting {name} to {value} failed (measured base {base}, "
-            f"hard limit {hard}): {error}"
+            f"hard limit {hard}): {error}; start the server where the hard "
+            f"{name} limit is at least {value}, for example from a shell "
+            f"without a lower `ulimit`"
         ) from error
 
 

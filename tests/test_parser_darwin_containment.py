@@ -332,7 +332,7 @@ def test_macos_refuses_root(monkeypatch):
     for name in ("getuid", "geteuid"):
         with monkeypatch.context() as root:
             root.setattr(os, name, lambda: 0, raising=False)
-            with pytest.raises(RuntimeError, match="non-root"):
+            with pytest.raises(RuntimeError, match=r"non-root.*run the server as a normal user"):
                 parser_bootstrap.require_containment_platform()
 
 
@@ -466,6 +466,8 @@ def test_an_inherited_lower_address_space_limit_fails_naming_it(call_dir):
     assert code == 0, err
     failure = json.loads(out)
     assert failure["code"] == "ownership_failed" and "RLIMIT_AS" in failure["message"]
+    # The refusal names the fix: a hard limit at least the requested one.
+    assert "start the server where the hard RLIMIT_AS limit is at least" in failure["message"]
     assert not parser_file_in(directory, "imported.txt").exists()
 
 

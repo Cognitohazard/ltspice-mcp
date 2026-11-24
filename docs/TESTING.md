@@ -125,8 +125,8 @@ cannot.
 
 The release gate in `publish.yml`, and a pull request that changes the
 parser's containment (*CI tiers* below), also run the suite on native macOS
-runners, on Apple silicon and on Intel (`check-macos (macos-26)` and
-`check-macos (macos-26-intel)`, in `.github/workflows/checks.yml`): Python 3.12, ngspice
+runners, on Apple silicon and on Intel (`check-macos (arm64)` and
+`check-macos (intel)`, in `.github/workflows/checks.yml`): Python 3.12, ngspice
 and Cairo from Homebrew, one xdist worker per core, and no coverage gate. On a
 host whose parser refuses (another platform, or macOS as root),
 `tests/parser_refusal.py` reports a test that fails because of that refusal as
@@ -194,7 +194,7 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos (macos-26)`, `check-macos (macos-26-intel)` |
+| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos (arm64)`, `check-macos (intel)` |
 | push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
@@ -223,7 +223,8 @@ A job a tier leaves out is skipped by its own condition, so it reports as
 skipped under the same name it has in a release run, and a required check of
 that name still passes. That is why the Linux suite is three jobs with fixed
 names, `check (3.11)`, `check (3.12)` and `check (3.13)`, which share one list
-of steps, instead of a matrix: a matrix job skipped by its condition reports
+of steps, instead of a matrix, and macOS is two, `check-macos (arm64)` and
+`check-macos (intel)`: a matrix job skipped by its condition reports
 once, under a name that is not any leg's.
 
 A pull request therefore proves Windows and Linux on 3.12 only. A failure
