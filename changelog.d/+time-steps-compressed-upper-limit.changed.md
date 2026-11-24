@@ -1,0 +1,1 @@
+The `time_steps` note on a compressed LTspice XVII run now says what the recordings show: the smallest step between stored points is above the solver's smallest step and can be far above it, so read it as an upper limit.

@@ -409,9 +409,71 @@ async def test_a_compressed_xvii_run_carries_the_coverage_observation(
     (observation,) = _coverage(data)
     assert observation["kind"] == "coverage"
     assert observation["evidence"]["recipe"] == "ts"
-    assert "not established" in observation["detail"]
+    assert "upper limit" in observation["detail"]
+    assert "not established" not in observation["detail"]
     assert "plotwinsize=0" in observation["detail"]
     assert "rejected" not in observation["detail"]
+
+
+async def _smallest(read: Reader, state: SessionState, build: str, case: str, work_dir: Path):
+    data = await read(
+        state,
+        {
+            "sources": [_source(build, case, work_dir)],
+            "recipes": [{"key": "ts", "metric": "time_steps", "threshold_s": "1n"}],
+        },
+    )
+    (row,) = _rows(data, "ts")
+    return row["value"], _coverage(data)
+
+
+@ROUTES
+async def test_xvii_compression_leaves_the_smallest_step_far_above_the_solvers(
+    read: Reader, state_no_sim: SessionState, work_dir: Path
+):
+    """An RC charge with a corner at 2 ms, on XVII. With compression off the
+    file holds the 1062 points its log counts as accepted, and the solver's
+    smallest step is 48.8 ps from t = 0. Compressed, the file holds 12 points
+    and its smallest step is 1 ns at the corner: above the solver's smallest,
+    by a factor of about twenty, with the 14 steps below 1 ns not stored."""
+    off, off_notes = await _smallest(
+        read, state_no_sim, "ltspice17", "raw/compress_small_step_off", work_dir
+    )
+    on, on_notes = await _smallest(
+        read, state_no_sim, "ltspice17", "raw/compress_small_step", work_dir
+    )
+    assert (off["points"], off["stored"], off_notes) == (1062, "accepted", [])
+    assert off["min_step"] == pytest.approx(4.8828125e-11, rel=1e-6)
+    assert off["steps_below"] == 14
+    assert (on["points"], on["stored"]) == (12, "reduced")
+    assert on["min_step"] == pytest.approx(1e-9, rel=1e-6)
+    assert on["min_step_at"] == pytest.approx(2e-3)
+    assert on["steps_below"] == 1
+    assert on["min_step"] >= off["min_step"]
+    assert on["min_step"] / off["min_step"] == pytest.approx(20.48, rel=1e-3)
+    (note,) = on_notes
+    assert "upper limit" in note["detail"]
+    assert "not established" not in note["detail"]
+
+
+@ROUTES
+async def test_ltspice_26_stores_the_same_points_with_compression_on_and_off(
+    read: Reader, state_no_sim: SessionState, work_dir: Path
+):
+    """The same two decks on LTspice 26: both files hold the same 1062 points,
+    so the smallest stored step is the same, 48.8 ps; its log prints no count
+    of accepted steps, so what the points are is not checked."""
+    on, on_notes = await _smallest(
+        read, state_no_sim, "ltspice26", "raw/compress_small_step", work_dir
+    )
+    off, off_notes = await _smallest(
+        read, state_no_sim, "ltspice26", "raw/compress_small_step_off", work_dir
+    )
+    assert on == off
+    assert on["points"] == 1062
+    assert on["min_step"] == pytest.approx(4.8828125e-11, rel=1e-6)
+    assert on["stored"] == "not_checked"
+    assert len(on_notes) == len(off_notes) == 1
 
 
 @ROUTES

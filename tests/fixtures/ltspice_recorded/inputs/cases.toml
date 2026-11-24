@@ -844,10 +844,9 @@ model = ["lib/raw_parser.py", "lib/result_observations.py", "lib/services.py", "
 inputs = ["raw/compress_1mv.cir", "raw/compress_1mv_off.cir", "raw/compress_1mv_maxstep.cir", "raw/compress_1mv_wide_maxstep.cir", "raw/compress_1v.cir"]
 
 [behaviour.raw-compression-small-step]
-summary = "What waveform compression keeps of a transient near its smallest step: an RC charge with a corner at 2 ms, compressed and with compression off, beside the count of accepted steps XVII's log prints. It settles whether the smallest step between stored points bounds the solver's smallest step from above, which the time_steps recipe reports as not established."
-model = ["lib/services.py", "lib/metrics.py"]
+summary = "What waveform compression keeps of a transient near its smallest step: an RC charge with a corner at 2 ms, compressed and with compression off, beside the count of accepted steps XVII's log prints. On XVII, compressed, the smallest step between stored points (1 ns, 12 points) lies above the solver's smallest step the uncompressed run stores (48.8 ps, 1062 points); on LTspice 26 both files hold the same 1062 points."
+model = ["lib/services.py", "lib/metrics.py", "lib/result_observations.py", "lib/services.py:stored_time_points", "lib/services.py:compression_drops_points", "lib/metrics.py:time_steps"]
 inputs = ["raw/compress_small_step.cir", "raw/compress_small_step_off.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.raw-window-offset]
 summary = "A transient saved from a later start time: the Offset field and the stored time axis."

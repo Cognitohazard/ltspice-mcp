@@ -407,9 +407,12 @@ _XVII_REDUCED = (
     "LTspice XVII saved this run with waveform compression on, which stores fewer "
     "points than its solver accepted (in the recorded raw/compress_1mv, 13 of the 1078 "
     "its log counts as accepted), so these steps are between stored points, not the "
-    "solver's own. Whether the smallest of them bounds the solver's smallest step from "
-    "above is not established: some stored times are not times the solver accepted in "
-    "the same run uncompressed. '.options plotwinsize=0' stores every accepted point."
+    "solver's own. In the recorded runs the smallest of them was never below the "
+    "solver's smallest step, which the same circuit run uncompressed shows, and was far "
+    "above it (raw/compress_small_step: 1 ns against 48.8 ps; raw/compress_1mv: 1.003 us "
+    "against 48.8 ps), so read it as an upper limit on the solver's smallest step, not "
+    "as an estimate of it: some stored times are not times the solver accepted in the "
+    "uncompressed run. '.options plotwinsize=0' stores every accepted point."
 )
 
 

@@ -163,8 +163,9 @@ never as a step of zero. The file holds the points the simulator stored, not
 every step its solver tried: ngspice stores no step it rejected. `stored` says
 which points those are: `accepted` (every accepted point: ngspice without
 `.options interp`, LTspice XVII with compression off), `reduced` (LTspice XVII
-compresses a transient by default and keeps fewer; `.options plotwinsize=0`
-turns that off), `print_step` (ngspice under `.options interp`) or
+compresses a transient by default and keeps fewer, so its `min_step` is an
+upper limit on the solver's smallest step and can lie far above it, as in the
+recorded runs; `.options plotwinsize=0` turns that off), `print_step` (ngspice under `.options interp`) or
 `not_checked` (LTspice 26, which logs no count of accepted steps, any other
 simulator, or a run saved from a `.tran` start time). Every answer but
 `accepted` comes with a `time_steps_coverage` observation saying what that
