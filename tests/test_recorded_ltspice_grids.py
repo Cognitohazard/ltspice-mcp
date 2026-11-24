@@ -63,12 +63,12 @@ GRIDS = grids()
 #: stepped each way, and a DC sweep of one point; dc, noise and tf under
 #: numdgt above 6; Fast Access of every analysis but the transient; and the
 #: .op.raw a transient stepped over the temperature, a source or a model
-#: parameter leaves. Their decks (behaviour results-layout-grid) wait for a
-#: recording run on Windows. XVII also lacks raw/fra_step and raw/fra_numdgt7,
-#: which no XVII run recorded.
+#: parameter leaves. Their decks (behaviour results-layout-grid) are recorded
+#: on both builds; only XVII, which refuses every .fra deck, leaves raw/fra_step
+#: and raw/fra_numdgt7 unrecorded.
 #:
-#: trace-name: the decks of behaviour trace-name-grid fill every coordinate
-#: no recording does: every kind of trace at each depth in an AC sweep and a
+#: trace-name: the decks of behaviour trace-name-grid, recorded on both
+#: builds, fill every coordinate no recording does: every kind of trace at each depth in an AC sweep and a
 #: DC sweep, a node voltage in a block and a terminal current at the top in
 #: a transient and an operating point, a noise contribution inside a block,
 #: and a section-sign part in an AC sweep, a DC sweep and a noise run.

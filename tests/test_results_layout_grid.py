@@ -35,6 +35,7 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.errors import LTSpiceMCPError
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import read_partial_raw_progress
 from ltspice_mcp.lib.result_kinds import STEPPED_KINDS, plot_analysis, stepped_kind
@@ -52,16 +53,19 @@ GRID = grid("results-layout")
 #: its cell (``differs``, with the route and the reason). A count may only
 #: fall: a fix lowers it here in the same change.
 #:
-#: Most are one of four causes, each read on every route behind it: a plot
+#: Each is one of these causes, read on every route behind it: a plot
 #: led by the stepped source or model parameter, which
-#: ``raw_header.leading_parameters`` does not take, so it has no stepped kind
-#: (or, for XVII's one-point .op.raw, the wrong one); a model parameter's
+#: ``raw_header.leading_parameters`` does not take, so it has no stepped
+#: kind; a model parameter's
 #: step line (``.step dm(is)=...``), which ``log_parser.read_step_line`` does
 #: not read, so the decoder finds no steps; XVII's text noise plot, whose
 #: name holds a code page byte the header reader refuses; and XVII's binary
 #: noise plot of a stepped model at one frequency, which carries one record
-#: more than it declares. The last on each build is plot_waveform's on the
-#: AC deck.
+#: more than it declares (and which the run row, counting records, reads as
+#: three points). XVII's one-point .op.raw of a transient stepped over a
+#: source or a model is read as a stepped run's .op (``stepped_run_op``),
+#: which names no step. The last on each build is plot_waveform's on the AC
+#: deck.
 KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 109, "ltspice17": 205}
 
 #: What a route answers when the reader behind it refuses the file.
@@ -381,7 +385,7 @@ async def _every_route(
         routes["run row stepped"] = progress.stepped
     try:
         descriptor = rec.decode(build, stem, directory / "decoded").raw.descriptor
-    except Exception as exc:  # any refusal of the decoder is its answer
+    except (RawHeaderError, LTSpiceMCPError) as exc:  # the decoder's refusal is its answer
         not_run["decoded"] = f"refused: {exc}"
         descriptor = None
         for route in ("decoded analysis", "decoded stepped kind", "decoded axis", "decoded steps"):
@@ -398,12 +402,14 @@ async def _every_route(
         routes["inspect analysis"] = row["analysis"]
         routes["inspect stepped kind"] = row.get("stepped_kind")
     else:
+        # A refusal is an answer; a crash inside the tool is not.
+        assert listed["error"]["code"] != "internal_error", listed
         not_run["inspect"] = f"refused: {listed['error']['message']}"
         routes["inspect analysis"] = routes["inspect stepped kind"] = REFUSED
     api = SyncApi(state)
     try:
         loaded = await asyncio.to_thread(lambda: api.load_raw(staged))
-    except Exception as exc:  # any refusal of load_raw is its answer
+    except (RawHeaderError, LTSpiceMCPError) as exc:  # load_raw's refusal is its answer
         not_run["api"] = f"refused: {exc}"
         routes["api analysis"] = routes["api stepped kind"] = REFUSED
     else:
