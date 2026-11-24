@@ -37,9 +37,9 @@ In short, this project strives to direct the LLM's attention to issues before a 
 
 The server runs locally and speaks MCP on stdio. Each tool takes the path of a circuit file. The server is for an agent in Claude Code, for a person in a chat client such as Claude Desktop, and for scripts that import the Python API.
 
-LTspice comes first, and Windows is the primary platform. WSL2 and Wine also run LTspice. ngspice runs on Linux and Windows, and the lint and the ngspice section of the packaged guide list where it differs from LTspice. QSPICE and Xyce have the support that spicelib gives. Schematic editing is for LTspice schematics only, because it reads LTspice's symbol files.
+LTspice comes first, and Windows is the primary platform. WSL2 and Wine also run LTspice. ngspice has full support for simulation and analysis on Linux and Windows, and the lint and the ngspice section of the packaged guide list where its dialect differs from LTspice. QSPICE and Xyce have the support that spicelib gives. Schematic editing is for LTspice schematics only, because it reads LTspice's symbol files.
 
-Later, ngspice will get full support, and the server will work with xschem for IC design. No date is set.
+Later, the server will work with xschem for IC design. No date is set.
 
 ## The two surfaces
 
@@ -93,7 +93,7 @@ Each principle has a short explanation and one case. The first nine are the prin
 
 - **Every check reports what's not covered, so a partial check is not mistaken for a pass.** A check that did not run is reported as not run. A QSPICE run reports `measurements_coverage: simulator_unsupported`, because the server does not read QSPICE's measure output.
 - **Results are reported as facts without conclusions, leaving the engineering judgement to the AI and the human.** A severity appears only where the simulator wrote one. LTspice XVII calls an ignored model parameter an error on a run that finished, and the reply keeps that word as the simulator's own.
-- **The same question gets the same answer from each tool and from the Python API.** One function decides each question, and every reader asks that function. Every reader of a run's measurements gives the same reason when the log could not be read.
+- **The same question gets the same answer from each tool and from the Python API.** One function decides each question, and every tool and the Python API call that function. For example, every tool that reads a run's measurements gives the same reason when the log could not be read.
 
 ### Contents of a reply
 
@@ -101,8 +101,6 @@ Each principle has a short explanation and one case. The first nine are the prin
 - **Analyses return measured values with units, so the AI works from a number and does not spend context on raw waveform data.** Each value carries its unit in its name. The `edges` recipe returns the rise and fall times of a pulse in seconds.
 - **Refusals say how to fix the request, so mistakes usually cost no more than one turn.** A refusal names the field, the place and the way round. A misspelled argument is refused with the list of the fields that the tool accepts.
 - **A finding gives its place.** The place is the part, the net, the line or the coordinates. Text drawn across a wire is reported with the anchor of the text and the two ends of the wire.
-
-In agent development, checks of this kind are called feedback sensors. They report a fault to the agent in the reply to the call that caused it. Their effect is also called backpressure, because the agent corrects the fault before later work depends on it.
 
 ### Schematic edits
 
@@ -123,7 +121,7 @@ In agent development, checks of this kind are called feedback sensors. They repo
 
 - **A small set of composable tools keeps context use low, with the Python API for anything more complex.** Each tool definition stays in context for every turn. A sweep, a corner set and a Monte Carlo run are three kinds of variation in one tool.
 - **One call for one intent.** The server does the steps between the request and the answer, such as staging, locking, exporting and comparing. `jobs(action="place_beside_sheet")` puts the results of a run where LTspice opens them.
-- **A small run is fast enough to try.** An agent can then run an experiment in place of a long chain of reasoning. A maintainer weighs any work added to the run path against that cost. A script compares small runs with a local baseline.
+- **A small run is fast enough to try.** An agent can then run an experiment in place of a long chain of reasoning. Any work added to a simulation run is weighed against that cost. A script compares small runs with a local baseline.
 - **A function is a tool only when it needs the server's knowledge, stored state or a transaction. If not, it is Python.** A job that continues after the call needs the server, and so does a schematic edit. The mean of a trace is a line of numpy in `run_code`.
 
 ## Architecture
