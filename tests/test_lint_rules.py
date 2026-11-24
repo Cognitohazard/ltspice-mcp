@@ -339,6 +339,51 @@ def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
     assert "save-meas-coverage" not in _ids(deck, tmp_path)
 
 
+@pytest.mark.parametrize("nested", [False, True], ids=["in_deck", "in_staged_include"])
+def test_save_of_a_node_in_a_live_include_is_not_read_as_absent(tmp_path: Path, nested: bool):
+    """A live include is never a staged snapshot, so the nodes it connects
+    are not among the staged cards; a deck that also stages an include must
+    not have a node of the live file read as one the circuit lacks, which
+    would refuse a valid deck."""
+    live = tmp_path / "stage.inc"
+    live.write_text("R1 in out 1k\n")
+    staged = tmp_path / "staged" / "models.inc"
+    staged_text = f'.include "{live}"\n' if nested else "* models\n"
+    deck = (
+        f'.include "{staged}"\n'
+        + ("" if nested else f'.include "{live}"\n')
+        + "V1 in 0 1\n.save V(out)\n.meas op x find V(out)\n.op\n.end\n"
+    )
+
+    found = lint_deck(
+        deck,
+        tmp_path / "staged" / "deck.cir",
+        "ltspice",
+        "LTspice",
+        includes=[(staged, staged_text, "utf-8")],
+    )
+
+    ids = {finding["rule_id"] for finding in found}
+    assert not ids & {"save-meas-coverage", "save-name-not-stored"}
+
+
+def test_save_of_a_node_no_staged_file_connects_is_read_as_absent(tmp_path: Path):
+    """When every file the deck reaches is staged, a node none of them
+    connects is one the circuit lacks, and LTspice stores nothing for it."""
+    staged = tmp_path / "staged" / "stage.inc"
+    deck = f'.include "{staged}"\nV1 in 0 1\n.save V(gone)\n.meas op x find V(gone)\n.op\n.end\n'
+
+    found = lint_deck(
+        deck,
+        tmp_path / "staged" / "deck.cir",
+        "ltspice",
+        "LTspice",
+        includes=[(staged, "R1 in out 1k\n", "utf-8")],
+    )
+
+    assert "save-meas-coverage" in {finding["rule_id"] for finding in found}
+
+
 #: Two measured nodes, out and vr, and a current, for the .save under test.
 _PATTERN_DECK = (
     "* t\nV1 in 0 1\nR1 in out 1k\nR2 out vr 1k\nR3 vr 0 1k\n{save}\n"

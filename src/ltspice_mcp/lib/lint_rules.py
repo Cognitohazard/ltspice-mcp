@@ -302,12 +302,14 @@ def _top_level_words(context: _LintContext) -> frozenset[str] | None:
     """Every folded word a top-level card of the deck or its staged includes
     may connect or define as a node (``spice_lex_views.unread_node_names``),
     a superset of the circuit's top-level nodes; None when the deck reaches
-    an include this reading was not given, whose nodes are not known."""
+    a file that is not a staged snapshot (a live include, one that is
+    missing, or one whose reference cannot be read), whose nodes are not
+    known."""
+    if not context.reached_models.staged_only:
+        return None
     words: set[str] = set()
     for file in context.files:
         for card in file.cards:
-            if directive_head(card) in INCLUDE_HEADS and not context.includes:
-                return None
             if card.scope == () and may_connect_nodes(card):
                 words |= unread_node_names(card)
     return frozenset(words)
@@ -1012,10 +1014,13 @@ class _ReachedModels(NamedTuple):
     """The models a deck reaches through its include references; whether
     every include card on the way could be read, so that they are all of
     them; those in a live file that could not; and each card from which the
-    reader reads nothing, with why."""
+    reader reads nothing, with why. ``staged_only`` says every file the deck
+    reaches is the deck or a staged snapshot, read in full, so the cards of
+    ``_LintContext.files`` are all the cards of the circuit."""
 
     declared: set[tuple[str, str]]
     complete: bool
+    staged_only: bool
     unread: list[tuple[Path, SpiceCard, SpiceLexError]]
     unread_libraries: list[_UnreadLibrary]
 
@@ -1042,6 +1047,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     """
     declared: set[tuple[str, str]] = set()
     complete = True
+    staged_only = True
     unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
     unread_libraries: list[_UnreadLibrary] = []
     reader = context.library_reader
@@ -1059,7 +1065,9 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
         *,
         live: bool,
     ) -> None:
-        nonlocal complete
+        nonlocal complete, staged_only
+        if live:
+            staged_only = False
         if blocked := unreadable_references(cards):
             # Which sections it opens is not known, so the file's models are
             # all counted, as before; what it pulls in is not.
@@ -1105,6 +1113,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
                 walk(snapshot[resolved], resolved, depth + 1, (source, reference), live=False)
                 continue
             if not resolved.is_file():
+                staged_only = False
                 missing = library_read(reference, None, reader)
                 unread_libraries.append(
                     _UnreadLibrary(
@@ -1115,6 +1124,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
             try:
                 nested = lex(read_spice_text(resolved)).cards
             except (OSError, UnicodeError, ValueError):
+                staged_only = False
                 continue
             walk(nested, resolved, depth + 1, (source, reference), live=True)
 
@@ -1127,7 +1137,9 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
         # reference nested inside it.
         visited.add((staged_path, None))
         walk(cards, staged_path, 1, None, live=False)
-    return _ReachedModels(declared, complete, unread, unread_libraries)
+    return _ReachedModels(
+        declared, complete, complete and staged_only, unread, unread_libraries
+    )
 
 
 def _arity_check(
