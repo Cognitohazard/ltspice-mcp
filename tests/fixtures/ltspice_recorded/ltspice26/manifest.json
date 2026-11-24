@@ -853,6 +853,38 @@
         ".net"
       ]
     },
+    "beside/two.dots": {
+      "behaviour": "results-beside-a-netlist-two-dots",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/two.dots.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "beside/two.dots.cir": "31520da8453471da2bc1c034f995f890e4e650d193ce8493d7b8cadbb1b62845"
+      },
+      "kind": "run",
+      "outputs": {
+        "beside/two.dots.log": {
+          "bytes": 332,
+          "sha256": "63a728d9a25a46f6a425573788aef2509fb36b34d6d94712ef3d62930ba2fc02"
+        },
+        "beside/two.dots.raw": {
+          "bytes": 726,
+          "sha256": "6bbce8be4925f072ea3c215ad37be8212dc0f70b45c0a223234e116560f565ee"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "blocks/nested_sheet_beside_both": {
       "behaviour": "block-sheet-search",
       "command": [
@@ -2449,6 +2481,154 @@
       "stopped": false,
       "written": [
         ".net"
+      ]
+    },
+    "deck/absolute_pwl_file": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_pwl_file.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_pwl_file.cir": "64f911d316014d53e6c30758b029498232313331a6fc3dac577726b2b0443181",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_pwl_file.log": {
+          "bytes": 353,
+          "sha256": "1bb81b3a58912b4ff925456c135d488384a5e11ff0d03b32307e96b0a6fce3b7"
+        },
+        "deck/absolute_pwl_file.raw": {
+          "bytes": 21522,
+          "sha256": "d9b798e19638c75535474925890258496ce98b3a4a95a9d66dfd32fe5096c810"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/absolute_quoted_pwl_file": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_quoted_pwl_file.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_quoted_pwl_file.cir": "0d43d8f25c5602692288012ccc5fc3198b51fb735e84ad74e41c570a9e51f329",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_quoted_pwl_file.log": {
+          "bytes": 367,
+          "sha256": "5203bb8cfaaadff72eed72cb1f417d7653b7f92291f894eed20585d7b5d8e317"
+        },
+        "deck/absolute_quoted_pwl_file.raw": {
+          "bytes": 21536,
+          "sha256": "873eed4fefc6dc42e2a0bc20d086eef7b6181b2d710da4b8b3a4a87caed503aa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/absolute_quoted_wavefile": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_quoted_wavefile.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_quoted_wavefile.cir": "f83fb690617475cabdace5289060224cd418be4b9c6214b06aeefe2936b97322",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_quoted_wavefile.log": {
+          "bytes": 367,
+          "sha256": "cce10a77aca14b4ca7f992f0ffc01ee8181c6203add49f79279d6aecd06727ff"
+        },
+        "deck/absolute_quoted_wavefile.raw": {
+          "bytes": 22016,
+          "sha256": "fa6d24b4a333f0a83d77623116f37a57c402be9e7344ed5e6cd0fd858293b4ca"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/absolute_wavefile": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_wavefile.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_wavefile.cir": "bf00e2e204918b5c977d4d64713ba27b6508fb87a4e88d51af7c595d58de2852",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_wavefile.log": {
+          "bytes": 353,
+          "sha256": "f271916d94046849f125fc89f7343c614804ea75d9a0ca7525c1b3cb36bbb49f"
+        },
+        "deck/absolute_wavefile.raw": {
+          "bytes": 22002,
+          "sha256": "3f838fa93270457193911a8b6204a9c14a379b333ad5f4fecf93e5d6279baa0b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
       ]
     },
     "deck/ac_and_tran": {
@@ -5535,6 +5715,42 @@
         ".raw"
       ]
     },
+    "deck/included_relative_pwl_file": {
+      "behaviour": "data-file-relative-path-in-include",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/included_relative_pwl_file.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/included_relative_pwl_file.cir": "46a8362f2ecaed09ca0115f0e59ad3e532e68ebd3d4f66bedc5b18c2973a78bb",
+        "deck/run/data/level.txt": "83b0913a0304be6d22d32a9f2addc83b8348e0f519705bc2afffd661ff9add3e",
+        "deck/run/pwl_source.inc": "1d74ea50d79b96585893c5129582514ee133bf23baa6b8b4c4a628d8ea5ef690"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/included_relative_pwl_file.log": {
+          "bytes": 403,
+          "sha256": "d18bcb86d53ee4206a27b8fa95340515341f15af8db0c335bbace4bd068702ce"
+        },
+        "deck/included_relative_pwl_file.raw": {
+          "bytes": 21540,
+          "sha256": "c9b6770bfcd10c023417ad9c089ae6d7b271c59a82f4a5d8a8f3c05a4554a592"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/keyed_c": {
       "behaviour": "deck-forms",
       "command": [
@@ -6245,6 +6461,38 @@
         "deck/micro_utf8_bom.raw": {
           "bytes": 644,
           "sha256": "41510d2f993ef5153a472d1cf8473d917e6c714c7af11348c19e8855c763659e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/model_name_leading_digit": {
+      "behaviour": "model-name-leading-digit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/model_name_leading_digit.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/model_name_leading_digit.cir": "f026641b8b9902a60ca5f484c316ac544a60db5ae85b9f39ccc2ad812949701d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/model_name_leading_digit.log": {
+          "bytes": 364,
+          "sha256": "7fa2d23b23d3794491e5ec653f3c482d505e31891444741bc085194ccdfd6791"
+        },
+        "deck/model_name_leading_digit.raw": {
+          "bytes": 960,
+          "sha256": "5d5b60c842eaf55b5a6c60f004eb12e6a891b550c056804334bc56f5675ab7e6"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

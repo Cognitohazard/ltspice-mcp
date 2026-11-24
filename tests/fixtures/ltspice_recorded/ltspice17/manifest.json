@@ -853,6 +853,38 @@
         ".net"
       ]
     },
+    "beside/two.dots": {
+      "behaviour": "results-beside-a-netlist-two-dots",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/two.dots.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "beside/two.dots.cir": "31520da8453471da2bc1c034f995f890e4e650d193ce8493d7b8cadbb1b62845"
+      },
+      "kind": "run",
+      "outputs": {
+        "beside/two.dots.log": {
+          "bytes": 412,
+          "sha256": "6f677a8468ed2d6bde1f4834fb4d57640b2c3c2607e550dec65eda5bcf8e954f"
+        },
+        "beside/two.dots.raw": {
+          "bytes": 822,
+          "sha256": "f5069a9388fb448a95d61b0f3cabb1136eec71245a13e8f09c8e9653fcab5297"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "blocks/nested_sheet_beside_both": {
       "behaviour": "block-sheet-search",
       "command": [
@@ -2494,6 +2526,154 @@
       "stopped": false,
       "written": [
         ".net"
+      ]
+    },
+    "deck/absolute_pwl_file": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_pwl_file.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_pwl_file.cir": "64f911d316014d53e6c30758b029498232313331a6fc3dac577726b2b0443181",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_pwl_file.log": {
+          "bytes": 421,
+          "sha256": "6554e079a3fdd32fe5d3a0ca8811e9c25ff0efb6b0ed9ca2e22b75dbcb1e36e3"
+        },
+        "deck/absolute_pwl_file.raw": {
+          "bytes": 814,
+          "sha256": "3a8ac9473aedc56974323a53b9a1608f38a39041beb267969311b3fbd10bdc47"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/absolute_quoted_pwl_file": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_quoted_pwl_file.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_quoted_pwl_file.cir": "0d43d8f25c5602692288012ccc5fc3198b51fb735e84ad74e41c570a9e51f329",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_quoted_pwl_file.log": {
+          "bytes": 440,
+          "sha256": "0e9f588982bdd0f15cc52ad635bb257f94f20fcf6722a4db99a0391fee9d0f81"
+        },
+        "deck/absolute_quoted_pwl_file.raw": {
+          "bytes": 852,
+          "sha256": "7eba6b7b4ca5146370dedf358b7ff5bf2d53c317e3a8c0f4314b59ffbf6a871b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/absolute_quoted_wavefile": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_quoted_wavefile.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_quoted_wavefile.cir": "f83fb690617475cabdace5289060224cd418be4b9c6214b06aeefe2936b97322",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_quoted_wavefile.log": {
+          "bytes": 441,
+          "sha256": "2965bb29fff2ba3389c3740beb82bece56fa67b0c57896c02edf843662052b0e"
+        },
+        "deck/absolute_quoted_wavefile.raw": {
+          "bytes": 854,
+          "sha256": "589d2e5ae974e28f4927ce6397fc99ffd6215b53d854b5b9fd1fc06049b8fd60"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/absolute_wavefile": {
+      "behaviour": "data-file-absolute-path",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/absolute_wavefile.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/absolute_wavefile.cir": "bf00e2e204918b5c977d4d64713ba27b6508fb87a4e88d51af7c595d58de2852",
+        "deck/data with space/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data with space/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864",
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/data/level.wav": "92a408b46ab35535efa33fccd2cf978623773aca9d38291ddd33d0797864b864"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/absolute_wavefile.log": {
+          "bytes": 422,
+          "sha256": "1242027872e56c07568369a01efbecce54e47b324d6d9a356b51aeed6439b733"
+        },
+        "deck/absolute_wavefile.raw": {
+          "bytes": 816,
+          "sha256": "868a307ce5da2556c600193f4def1aacddca03747f537025db7abd18d2ddd9c6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
       ]
     },
     "deck/ac_and_tran": {
@@ -5625,6 +5805,42 @@
         ".raw"
       ]
     },
+    "deck/included_relative_pwl_file": {
+      "behaviour": "data-file-relative-path-in-include",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/included_relative_pwl_file.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/data/level.txt": "a193c3b0af4796a8daa74177c787de687b84bdad811ed8e332dd40ebb6517a9d",
+        "deck/included_relative_pwl_file.cir": "46a8362f2ecaed09ca0115f0e59ad3e532e68ebd3d4f66bedc5b18c2973a78bb",
+        "deck/run/data/level.txt": "83b0913a0304be6d22d32a9f2addc83b8348e0f519705bc2afffd661ff9add3e",
+        "deck/run/pwl_source.inc": "1d74ea50d79b96585893c5129582514ee133bf23baa6b8b4c4a628d8ea5ef690"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/included_relative_pwl_file.log": {
+          "bytes": 440,
+          "sha256": "ae08006e45667085ae1570bb1a9c801d2d9433aae619f10561d2664b563bc2b0"
+        },
+        "deck/included_relative_pwl_file.raw": {
+          "bytes": 852,
+          "sha256": "3893e2e166100464d8f7a230a97b390262bf548b8ffa95104be083708a1e8cdd"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/keyed_c": {
       "behaviour": "deck-forms",
       "command": [
@@ -6322,6 +6538,38 @@
         "deck/micro_utf8_bom.raw": {
           "bytes": 658,
           "sha256": "1a13ab396ab6f76eca2ce12180275a0ded4c20674e730d84590f939e4db5f3e5"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/model_name_leading_digit": {
+      "behaviour": "model-name-leading-digit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/model_name_leading_digit.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/model_name_leading_digit.cir": "f026641b8b9902a60ca5f484c316ac544a60db5ae85b9f39ccc2ad812949701d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/model_name_leading_digit.log": {
+          "bytes": 654,
+          "sha256": "3581b0b607dbb4005f8309d3649e051e150aa94e060d4fd2c9da5a6d702955bc"
+        },
+        "deck/model_name_leading_digit.raw": {
+          "bytes": 1016,
+          "sha256": "bd91cfe8001bd5209d43356520f368ce1f28c5be7be8617069f8707377175bdc"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",
