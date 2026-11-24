@@ -1,9 +1,9 @@
 """The plugin that reports a test failing on the host's parser refusal as skipped.
 
 Each case runs a small suite in its own interpreter. Its tests make the real
-check refuse by setting ``sys.platform`` to ``darwin``, as
+check refuse by setting ``sys.platform`` to ``freebsd14``, as
 ``test_parser_process`` does, and the plugin is loaded either as a host that
-refuses would load it (``sys.platform`` is ``darwin`` while it decides) or as
+refuses would load it (``sys.platform`` is ``freebsd14`` while it decides) or as
 one that parses.
 """
 
@@ -40,7 +40,7 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 def _refusing(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "platform", "freebsd14")
 """
 
 _TESTS = """
@@ -97,10 +97,10 @@ def test_fails_without_the_refusal():
 """
 
 
-def _macos_reason(monkeypatch: pytest.MonkeyPatch) -> str:
-    """The skip reason a test refused as on macOS gives: the refusal's own text."""
-    with monkeypatch.context() as macos:
-        macos.setattr(sys, "platform", "darwin")
+def _refusal_reason(monkeypatch: pytest.MonkeyPatch) -> str:
+    """The skip reason a test refused as on a host that refuses gives: the refusal's own text."""
+    with monkeypatch.context() as refusing:
+        refusing.setattr(sys, "platform", "freebsd14")
         with pytest.raises(RuntimeError) as refused:
             parser_bootstrap.require_containment_platform()
     return f"result parsing is refused on this host: {refused.value}"
@@ -117,8 +117,8 @@ def _run(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, plugin_plat
 
 
 def test_a_failure_on_the_refusal_is_skipped_where_the_host_refuses(pytester, monkeypatch):
-    reason = _macos_reason(monkeypatch)
-    result = _run(pytester, monkeypatch, "darwin")
+    reason = _refusal_reason(monkeypatch)
+    result = _run(pytester, monkeypatch, "freebsd14")
     result.assert_outcomes(passed=1, failed=1, skipped=3)
     skipped = [line for line in result.stdout.lines if line.startswith("SKIPPED")]
     assert len(skipped) == 3, result.stdout.str()

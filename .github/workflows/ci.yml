@@ -1,8 +1,11 @@
 name: CI
 
 # Runs the reusable checks (checks.yml) at the tier the trigger calls for.
-# No tier a landing gets runs the macOS job: a landing is held to Linux and
-# Windows, and macOS is checked at release (publish.yml, tier `release`).
+# A landing is held to Linux and Windows, and macOS is checked at release
+# (publish.yml, tier `release`). A pull request that changes the result
+# parser's process containment (lib/parser_bootstrap.py, parser_process.py,
+# parser_worker.py, parser_service.py) or lib/proc_kill.py also runs the macOS
+# jobs, whatever its tier, because that code differs most on macOS.
 #
 #   release  a run started by hand (workflow_dispatch) on any branch: the
 #            release gate's jobs, macOS included, without tagging a release.
@@ -44,6 +47,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       tier: ${{ steps.pick.outputs.tier }}
+      macos: ${{ steps.macos.outputs.macos }}
     steps:
       # The pull request's merge commit and its first parent, the base it
       # merges into, so the diff between them is exactly what it changes.
@@ -92,8 +96,24 @@ jobs:
           pick
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
 
+      - name: Pick whether macOS runs
+        id: macos
+        if: github.event_name == 'pull_request'
+        run: |
+          macos=false
+          while IFS= read -r f; do
+            case "$f" in
+              src/ltspice_mcp/lib/parser_bootstrap.py|src/ltspice_mcp/lib/parser_process.py|\
+              src/ltspice_mcp/lib/parser_worker.py|src/ltspice_mcp/lib/parser_service.py|\
+              src/ltspice_mcp/lib/proc_kill.py)
+                echo "macos: $f is parser containment"; macos=true ;;
+            esac
+          done <<< "$(git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD)"
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+
   checks:
     needs: tier
     uses: ./.github/workflows/checks.yml
     with:
       tier: ${{ needs.tier.outputs.tier }}
+      macos: ${{ needs.tier.outputs.macos == 'true' }}

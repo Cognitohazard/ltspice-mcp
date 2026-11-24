@@ -42,6 +42,7 @@ from tests._source_scan import PACKAGE, modules, scopes
 from tests.conftest import (
     SyncApi,
     capabilities_report,
+    needs_controlled_startup,
     patch_stub_bootstrap,
     terminal_experiment,
 )
@@ -436,6 +437,7 @@ def _drop_key(value: Any, key: str) -> int:
     return 0
 
 
+@needs_controlled_startup
 def test_a_recovery_journal_written_before_the_selector_still_loads(state_no_sim: SessionState):
     """A journal's prepared candidate must re-serialize to exactly its own
     keys. One written before the selector was recorded has no such key, and

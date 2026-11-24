@@ -41,11 +41,18 @@ detects WSL.
 |QSPICE|Windows native only (runs are refused under WSL or Wine)|
 |Xyce|Linux and Windows native|
 
-macOS is not supported yet. The server reads every `.raw` and `.log` file in
-a parser process with a hard memory limit and cleans up that process and any
-it started (`lib/parser_process.py`). Neither has been validated on macOS, so
-the server refuses every result read there with `unsupported_platform`.
-[docs/TESTING.md](TESTING.md) lists the tests that supporting it needs.
+macOS support is experimental. The server reads every `.raw` and `.log` file
+in a parser process with a hard memory limit and cleans up that process and
+any it started (`lib/parser_process.py`). On macOS the parser applies and
+proves its own limits before it reads a request, and refuses to run as root
+(`lib/parser_bootstrap.py`); [docs/TESTING.md](TESTING.md) says what is tested.
+The macOS parser starts with `MallocMediumZone=0`
+(`parser_bootstrap.DARWIN_ALLOCATOR`), and nothing else does. On Apple silicon
+the allocator's medium pool reserves 128 MiB of address space at its first
+allocation, which a small memory limit cannot absorb. The parser refuses to
+start when the setting is missing from its environment. If the system ignores
+it, a parse can only fail with a memory error well inside its limit, never use
+more.
 
 A schematic (`.asc`) runs through the netlist LTspice exports from it, which
 is in LTspice's own dialect. The server prepares that netlist for ngspice

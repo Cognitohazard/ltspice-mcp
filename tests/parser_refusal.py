@@ -1,8 +1,9 @@
 """Report a test that fails because this host refuses to parse results as skipped.
 
 The server parses result files only where it can contain the parser process,
-and on macOS it refuses (``parser_bootstrap.require_containment_platform``;
-docs/TESTING.md, "Platforms and the release gate"). A test that reads a result
+and elsewhere it refuses (``parser_bootstrap.require_containment_platform``:
+macOS as root, and platforms other than Linux, Windows and macOS; docs/TESTING.md,
+"Platforms and the release gate"). A test that reads a result
 cannot pass there. No marker or fixture names those tests, because a result is
 read through a handler, a fixture, a job or the Python API alike, so this
 plugin watches the refusal itself.

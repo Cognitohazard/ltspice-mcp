@@ -595,6 +595,7 @@ FROZEN_ERROR_CODES = (
     "overlapping_assignment",
     "overlapping_mismatch_rules",
     "owner_liveness_unknown",
+    "ownership_failed",
     "parse_error",
     "parser_cleanup_failed",
     "partial_progress",

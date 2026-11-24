@@ -217,6 +217,10 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.symbol_library.symbol_files".msg = "List the names a sheet's lookups find with SymbolResolver.listing, which searches each folder once, as its lookups do."
 "ltspice_mcp.lib.montecarlo.extract_mosfet_instances".msg = "Read a flat deck's devices for a mismatch rule with variations._flat_devices and _rule_devices, which refuse a rule that reaches a device it cannot size."
 "ltspice_mcp.lib.variations.extract_mosfet_instances".msg = "Read a flat deck's devices for a mismatch rule with variations._flat_devices and _rule_devices, which refuse a rule that reaches a device it cannot size."
+"os.fork".msg = "Start a process with subprocess, which closes the descriptors it does not pass; a forked child keeps every one, the macOS parser's owner pipe included."
+"os.forkpty".msg = "Start a process with subprocess, which closes the descriptors it does not pass; a forked child keeps every one, the macOS parser's owner pipe included."
+"os.posix_spawn".msg = "Start a process with subprocess, which closes the descriptors it does not pass; a forked child keeps every one, the macOS parser's owner pipe included."
+"os.posix_spawnp".msg = "Start a process with subprocess, which closes the descriptors it does not pass; a forked child keeps every one, the macOS parser's owner pipe included."
 
 [tool.ruff.lint.per-file-ignores]
 # Tests exercise a banned name directly.

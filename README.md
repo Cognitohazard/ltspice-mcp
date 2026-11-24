@@ -82,9 +82,8 @@ Editing `.asc` schematics needs LTspice, because the server uses LTspice's
 symbol libraries. Reading and checking netlists works without a simulator.
 The plugin and the extension need [`uv`](https://docs.astral.sh/uv/).
 
-**macOS is not supported yet: the server cannot read simulation results
-there.** It reads each `.raw` and `.log` file in a separate process with a
-memory limit, which has not been validated on macOS.
+**macOS support is experimental.** Run the server as an ordinary user, not
+as root.
 
 **Make sure the assistant uses the server.** Some assistants run the
 simulator from the shell instead. Name the server `spice`, as the plugin
