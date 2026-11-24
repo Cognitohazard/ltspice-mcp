@@ -557,6 +557,13 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         },
                         "required": ["op", "x", "y", "text"],
                     },
+                    "undo_refused": {
+                        "type": "string",
+                        "description": (
+                            "After a find edit whose old words a write would refuse: "
+                            "why no undo is given. The old words are in the text's was."
+                        ),
+                    },
                     "changed": {
                         "type": "object",
                         "additionalProperties": {

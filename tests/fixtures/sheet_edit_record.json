@@ -732,6 +732,15 @@
    "tests/test_edit_schematic.py::test_missing_expected_sha_refusal_hands_back_the_current_digest"
   ]
  },
+ "242f89bdc3c7add8": {
+  "answer": {
+   "reply": "d8f7b195711a4516",
+   "sheet": "def91da6b4946f43"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[old-text-ends-in-a-break]"
+  ]
+ },
  "25300c274ae95854": {
   "answer": {
    "reply": "a486c0a0a8f9f4e3",
@@ -3391,6 +3400,15 @@
    "tests/test_remove_component_cleanup.py::TestRemovalsInOneBatch::test_cleanup_on_the_second_part_alone_walks_through_the_first_ones_pin"
   ]
  },
+ "b6b374c0e2139874": {
+  "answer": {
+   "reply": "fe262d0f135c4f3c",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_old_words_a_write_would_refuse_get_no_undo_but_the_reason"
+  ]
+ },
  "b7d3281bdd711d97": {
   "answer": {
    "reply": "fc7522849f3813f6",
@@ -3544,6 +3562,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_post_commit_reference_error_returns_committed_envelope"
+  ]
+ },
+ "c12db5ca6c9f4659": {
+  "answer": {
+   "reply": "43cb2ab898689c84",
+   "sheet": "d534426f36f7c976"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_old_words_a_write_would_refuse_get_no_undo_but_the_reason"
   ]
  },
  "c16810207025819d": {
@@ -3921,6 +3948,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_value]"
+  ]
+ },
+ "d88266ae47dcc236": {
+  "answer": {
+   "reply": "5048c189e2c1b0bc",
+   "sheet": "9206da277cf7f99b"
+  },
+  "tests": [
+   "tests/test_replace_directive_find.py::TestWhatTheBatchWrites::test_where_find_cannot_undo_the_reply_gives_the_whole_text_form[old-text-ends-in-a-break]"
   ]
  },
  "daf6cfa941c166e1": {

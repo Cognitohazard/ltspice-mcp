@@ -200,21 +200,44 @@ class TestWhatTheBatchWrites:
         assert undone["commit_state"] == "committed", undone
         assert sheet.read_bytes() == before
 
+    async def test_old_words_a_write_would_refuse_get_no_undo_but_the_reason(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The check before a write wins over the reverse call: the edit makes
+        # an unrunnable .step runnable, and the server does not offer to write
+        # the unrunnable one back. The old words stay in was.
+        sheet = _write(work_dir / "no_undo.asc", "TEXT 16 16 Left 2 !.step param R")
+        done = await _edit(asc_state, "no_undo.asc", [_find("R", "R 1 10 1")])
+        assert done["commit_state"] == "committed", done
+        (result,) = done["results"]
+        assert "undo" not in result
+        assert result["text"]["was"] == ".step param R"
+        assert result["undo_refused"].startswith("Refusing directive '.step param R'")
+        # The reason is the one a write of the old words gets.
+        after = sheet.read_bytes()
+        back = await _edit(asc_state, "no_undo.asc", [_find("R 1 10 1", "R")])
+        assert back["commit_state"] != "committed", back
+        assert result["undo_refused"] in str(back)
+        assert sheet.read_bytes() == after
+
     @pytest.mark.parametrize(
-        ("record", "find", "text", "instruction"),
+        ("record", "find", "text", "instruction", "whole"),
         [
             # The edit leaves line 2 empty: now is "", which find cannot take.
-            ("!.param a=1\\n.param b=2", ".param b=2", "", ".param a=1\n"),
+            ("!.param a=1\\n.param b=2", ".param b=2", "", ".param a=1\n", None),
             # now, ".param a=2", is on both lines of the new text.
-            ("!.param a=1\\n.param a=2", "a=1", "a=2", ".param a=2\n.param a=2"),
+            ("!.param a=1\\n.param a=2", "a=1", "a=2", ".param a=2\n.param a=2", None),
             # The new text begins with regex:, so a literal cannot name it.
-            (";regex:x\\nregex:y", "y", "x", "regex:^regex:x\\\\nregex:x\\Z"),
+            (";regex:x\\nregex:y", "y", "x", "regex:^regex:x\\\\nregex:x\\Z", None),
+            # The old text ends in a line break, which a whole-text edit strips
+            # from its text: the undo finds the whole new text instead.
+            (";q\\ny\\n", "y", "", "q\n\n", "q\n\n"),
         ],
-        ids=["line-left-empty", "now-twice", "text-begins-regex"],
+        ids=["line-left-empty", "now-twice", "text-begins-regex", "old-text-ends-in-a-break"],
     )
     async def test_where_find_cannot_undo_the_reply_gives_the_whole_text_form(
         self, asc_state: SessionState, work_dir: Path, record: str, find: str, text: str,
-        instruction: str,
+        instruction: str, whole: str | None,
     ):
         sheet = _write(work_dir / "whole_undo.asc", f"TEXT 16 16 Left 2 {record}")
         before = sheet.read_bytes()
@@ -226,6 +249,7 @@ class TestWhatTheBatchWrites:
             "x": 16,
             "y": 16,
             "instruction": instruction,
+            **({"find": whole} if whole is not None else {}),
             "text": record[1:].replace("\\n", "\n"),
         }
         undone = await _edit(asc_state, "whole_undo.asc", [undo])

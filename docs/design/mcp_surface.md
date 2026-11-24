@@ -2049,7 +2049,8 @@ entry names each text it removed, with its kind and place (`removed_texts`),
 and `replace_directive`'s gives the text it changed, with its kind and place
 and what it `was` and is `now`. After a `find` edit, `line` is the first line
 it touched (from 1), `was` and `now` hold only the touched lines, and `undo`
-is the op that puts the words back. A text is
+is the op that puts the words back, or `undo_refused` says why a write of the
+old words would be refused. A text is
 given as it reads, a line break as a line break.
 Everything else an op reports is in the views. `applied` counts the ops the
 batch applied, every op of a committed batch, so an op with nothing to report
@@ -3249,7 +3250,13 @@ text is checked as above; a comment is not. `instruction` is optional with
 and `was` as `text`, at the text's `x` and `y`, when `now` is not empty and is
 found once among the texts there; otherwise the whole new text as
 `instruction` (a pattern of its record when it begins with `regex:`) and the
-whole old text as `text`.
+whole old text as `text`. A whole-text edit strips its `text`, so when the old
+text begins or ends with a space or a line break, that op also gives the whole
+new text as `find`, and the old text comes back exactly. The check before a
+write wins over the reverse call: when the old text is one a write would
+refuse (an unrunnable directive the edit made runnable), the result gives no
+`undo` but `undo_refused`, the reason that check gives; the old words are
+still in `was`.
 
 A text is read as both LTspice builds read a TEXT record, which they draw and
 export alike (recorded as `text-backslash`): `\n` is a line break, even inside

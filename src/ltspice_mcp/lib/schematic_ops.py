@@ -1540,9 +1540,16 @@ def _named_text(editor: AscEditor, instruction: str, x: int | None, y: int | Non
 
 
 def _write_replaced_text(text: Text, new: str) -> None:
-    """Give ``text`` the words ``new``, as it reads, after the checks every
-    replace_directive makes of a new text: not empty, and for a directive,
-    runnable. A comment is not checked."""
+    """Give ``text`` the words ``new``, as it reads, after the checks of
+    ``_check_replaced_text``."""
+    _check_replaced_text(text, new)
+    text.text = _text_record_body(new)
+
+
+def _check_replaced_text(text: Text, new: str) -> None:
+    """Refuse ``new`` as the words of ``text`` unless it passes the checks
+    every replace_directive makes of a new text: not empty, and for a
+    directive, runnable. A comment is not checked."""
     if not new.strip():
         raise NetlistError(
             f"replace_directive would leave the text at ({int(text.coord.X)}, "
@@ -1550,7 +1557,6 @@ def _write_replaced_text(text: Text, new: str) -> None:
         )
     if _text_kind(text) == "directive":
         _refuse_unrunnable_directive(new)
-    text.text = _text_record_body(new)
 
 
 def _reads(words: str) -> str:
@@ -1624,18 +1630,29 @@ def _replace_found_words(editor: AscEditor, op: "OpReplaceDirective", find: str)
     first = shown.count("\n", 0, at)
     was = _lines_through(shown, first, at + len(find))
     now = _lines_through(new, first, at + len(words))
-    return {
+    result: dict[str, Any] = {
         "op": "replace_directive",
         "text": {**_text_place(text), "line": first + 1, "was": was, "now": now},
-        "undo": _undo_found_words(editor, text, shown, was, now),
     }
+    try:
+        # The undo writes the old words back, so it is given only when the
+        # check every write makes would accept them.
+        _check_replaced_text(text, shown)
+    except NetlistError as refused:
+        result["undo_refused"] = str(refused)
+    else:
+        result["undo"] = _undo_found_words(editor, text, shown, was, now)
+    return result
 
 
 def _undo_found_words(editor: AscEditor, text: Text, shown: str, was: str, now: str) -> dict[str, Any]:
     """The replace_directive op that gives ``text`` back the words ``shown`` it
     had: ``now`` as ``find`` when it is found once on the text's anchor, else
     the whole new text as ``instruction`` (a pattern of its record when it
-    begins with ``regex:``) with the old as ``text``."""
+    begins with ``regex:``) with the old as ``text``. A whole-text edit strips
+    its ``text``, so when the old text begins or ends with a space or a line
+    break the op also gives the whole new text as ``find``, whose ``text`` is
+    written as given."""
     x, y = _xy(text.coord)
     if now and sum(
         len(_occurrences(_shown_text(other.text), now))
@@ -1643,10 +1660,12 @@ def _undo_found_words(editor: AscEditor, text: Text, shown: str, was: str, now: 
         if _xy(other.coord) == (x, y)
     ) == 1:
         return {"op": "replace_directive", "x": x, "y": y, "find": now, "text": was}
-    instruction = _shown_text(text.text)
-    if instruction.startswith("regex:"):
-        instruction = f"regex:^{re.escape(text.text)}\\Z"
-    return {"op": "replace_directive", "x": x, "y": y, "instruction": instruction, "text": shown}
+    new = _shown_text(text.text)
+    instruction = f"regex:^{re.escape(text.text)}\\Z" if new.startswith("regex:") else new
+    undo = {"op": "replace_directive", "x": x, "y": y, "instruction": instruction}
+    if shown != shown.strip():
+        undo["find"] = new
+    return {**undo, "text": shown}
 
 
 def _words_not_found(find: str, searched: Sequence[Text], *, named: bool) -> NetlistError:
@@ -3044,7 +3063,7 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_wire": ("removed", "already_removed_by"),
     "remove_net_label": ("removed", "already_removed_by"),
     "remove_directive": ("removed_texts",),
-    "replace_directive": ("text", "undo"),
+    "replace_directive": ("text", "undo", "undo_refused"),
     "remove_component": ("removed_wires", "removed_labels", "kept_wires"),
     "replace_component": ("was", "wires", "left_at", "unpaired_pins"),
     "move": ("moved",),
