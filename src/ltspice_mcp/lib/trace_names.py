@@ -212,7 +212,8 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool, schematic: bool
             return by_lower[cand]
     if spellings := section_sign_spellings(signal):
         # A part LTspice exported as R§Load is I(Load) in its results and
-        # I(RLoad) in ngspice's: the one trace either reads, never a guess.
+        # I(RLoad) in ngspice's, and its noise contribution is V(rload) in
+        # XVII's: the one trace either reads, never a guess.
         found = {
             trace
             for spelled in spellings

@@ -249,13 +249,12 @@ summary = "What a transient run of a sheet names the current of a part exported 
 model = ["lib/trace_names.py", "lib/device_names.py", "tools/analysis.py", "lib/trace_names.py:find_trace"]
 
 [behaviour.trace-name-grid]
-summary = "The cells of the trace-name grid (at the end of this file) that no other recording fills: a node voltage, a two-terminal current, a terminal current and a port current at the top, in a block and in a block in a block, in a transient, an AC sweep, a DC sweep and an operating point, with subcircuit voltages and currents saved; the noise contribution of a resistor at each depth; and the current of a part named with a section sign in an AC sweep, a DC sweep and a noise run. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/trace_names.py", "lib/device_names.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_keys", "lib/trace_names.py:find_trace", "lib/trace_names.py:trace_quantity", "lib/raw_parser.py:node_voltages", "lib/decoded_raw.py:declared_unit"]
+summary = "The cells of the trace-name grid (at the end of this file) that no other recording fills: a node voltage, a two-terminal current, a terminal current and a port current at the top, in a block and in a block in a block, in a transient, an AC sweep, a DC sweep and an operating point, with subcircuit voltages and currents saved; the noise contribution of a resistor at each depth; the current of a part named with a section sign in an AC sweep and a DC sweep, which both builds name by the part's own name (I(Load)); and that part's noise contribution, which LTspice 26 names by its own name (v(Load)) and XVII by its name without the sign, in lower case (V(rload))."
+model = ["lib/trace_names.py", "lib/device_names.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_keys", "lib/device_names.py:section_sign_spellings", "lib/trace_names.py:find_trace", "lib/trace_names.py:trace_quantity", "lib/raw_parser.py:node_voltages", "lib/decoded_raw.py:declared_unit"]
 # The four decks of every kind of trace, and the noise deck, run with both
 # subcircuit settings on, as cases at the end; the section-sign decks are
 # written in UTF-8, which every build reads a section sign in (deck-encoding).
 inputs = ["raw/trace_grid_section_ac.cir", "raw/trace_grid_section_dc.cir", "raw/trace_grid_section_noise.cir"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
@@ -6346,104 +6345,104 @@ at = { analysis = "dc" }
 cases = ["raw/trace_grid_tran"]
 at = { analysis = "tran" }
 [grid.trace-name.cell.items]
-"time" = { what = "axis", depth = "top", trace = "time", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"time" = { what = "axis", depth = "top", trace = "time" }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)" }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" } }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)" }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" } }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_ac"]
 at = { analysis = "ac" }
 [grid.trace-name.cell.items]
-"frequency" = { what = "axis", depth = "top", trace = "frequency", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"frequency" = { what = "axis", depth = "top", trace = "frequency" }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)" }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" } }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)" }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" } }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_dc"]
 at = { analysis = "dc" }
 [grid.trace-name.cell.items]
-"V1" = { what = "axis", depth = "top", trace = { ltspice26 = "V1", ltspice17 = "v1" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V1" = { what = "axis", depth = "top", trace = { ltspice26 = "V1", ltspice17 = "v1" } }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)" }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" } }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)" }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" } }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_op"]
 at = { analysis = "op" }
 [grid.trace-name.cell.items]
-"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
-"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)" }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" } }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)" }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" } }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_noise"]
 at = { analysis = "noise" }
 [grid.trace-name.cell.items]
-"frequency" = { what = "axis", depth = "top", trace = "frequency", not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
-"gain" = { what = "gain", depth = "top", trace = "gain", not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
-"V(onoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
-"V(inoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(inoise)", ltspice17 = "V(inoise)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
-"V(R1)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(R1)", ltspice17 = "V(r1)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
-"V(xa:Rd)" = { what = "noise", depth = "block", trace = { ltspice26 = "v(xa:Rd)", ltspice17 = "V(a:rd)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
-"V(xa:xin:Rin)" = { what = "noise", depth = "nested", trace = { ltspice26 = "v(xa:xin:Rin)", ltspice17 = "V(a:in:rin)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"frequency" = { what = "axis", depth = "top", trace = "frequency" }
+"gain" = { what = "gain", depth = "top", trace = "gain" }
+"V(onoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" } }
+"V(inoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(inoise)", ltspice17 = "V(inoise)" } }
+"V(R1)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(R1)", ltspice17 = "V(r1)" } }
+"V(xa:Rd)" = { what = "noise", depth = "block", trace = { ltspice26 = "v(xa:Rd)", ltspice17 = "V(a:rd)" } }
+"V(xa:xin:Rin)" = { what = "noise", depth = "nested", trace = { ltspice26 = "v(xa:xin:Rin)", ltspice17 = "V(a:in:rin)" } }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_section_ac"]
 at = { analysis = "ac" }
 [grid.trace-name.cell.items]
-"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign", not_established = "No recording shows the current of a part named with a section sign in an AC run; the recording settles the names declared here." }
-"frequency" = { what = "axis", depth = "top", trace = "frequency", not_established = "No recording shows the current of a part named with a section sign in an AC run; the recording settles the names declared here." }
+"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign" }
+"frequency" = { what = "axis", depth = "top", trace = "frequency" }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_section_dc"]
 at = { analysis = "dc" }
 [grid.trace-name.cell.items]
-"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign", not_established = "No recording shows the current of a part named with a section sign in a DC sweep; the recording settles the names declared here." }
-"I1" = { what = "axis", depth = "top", trace = { ltspice26 = "I1", ltspice17 = "i1" }, not_established = "No recording shows the current of a part named with a section sign in a DC sweep; the recording settles the names declared here." }
+"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign" }
+"I1" = { what = "axis", depth = "top", trace = { ltspice26 = "I1", ltspice17 = "i1" } }
 
 [[grid.trace-name.cell]]
 cases = ["raw/trace_grid_section_noise"]
 at = { analysis = "noise" }
 [grid.trace-name.cell.items]
-"V(R§Load)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(Load)", ltspice17 = "V(load)" }, form = "section_sign", not_established = "No recording shows the noise contribution of a part named with a section sign; the recording settles the names declared here." }
+"V(R§Load)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(Load)", ltspice17 = "V(rload)" }, form = "section_sign" }
 
 # ---------------------------------------------------------------- the value-number grid
 

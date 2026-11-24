@@ -740,7 +740,9 @@ def section_sign_spellings(name: str) -> tuple[str, ...]:
     of it carries LTspice's ``§`` (``R§Load``): the part's own name, which
     LTspice's results use (``I(Load)``, recorded: ``export/load_name_op``),
     then the name without the marker, which ngspice's copy of the deck gives
-    it (``spice_lex_ops.section_sign_names``). None for a name without one."""
+    it (``spice_lex_ops.section_sign_names``) and XVII's noise run gives the
+    part's contribution (``V(rload)``, recorded: ``raw/trace_grid_section_noise``).
+    None for a name without one."""
     if SECTION_SIGN not in name:
         return ()
     parts = re.split(r"([(),.:\s]+)", name)
