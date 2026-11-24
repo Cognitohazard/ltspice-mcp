@@ -1,0 +1,7 @@
+* a .save of one node the circuit has and one it lacks
+V1 a 0 1
+R1 a b 1k
+R2 b 0 1k
+.save V(b) V(nothere)
+.op
+.end

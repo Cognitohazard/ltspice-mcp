@@ -8085,6 +8085,134 @@
         ".raw"
       ]
     },
+    "deck/pow_neg_base_cube_root": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_cube_root.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_cube_root.cir": "773d4f276629cbe0a421fc437d875afedcf627150cfb1f841a9452af5146b243"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_cube_root.log": {
+          "bytes": 685,
+          "sha256": "d6e47f95f7e884fb2dd035d779fdc822ddd68314129339a16ad6adb0141e2b9b"
+        },
+        "deck/pow_neg_base_cube_root.raw": {
+          "bytes": 786,
+          "sha256": "04258fe4dfd32634e8910e037c075f652c6bf9d983973e690cce2734e034697c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/pow_neg_base_negated_exponent": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_negated_exponent.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_negated_exponent.cir": "dd168f9e3f4773c994225237d94e702fee5a4ce1c1778acec0768cb494e335be"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_negated_exponent.log": {
+          "bytes": 539,
+          "sha256": "9f936a3d89c6291f46ede769ce7a3e72a72a58e6ea2d5d1f177e195bdf27ec21"
+        },
+        "deck/pow_neg_base_negated_exponent.raw": {
+          "bytes": 786,
+          "sha256": "4700a20e1350b718e1826d1c4b30702d5669b147fa5712b129fe507d24b3b322"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/pow_neg_base_square_root": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_square_root.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_square_root.cir": "a42a38a9646397cd80a0edde727542adfc2dbab52e8ae3823cbc4a252d897253"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_square_root.log": {
+          "bytes": 683,
+          "sha256": "5f6aec12ec72abb99a3700d8861760a6f6badf5869f329352ac1936abcf1a66b"
+        },
+        "deck/pow_neg_base_square_root.raw": {
+          "bytes": 786,
+          "sha256": "04258fe4dfd32634e8910e037c075f652c6bf9d983973e690cce2734e034697c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/pow_neg_base_whole": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_whole.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_whole.cir": "9a56ef45118a6e3628a70af7ca4d6a75212f213952998d3efb2031ba0d9f9aba"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_whole.log": {
+          "bytes": 613,
+          "sha256": "1c7df9a7fc956d84838098c655453b681947067edad403c2f06932cfc45e74d0"
+        },
+        "deck/pow_neg_base_whole.raw": {
+          "bytes": 878,
+          "sha256": "34e73e7829751afbcf73b2a2f2efee12689c7c84b7f9ad04db46fb66f80d1da6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/relative_pwl_file": {
       "behaviour": "data-file-relative-path",
       "command": [
@@ -10529,6 +10657,109 @@
         ".emf"
       ]
     },
+    "export/adevice_and_grounded_input": {
+      "behaviour": "a-device-input-on-ground",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/adevice_and_grounded_input.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_and_grounded_input.asc": "8c28d0a1e82f656e5f84b8e4e3ec4c6ea36bee51fb02ba5d67d92767d8762cfe"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/adevice_and_grounded_input.log": {
+          "bytes": 389,
+          "sha256": "72428e4e3f72c33c56265950f628c0ec6bdebfa9b59cacc151e06385af1fb90c"
+        },
+        "export/adevice_and_grounded_input.net": {
+          "bytes": 109,
+          "sha256": "28228759cd9ab35c4dd24179845722ef710d915564a21c4d9f640cc70993751d"
+        },
+        "export/adevice_and_grounded_input.raw": {
+          "bytes": 828,
+          "sha256": "58be0e42c063f6bc5375fc21e09bd906007dfa7dda8f02d602de991b5f7a6c5b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
+    "export/adevice_and_open_input": {
+      "behaviour": "a-device-input-on-ground",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/adevice_and_open_input.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_and_open_input.asc": "73a03b6a9375b80364d1604d9a62a0c010669056482e1e9fe3066a64eba4a821"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/adevice_and_open_input.log": {
+          "bytes": 385,
+          "sha256": "e424aa39058b4658f4b52d4993900a6e3907a359156955e6219b59353660fe42"
+        },
+        "export/adevice_and_open_input.net": {
+          "bytes": 105,
+          "sha256": "f3b259ce005f2282dc160fb0a3df147c2810e572dcb534ca03fc93f5648edd11"
+        },
+        "export/adevice_and_open_input.raw": {
+          "bytes": 820,
+          "sha256": "61145af4d957d993d2d468701665808fa32a13c186eb97a225d4523bd3932e03"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
+    "export/adevice_block_top": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_block_top.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/adevice_block.asc": "1ce9527467ea1d771323f78ce759c887d617f52b6bcb4368ea7a58aa61f34d00",
+        "export/adevice_block.asy": "fa1bfffc8a83a9c9ea317e1b3a2ef70b748e1e744000aa4d4d3651aba47fa18b",
+        "export/adevice_block_top.asc": "6bf39d11b35f1ce21d0b7dffd419c0381c942b041cb854f47b252a28956e10ad"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_block_top.net": {
+          "bytes": 188,
+          "sha256": "757bc2b19c22f265515f6ced0410e6ddde5892f1a812aa2eaa7e26cb818a2eba"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/adevice_open_pin": {
       "behaviour": "a-device-open-pin",
       "command": [
@@ -10548,6 +10779,195 @@
         "export/adevice_open_pin.net": {
           "bytes": 78,
           "sha256": "222fc5193954a8abffbc99a10c51e838a0084b1e65eeef901889bdd84ae0981a"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_open_pin_loose_wire": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_open_pin_loose_wire.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/adevice_open_pin_loose_wire.asc": "c95da17b7cb620e2f3cce41221f0d05563c8658c74b4021ffdd4dceaa1929d63"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_open_pin_loose_wire.net": {
+          "bytes": 92,
+          "sha256": "98f32cfb6e62445f2472e684cefd16b343b0ea5b4b23e35086c25dd99e03f670"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_open_pin_stock_and": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_open_pin_stock_and.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_open_pin_stock_and.asc": "eab8b63b9f0790ec1bd93bf85885faf055b69d4b501b5361f99fc6e09e170bc2"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_open_pin_stock_and.net": {
+          "bytes": 88,
+          "sha256": "851f0ef32f2f0600b3ce3331a6982f876a2014274f127a2ba3700eb32da24740"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_open_pin_three": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_open_pin_three.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a3.asy": "2ef6d556b42338f56467fc5d5580371541a099849f8bdf6d8f9fc16becd1b69b",
+        "export/adevice_open_pin_three.asc": "5d76edd12fa321cdf346ec5bf0d0ea80a828379edbb6872408241a7ddc66ad8a"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_open_pin_three.net": {
+          "bytes": 74,
+          "sha256": "9188698329bc4c4e2484cf8960d49d462b630cc2ec82ec8c64fc913a7fdb1c77"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_prefix_by_attribute": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_prefix_by_attribute.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_prefix_by_attribute.asc": "8d9e1a93798d6b8ecfe28a5fd6f27767ca579a3924e291ec9c6a3d3f6582de37",
+        "export/cell4.asy": "586f07488cd8f976db4d7c8859f48fd500b769c325929f384a000bcfe4cfd5e4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_prefix_by_attribute.net": {
+          "bytes": 93,
+          "sha256": "48fc9b4fccd6299924e8ac3d9bfa70b84f3d978b4ff815e707a4e1dd660ed9fa"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_prefix_lower_case": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_prefix_lower_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_prefix_lower_case.asc": "eafb04ba0e9be7e325caa5bee16d409aebb041f801d1e8f8b80a15b903e7a43d",
+        "export/cell4.asy": "586f07488cd8f976db4d7c8859f48fd500b769c325929f384a000bcfe4cfd5e4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_prefix_lower_case.net": {
+          "bytes": 79,
+          "sha256": "2eb289bea0310748f53521e3b4679fba42009e13890730ee316174b1822e8ca8"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_stacked_pins": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_stacked_pins.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/a8_stacked.asy": "6c3b49b34fedbe349af528b76117f88c71f7089f4f88fd3f78f1ca574f5556aa",
+        "export/adevice_stacked_pins.asc": "2ba895ee0eb04f8f6aa60001b9ad6560c0972d3f03cc16ff98e7350567372e28"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_stacked_pins.net": {
+          "bytes": 106,
+          "sha256": "a3de0302b205f4d72414a49b2a0f0103b4aa7e9cdb7b09880d6f2c344f7cc862"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_two_open": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/adevice_two_open.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/adevice_two_open.asc": "45361470c038dfc4ab29b6bd0c62db53cbec5f0e90cfe05a4f38bc26dcefd4f6"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_two_open.net": {
+          "bytes": 108,
+          "sha256": "8f7ac53f13f22438e4ca292034c731484c6f2ecdc83566e9530406e5ced9b361"
         }
       },
       "reported_build": null,
@@ -11096,6 +11516,58 @@
         ".net"
       ]
     },
+    "export/label_on_nothing": {
+      "behaviour": "export-label-on-nothing",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/label_on_nothing.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/label_on_nothing.asc": "491ab7396b0dd9a2ee8c788e2498f97aec23b47dd3f3df201d09d9fd825c1bed"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/label_on_nothing.net": {
+          "bytes": 86,
+          "sha256": "a8b62f3b098fe249d44dfd13cd3aeffd0ead96643f134e727a85863d1455c183"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/label_on_nothing_absent": {
+      "behaviour": "export-label-on-nothing",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/label_on_nothing_absent.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/label_on_nothing_absent.asc": "7fe9db79b2cb7b3d4c2fe98e9ea085677cefa4c4658853c5f106a6e893f2e886"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/label_on_nothing_absent.net": {
+          "bytes": 93,
+          "sha256": "b8f35e4eadfcdf31ec929da6d5e9b213d40f4fa57a81baf311773afb3d539f95"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/load_name_op": {
       "behaviour": "export-instance-names",
       "command": [
@@ -11395,6 +11867,58 @@
         "export/multiline_text.net": {
           "bytes": 133,
           "sha256": "69f0999b696723a7f8a7d281f9ccaf125abe5fb3e43b7d8347b32ae2172f0905"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/open_pin_controlled": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/open_pin_controlled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/open_pin_controlled.asc": "f14d7d8f01edabea7c06a227a553a28eebe789d244a26505cbc34bafc761babe"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/open_pin_controlled.net": {
+          "bytes": 153,
+          "sha256": "528be8c58db0c022a9f2eb03902200df227c8d6b689dd904bf3655df96f1a04b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/open_pin_letters": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/open_pin_letters.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/open_pin_letters.asc": "fd3cdf65687d7a844be715b6da609ceb87e421132e24253819bd1147ff787776"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/open_pin_letters.net": {
+          "bytes": 633,
+          "sha256": "af8bbaea38c50d0d184723674983c15e5a33f1ae585339749fd0c2f80d0f3271"
         }
       },
       "reported_build": null,
@@ -20493,6 +21017,33 @@
         ".raw"
       ]
     },
+    "raw/msub_stored": {
+      "behaviour": "m-card-subckt-model-traces",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/msub_stored.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/msub_stored.cir": "4fb8125ef20c72c75b6f5e0dc5665ccfe60f9ac1987a1c667e10464a86300b52"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/msub_stored.log": {
+          "bytes": 266,
+          "sha256": "d0e01827bbbf164e72a1a44c3b03693fdd7e8abb5ec8267b62358ab0fb2cbfcf"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "raw/noise": {
       "behaviour": "raw-noise",
       "command": [
@@ -20709,6 +21260,70 @@
         "raw/op_subckt.raw": {
           "bytes": 968,
           "sha256": "8aca441cff8ac90e082e05744f41f220cb21c3f77a7d8d374ac7926db1ccd731"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/save_one_missing": {
+      "behaviour": "m-card-subckt-model-traces",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_one_missing.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/save_one_missing.cir": "04bed504932b1c6403b6702c1723ecf03973669500a2eea3983b79ece78815a8"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_one_missing.log": {
+          "bytes": 398,
+          "sha256": "1dc34dd5387772e4fa9791d5e8f7b06272851bfb8ce8529843e25def7a1d2609"
+        },
+        "raw/save_one_missing.raw": {
+          "bytes": 596,
+          "sha256": "27aa5f5b11b8624c0fa0dbbbee23233494e704ff9179a3f7d2c01ca1f69134c1"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/save_only_missing": {
+      "behaviour": "m-card-subckt-model-traces",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_only_missing.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/save_only_missing.cir": "205522d47a53ba56e07b67887256b33fcb87e887f5a15a3b35461fc2e3fdf9be"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_only_missing.log": {
+          "bytes": 436,
+          "sha256": "41ac5b1a7477ad57c2556fea27eef0bd4561252cbe7a81255e591a3b0e8168b5"
+        },
+        "raw/save_only_missing.raw": {
+          "bytes": 764,
+          "sha256": "2d68e2805d79b5d7acb753ba5c893fc76a49bb2729fc6e3d5fa3882cdebef17b"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

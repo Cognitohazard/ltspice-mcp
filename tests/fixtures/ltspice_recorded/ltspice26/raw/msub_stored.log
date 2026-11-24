@@ -1,0 +1,10 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\msub_stored.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\msub_stored.cir(4): Node or model name expected.
+Note that there is a sub-circuit with the same name "msub" defined,
+which might indicate that this error is simply caused by the wrong prefix letter.
+Consider using the prefix "X" instead of "M".
+You can change the prefix by editing the "Prefix" attribute in the component attribute editor.
+M1 d g 0 0 msub
+           ^^^^

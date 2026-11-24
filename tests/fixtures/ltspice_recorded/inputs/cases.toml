@@ -1656,6 +1656,49 @@ summary = "What a build does at startup with the settings file a recoverable run
 model = ["lib/controlled_ltspice.py"]
 unrecordable = "A recording would start each build with an old or missing update check, on which a build may start its updater, and XVII has updated itself that way on this machine; a recording must not change the build it records. It was looked at instead. The LTspice 26.1.1 recorded here (its digest is in the manifest) is not the audited executable, so recovery refuses it by digest. Its settings file holds UUID (20 digits), CaptureAnalytics and LastWebUpdateTime, and no LastWebUpdateQuery, the key the server checks, so recovery would refuse its profile too. XVII 17.0.37's file holds both LastWebUpdateQuery and LastWebUpdateTime. Every case here ran on a copy of the recording user's settings whose update time was about 40 days old, with -ini after the deck, and no build stopped on a prompt. Adopting 26.1.1 needs its startup audited as the earlier build's was: which update key it reads, in what form, and after how long it prompts or starts its updater, found by reading the executable or on a machine where its updater can do no harm."
 
+[behaviour.export-label-on-nothing]
+summary = "Whether a net label that touches no wire and no pin changes what a sheet exports."
+model = ["lib/connectivity.py", "lib/export_nets.py"]
+# label_on_nothing holds V1 and R1 and a label named loose at a point no wire
+# or pin reaches; label_on_nothing_absent is the same sheet without the label.
+inputs = ["export/label_on_nothing.asc", "export/label_on_nothing_absent.asc"]
+
+[behaviour.m-card-subckt-model-traces]
+summary = "Whether a build runs an M card whose model is a .subckt, and under which names it would store that device's currents and inner nodes; and what a build stores for a .save that names a node the circuit lacks, beside one it has or alone."
+model = ["lib/trace_names.py", "lib/device_names.py"]
+# M1's model msub is a subcircuit with an inner node n1 between Rd and Rs;
+# msub_stored saves nothing by name. save_one_missing and save_only_missing
+# save V(nothere), which their divider lacks, beside V(b) and alone.
+inputs = [
+    "raw/msub_stored.cir",
+    "raw/save_one_missing.cir",
+    "raw/save_only_missing.cir",
+]
+
+[behaviour.power-negative-base]
+summary = "What a build gives for a power with a negative base or a negated exponent, set in a .param: (-2)**2, -2**2, 2**-b with b=3, (-8)**(1/3) and (-2)**0.5."
+model = ["lib/hierarchy_expr.py", "lib/hierarchy_expr.py:_power"]
+# Each .param name is the value of one source, so the voltage of its node in
+# the .op raw is what LTspice computed. A form either build may refuse is in
+# a deck of its own.
+inputs = [
+    "deck/pow_neg_base_whole.cir",
+    "deck/pow_neg_base_negated_exponent.cir",
+    "deck/pow_neg_base_cube_root.cir",
+    "deck/pow_neg_base_square_root.cir",
+]
+
+[behaviour.a-device-open-pin-forms]
+summary = "What an export writes for an open pin of an A-device in other forms than a-device-open-pin: the build's own AND gate, a symbol of three pins, a part given Prefix A or a by an instance attribute, a pin on a wire with a loose end, two pins drawn on one point or joined by a wire, a block's own sheet, two A-devices on one sheet; and for an open pin of each other element letter."
+model = ["lib/connectivity.py", "lib/nets.py", "lib/export_nets.py"]
+# Each sheet is a [[case]] below, since each copies other symbols.
+
+[behaviour.a-device-input-on-ground]
+summary = "Whether the build's own AND gate, run from a sheet, treats an input on node 0 as not used or as logic low: input a at 1 V, the output y into 1k to ground, and input b open or on a ground flag. Nothing in the server models this yet."
+model = []
+# Each run keeps its netlist, log and raw; V(y) is 1 V when b is taken as not
+# used and 0 when it is taken as low.
+
 # ---------------------------------------------------------------- cases an input path cannot describe
 
 [[case]]
@@ -2913,6 +2956,93 @@ id = "raw/trace_grid_noise"
 behaviour = "trace-name-grid"
 source = "raw/trace_grid_noise.cir"
 ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+# The build's own AND gate (Digital\and): input a labelled a, output Q labelled
+# y, every other pin open.
+[[case]]
+id = "export/adevice_open_pin_stock_and"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_open_pin_stock_and.asc"
+
+# A CELL of three pins with Prefix A and Value AND: pin 1 labelled a, pins 2
+# and 3 open.
+[[case]]
+id = "export/adevice_open_pin_three"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_open_pin_three.asc"
+extra = ["export/a3.asy"]
+
+# A1 is the stock res and A2 the four-pin cell4, each given Prefix A by an
+# instance attribute; every pin open.
+[[case]]
+id = "export/adevice_prefix_by_attribute"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_prefix_by_attribute.asc"
+extra = ["export/cell4.asy"]
+
+# cell4 given Prefix a, in lower case, by an instance attribute; every pin open.
+[[case]]
+id = "export/adevice_prefix_lower_case"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_prefix_lower_case.asc"
+extra = ["export/cell4.asy"]
+
+# a8 with pins 1 and 7 labelled a and y, and a wire from pin 3 to a loose end.
+[[case]]
+id = "export/adevice_open_pin_loose_wire"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_open_pin_loose_wire.asc"
+extra = ["export/a8.asy"]
+
+# A1 is a8_stacked, a8 with pin 4 drawn on pin 3's point; A2 is a8 with a wire
+# straight from pin 3 to pin 4. Every other pin open.
+[[case]]
+id = "export/adevice_stacked_pins"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_stacked_pins.asc"
+extra = ["export/a8.asy", "export/a8_stacked.asy"]
+
+# X1 places adevice_block, whose own sheet holds a8 with pin 1 on port IN and
+# pin 7 on port OUT and the other pins open.
+[[case]]
+id = "export/adevice_block_top"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_block_top.asc"
+extra = ["export/adevice_block.asc", "export/adevice_block.asy", "export/a8.asy"]
+
+# Two a8 on one sheet, each with pins 1, 2 and 7 labelled and the rest open.
+[[case]]
+id = "export/adevice_two_open"
+behaviour = "a-device-open-pin-forms"
+source = "export/adevice_two_open.asc"
+extra = ["export/a8.asy"]
+
+# A stock diode, NPN, NMOS, NJF, voltage and current source, inductor, B source
+# and switch, every pin open.
+[[case]]
+id = "export/open_pin_letters"
+behaviour = "a-device-open-pin-forms"
+source = "export/open_pin_letters.asc"
+
+# The stock E, F, G and H sources with no control given, every pin open.
+[[case]]
+id = "export/open_pin_controlled"
+behaviour = "a-device-open-pin-forms"
+source = "export/open_pin_controlled.asc"
+
+[[case]]
+id = "export/adevice_and_open_input"
+behaviour = "a-device-input-on-ground"
+kind = "run"
+source = "export/adevice_and_open_input.asc"
+keep = ["net", "log", "raw"]
+
+[[case]]
+id = "export/adevice_and_grounded_input"
+behaviour = "a-device-input-on-ground"
+kind = "run"
+source = "export/adevice_and_grounded_input.asc"
+keep = ["net", "log", "raw"]
 
 # ---------------------------------------------------------------------- grids
 #

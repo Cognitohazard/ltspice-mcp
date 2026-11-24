@@ -1,0 +1,11 @@
+* an M card whose model is a subcircuit, with nothing saved by name
+V1 d 0 1
+V2 g 0 2
+M1 d g 0 0 msub
+.subckt msub D G S B
+Rd D n1 1k
+Rs n1 S 1k
+Rg G S 1meg
+.ends
+.op
+.end

@@ -7932,6 +7932,134 @@
         ".raw"
       ]
     },
+    "deck/pow_neg_base_cube_root": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_cube_root.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_cube_root.cir": "773d4f276629cbe0a421fc437d875afedcf627150cfb1f841a9452af5146b243"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_cube_root.log": {
+          "bytes": 360,
+          "sha256": "eba504654c42acc91243ed7124fb52e5a76d9e7d69832e8a1a3c3f4f97133aa0"
+        },
+        "deck/pow_neg_base_cube_root.raw": {
+          "bytes": 612,
+          "sha256": "8c5dc6f990cca8f9d719ff90b12f06ecb1c2d7075eefdc4a600f1424e0cce4aa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/pow_neg_base_negated_exponent": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_negated_exponent.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_negated_exponent.cir": "dd168f9e3f4773c994225237d94e702fee5a4ce1c1778acec0768cb494e335be"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_negated_exponent.log": {
+          "bytes": 374,
+          "sha256": "9bd3bae36cea9c74e65fbfc65d83b009b97fc41f485f9306f1f0c85021b6bc24"
+        },
+        "deck/pow_neg_base_negated_exponent.raw": {
+          "bytes": 626,
+          "sha256": "44f24119526cf4f9f4d1817a426e2d92820687618a7911f688ef102c1a1ad8dd"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/pow_neg_base_square_root": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_square_root.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_square_root.cir": "a42a38a9646397cd80a0edde727542adfc2dbab52e8ae3823cbc4a252d897253"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_square_root.log": {
+          "bytes": 364,
+          "sha256": "9a054c0939c13e2f26a5b53d641c7e669f80e508dede56174ba5d008e2859e43"
+        },
+        "deck/pow_neg_base_square_root.raw": {
+          "bytes": 616,
+          "sha256": "ed649b3388dafc3313aa6cfc064d64fdb97087e51262c3e276d06a83d406e647"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/pow_neg_base_whole": {
+      "behaviour": "power-negative-base",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/pow_neg_base_whole.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/pow_neg_base_whole.cir": "9a56ef45118a6e3628a70af7ca4d6a75212f213952998d3efb2031ba0d9f9aba"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/pow_neg_base_whole.log": {
+          "bytes": 352,
+          "sha256": "16f746169db6e9a629803b691cd88d8ef9fad18587df2b050729c9d34b5c7dcb"
+        },
+        "deck/pow_neg_base_whole.raw": {
+          "bytes": 696,
+          "sha256": "548c3e3a629d58492096de847b05503659bcee0831e4e253a6c7fee94ea0a39a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/relative_pwl_file": {
       "behaviour": "data-file-relative-path",
       "command": [
@@ -10423,6 +10551,109 @@
         ".emf"
       ]
     },
+    "export/adevice_and_grounded_input": {
+      "behaviour": "a-device-input-on-ground",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/adevice_and_grounded_input.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_and_grounded_input.asc": "8c28d0a1e82f656e5f84b8e4e3ec4c6ea36bee51fb02ba5d67d92767d8762cfe"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/adevice_and_grounded_input.log": {
+          "bytes": 368,
+          "sha256": "8224339bff19be53e900000ffec5500eff17e3092d2f17017bcd81abd37a613a"
+        },
+        "export/adevice_and_grounded_input.net": {
+          "bytes": 152,
+          "sha256": "c7766ce5659baaebfc41471881450d49b1b4974b5d8468e00947ab37c2a4a2e7"
+        },
+        "export/adevice_and_grounded_input.raw": {
+          "bytes": 976,
+          "sha256": "54ce05e9c4eb439c6a466a73a99e3ca01e7c5be91da0812b2205915bd1f39949"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
+    "export/adevice_and_open_input": {
+      "behaviour": "a-device-input-on-ground",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/adevice_and_open_input.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_and_open_input.asc": "73a03b6a9375b80364d1604d9a62a0c010669056482e1e9fe3066a64eba4a821"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/adevice_and_open_input.log": {
+          "bytes": 360,
+          "sha256": "3b6fd217c41d737d95617372d9010083143b9d1d760908a06384c0aac12da7bd"
+        },
+        "export/adevice_and_open_input.net": {
+          "bytes": 148,
+          "sha256": "544f2cf95d9cb2b399dcc0c4c1093458c01933f07532dc3f4d0456ae3217a55c"
+        },
+        "export/adevice_and_open_input.raw": {
+          "bytes": 968,
+          "sha256": "e6d2eb4d66ea81e4da643b1c175577a4e5611f8627826e0406494d1d5afaef0b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
+    "export/adevice_block_top": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_block_top.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/adevice_block.asc": "1ce9527467ea1d771323f78ce759c887d617f52b6bcb4368ea7a58aa61f34d00",
+        "export/adevice_block.asy": "fa1bfffc8a83a9c9ea317e1b3a2ef70b748e1e744000aa4d4d3651aba47fa18b",
+        "export/adevice_block_top.asc": "6bf39d11b35f1ce21d0b7dffd419c0381c942b041cb854f47b252a28956e10ad"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_block_top.net": {
+          "bytes": 223,
+          "sha256": "067f72194635cee14f2a7be3ed5c1fa43b7ae8d3687e874319b7fa3c6cfe9d7e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/adevice_open_pin": {
       "behaviour": "a-device-open-pin",
       "command": [
@@ -10442,6 +10673,195 @@
         "export/adevice_open_pin.net": {
           "bytes": 117,
           "sha256": "47ba6f499b291374c03e1d919471493bd108c985293c6d348f38ed2ccd783aa9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_open_pin_loose_wire": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_open_pin_loose_wire.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/adevice_open_pin_loose_wire.asc": "c95da17b7cb620e2f3cce41221f0d05563c8658c74b4021ffdd4dceaa1929d63"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_open_pin_loose_wire.net": {
+          "bytes": 131,
+          "sha256": "91a8f5d368c53a0dde4366824204cb676b9c8a072b57f043a9808c79ea6bf152"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_open_pin_stock_and": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_open_pin_stock_and.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_open_pin_stock_and.asc": "eab8b63b9f0790ec1bd93bf85885faf055b69d4b501b5361f99fc6e09e170bc2"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_open_pin_stock_and.net": {
+          "bytes": 127,
+          "sha256": "27fd5ff1997f11e6237ab13e679eb7568670ab2396f6697bdf18a223a423d871"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_open_pin_three": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_open_pin_three.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a3.asy": "2ef6d556b42338f56467fc5d5580371541a099849f8bdf6d8f9fc16becd1b69b",
+        "export/adevice_open_pin_three.asc": "5d76edd12fa321cdf346ec5bf0d0ea80a828379edbb6872408241a7ddc66ad8a"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_open_pin_three.net": {
+          "bytes": 113,
+          "sha256": "b50947796bc7706ca431e8939c5899061041afa6991e3731964747ec9300ad68"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_prefix_by_attribute": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_prefix_by_attribute.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_prefix_by_attribute.asc": "8d9e1a93798d6b8ecfe28a5fd6f27767ca579a3924e291ec9c6a3d3f6582de37",
+        "export/cell4.asy": "586f07488cd8f976db4d7c8859f48fd500b769c325929f384a000bcfe4cfd5e4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_prefix_by_attribute.net": {
+          "bytes": 131,
+          "sha256": "a24540fd016a0345d42d160ce9d5a1f6aa78c7d43a3c85b5920ca7b1816e83fa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_prefix_lower_case": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_prefix_lower_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/adevice_prefix_lower_case.asc": "eafb04ba0e9be7e325caa5bee16d409aebb041f801d1e8f8b80a15b903e7a43d",
+        "export/cell4.asy": "586f07488cd8f976db4d7c8859f48fd500b769c325929f384a000bcfe4cfd5e4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_prefix_lower_case.net": {
+          "bytes": 118,
+          "sha256": "03e7848c9e2bbad87adfe3b2f47c28750191522267576db61a8753bc5f278ffb"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_stacked_pins": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_stacked_pins.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/a8_stacked.asy": "6c3b49b34fedbe349af528b76117f88c71f7089f4f88fd3f78f1ca574f5556aa",
+        "export/adevice_stacked_pins.asc": "2ba895ee0eb04f8f6aa60001b9ad6560c0972d3f03cc16ff98e7350567372e28"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_stacked_pins.net": {
+          "bytes": 144,
+          "sha256": "685fdd00166f09280b555743cf00ec5f723ad9e5ede0674f9228f4daeb9d9cfc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/adevice_two_open": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/adevice_two_open.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/a8.asy": "981aff3707d9a9ac28ddeed9b686b61ece0cdbed947066fc08ac81ebb7208964",
+        "export/adevice_two_open.asc": "45361470c038dfc4ab29b6bd0c62db53cbec5f0e90cfe05a4f38bc26dcefd4f6"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/adevice_two_open.net": {
+          "bytes": 146,
+          "sha256": "3ec082f523649b0a477947c3629c7f7797b0d6c240a23c906ee3f99fcc459d43"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -11000,6 +11420,58 @@
         ".net"
       ]
     },
+    "export/label_on_nothing": {
+      "behaviour": "export-label-on-nothing",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/label_on_nothing.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/label_on_nothing.asc": "491ab7396b0dd9a2ee8c788e2498f97aec23b47dd3f3df201d09d9fd825c1bed"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/label_on_nothing.net": {
+          "bytes": 123,
+          "sha256": "ef8fe4323d8c012e48005a2a20186ac392463435a2b7d045b7c6e5c11c702f47"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/label_on_nothing_absent": {
+      "behaviour": "export-label-on-nothing",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/label_on_nothing_absent.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/label_on_nothing_absent.asc": "7fe9db79b2cb7b3d4c2fe98e9ea085677cefa4c4658853c5f106a6e893f2e886"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/label_on_nothing_absent.net": {
+          "bytes": 130,
+          "sha256": "cb5558ecf16273b056763233af3d1b9ab66e92cf889a7c1e0df2e161cbb1db52"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/load_name_op": {
       "behaviour": "export-instance-names",
       "command": [
@@ -11297,6 +11769,58 @@
         "export/multiline_text.net": {
           "bytes": 168,
           "sha256": "ff509e7b282fdb85f3c2d7fbf3d9bde6efccc4c591c3e36dd6fd52a8d577983f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/open_pin_controlled": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/open_pin_controlled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/open_pin_controlled.asc": "f14d7d8f01edabea7c06a227a553a28eebe789d244a26505cbc34bafc761babe"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/open_pin_controlled.net": {
+          "bytes": 189,
+          "sha256": "0389f0382f53d2d7848ba36db89818d11f959abec639c1c6fb3262b7497252f1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/open_pin_letters": {
+      "behaviour": "a-device-open-pin-forms",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/open_pin_letters.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/open_pin_letters.asc": "fd3cdf65687d7a844be715b6da609ceb87e421132e24253819bd1147ff787776"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/open_pin_letters.net": {
+          "bytes": 653,
+          "sha256": "7352029aae4d7091f094fa12dc81f3db225c3ce9a7b42d17639504bfe5239007"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -20746,6 +21270,33 @@
         ".raw"
       ]
     },
+    "raw/msub_stored": {
+      "behaviour": "m-card-subckt-model-traces",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/msub_stored.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "raw/msub_stored.cir": "4fb8125ef20c72c75b6f5e0dc5665ccfe60f9ac1987a1c667e10464a86300b52"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/msub_stored.log": {
+          "bytes": 487,
+          "sha256": "07b2e3e7ce526e1e1ed1645cdcfccc5e476964df668d97a8295ce513d0a184ae"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "raw/noise": {
       "behaviour": "raw-noise",
       "command": [
@@ -20960,6 +21511,70 @@
         "raw/op_subckt.raw": {
           "bytes": 1012,
           "sha256": "ea13bbf732e1d13675b5afcc53125d177dde2c24d549f1ffd67608a36d63a778"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/save_one_missing": {
+      "behaviour": "m-card-subckt-model-traces",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_one_missing.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/save_one_missing.cir": "04bed504932b1c6403b6702c1723ecf03973669500a2eea3983b79ece78815a8"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_one_missing.log": {
+          "bytes": 348,
+          "sha256": "312b683419463bedcc0f4b2acc91d6023d3b0d783aef29dba6d7e5d23844c0c6"
+        },
+        "raw/save_one_missing.raw": {
+          "bytes": 544,
+          "sha256": "96119970d21b972a57c7952b6c7f5ed06a75251df38a62f1a82d368ca85d0828"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/save_only_missing": {
+      "behaviour": "m-card-subckt-model-traces",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_only_missing.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/save_only_missing.cir": "205522d47a53ba56e07b67887256b33fcb87e887f5a15a3b35461fc2e3fdf9be"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_only_missing.log": {
+          "bytes": 350,
+          "sha256": "2a9072b9eb51883cc34a5d0d23456005193014f231c33f1dbb8f1641f6c255ad"
+        },
+        "raw/save_only_missing.raw": {
+          "bytes": 506,
+          "sha256": "a57e4792e0dd00749afa3ae18153fa037b00e7eb7f1d3929f457f699feae0e11"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

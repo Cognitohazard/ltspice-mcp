@@ -1,0 +1,7 @@
+* C:\recording\adevice_and_grounded_input.asc
+V1 in 0 1
+A1 in 0 0 0 0 0 y 0 AND
+R1 y 0 1k
+.op
+.backanno
+.end

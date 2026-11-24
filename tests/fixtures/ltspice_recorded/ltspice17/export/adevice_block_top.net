@@ -1,0 +1,10 @@
+* C:\recording\adevice_block_top.asc
+XX1 a y adevice_block
+
+* block symbol definitions
+.subckt adevice_block IN OUT
+A1 IN 0 0 0 0 0 OUT 0 AND
+.ends adevice_block
+
+.backanno
+.end

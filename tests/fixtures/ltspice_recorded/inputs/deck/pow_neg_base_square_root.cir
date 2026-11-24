@@ -1,0 +1,6 @@
+* a power with a negative base, set in a .param: each source's value is what LTspice computed, as the voltage of its node
+.param b=3
+.param p1=(-2)**0.5
+V1 e01 0 {p1}
+.op
+.end

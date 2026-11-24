@@ -1,0 +1,6 @@
+* C:\recording\label_on_nothing.asc
+V1 N001 0 1
+R1 N001 0 1k
+.op
+.backanno
+.end
