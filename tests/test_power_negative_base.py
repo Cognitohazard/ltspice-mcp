@@ -21,6 +21,7 @@ import pytest
 from ltspice_mcp.lib.format import SAME_VALUE_RTOL
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.hierarchy_expr import Environment
+from ltspice_mcp.lib.log_parser import printed_measurements
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -82,7 +83,9 @@ def _deck(case_id: str) -> tuple[dict[str, str], dict[str, str]]:
     for card in rec.deck_cards(rec.CASES.case(case_id).source):
         words = card.body.split()
         if card.kind == "param":
-            params.update(word.split("=", 1) for word in words[1:])
+            for word in words[1:]:
+                name, _, value = word.partition("=")
+                params[name] = value
         elif card.kind == "instance" and words[0][:1].upper() == "V":
             values[words[1].lower()] = words[3]
     return params, values
@@ -156,3 +159,15 @@ async def test_a_power_reads_as_the_build_computed_it_on_every_route(
             if not _same(taken, expected)
         }
         assert not wrong, (case_id, build, node, wrong)
+
+
+def test_a_warning_line_of_a_refused_power_is_no_measurement_but_a_lower_case_name_is():
+    """XVII prints ``WARNING: Can't resolve .param p1=(-8)**(1/3)`` for the
+    cube root; that line is a diagnostic, and no measurement named warning.
+    Both builds print a measurement's name in lower case (recorded:
+    log/meas_grid_name_upper), so a measurement named ``error`` stays one."""
+    log = rec.recorded("ltspice17", "deck/pow_neg_base_cube_root.log").read_bytes()
+    text = log.decode("utf-16-le" if b"\x00" in log else "utf-8").replace("\x00", "")
+    assert "WARNING: Can't resolve .param p1=(-8)**(1/3)" in text
+    assert printed_measurements(text) == {}
+    assert set(printed_measurements("error: v(out)=1 at 0.001\n")) == {"error"}

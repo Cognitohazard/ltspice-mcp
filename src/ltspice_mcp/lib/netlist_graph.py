@@ -663,13 +663,27 @@ def _no_names(name: str) -> float:
 
 
 def _token_number(token: str) -> float:
-    """The number a value token names as LTspice runs it: a bare value as
-    ``parse_spice_value`` reads it, a braced constant (``{1k}``) as the
-    expression reader computes it. Raises ValueError for anything else, a
-    parameter included."""
-    if token.startswith("{") and token.endswith("}"):
-        return evaluate(token, _no_names, simulator="ltspice", ngbehavior=None, element_value=True)
-    return parse_spice_value(token)
+    """The number a value token names: a bare value as ``parse_spice_value``
+    reads it, a braced constant (``{1k}``) as the expression reader computes
+    it for LTspice, the primary simulator. A compare does not know which
+    simulator runs the deck, so a braced constant that native ngspice is known
+    to compute differently is no number here (``{-2**2}`` is 4 on LTspice and
+    -4 on ngspice, so it is compared as text); one ngspice has no recorded
+    reading of (``{1r5}``) keeps LTspice's number. Raises ValueError for
+    anything else, a parameter included."""
+    if not (token.startswith("{") and token.endswith("}")):
+        return parse_spice_value(token)
+    try:
+        ltspice = evaluate(token, _no_names, simulator="ltspice", ngbehavior=None, element_value=True)
+    except (SyntaxError, ArithmeticError, RecursionError) as exc:
+        raise ValueError(f"{token} is no constant: {exc}") from exc
+    try:
+        ngspice = evaluate(token, _no_names, simulator="ngspice", ngbehavior="", element_value=True)
+    except (ValueError, SyntaxError, ArithmeticError, RecursionError):
+        return ltspice
+    if not same_value(ltspice, ngspice, 0.0):
+        raise ValueError(f"LTspice and ngspice compute {token} differently")
+    return ltspice
 
 
 def _tokens_equal(a: str, b: str, rtol: float) -> bool:

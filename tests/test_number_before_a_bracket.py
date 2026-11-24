@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib.format import parse_spice_value, plain_number
+from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, plain_number
 from ltspice_mcp.lib.metrics import parse_freq, parse_time
 from ltspice_mcp.lib.montecarlo import parse_value
 from ltspice_mcp.lib.netlist_graph import values_equal
@@ -38,6 +38,7 @@ def _readings(token: str) -> dict[str, float | None]:
 
     return {
         "parse_spice_value": refused_as_none(parse_spice_value),
+        "parse_plain_value": refused_as_none(parse_plain_value),
         "plain_number": plain_number(token),
         "leading_numeric_tokens": (leading_numeric_tokens([token]) or [None])[0],
         "step_number": step_number(token),
@@ -62,8 +63,6 @@ def _readings(token: str) -> dict[str, float | None]:
         ("1e3", 1e3),
         ("1k", 1e3),
         ("1Meg", 1e6),
-        ("4R7", 4.7),
-        ("1k5", 1.5e3),
     ],
 )
 def test_every_reader_reads_the_number_before_a_bracket_or_a_comma(token: str, number: float):
@@ -72,7 +71,17 @@ def test_every_reader_reads_the_number_before_a_bracket_or_a_comma(token: str, n
     assert not wrong, (token, wrong)
 
 
-@pytest.mark.parametrize("token", ["1e3%", ")", ",", "1e3,2e3"])
+@pytest.mark.parametrize(("token", "number"), [("4R7", 4.7), ("1k5", 1.5e3)])
+def test_digits_after_a_suffix_read_as_before(token: str, number: float):
+    """``parse_plain_value`` refuses these by design (a name such as 1N4148 is
+    no number there); every other reader reads them as before."""
+    readings = _readings(token)
+    assert readings.pop("parse_plain_value") is None
+    wrong = {route: taken for route, taken in readings.items() if taken != pytest.approx(number)}
+    assert not wrong, (token, wrong)
+
+
+@pytest.mark.parametrize("token", ["1e3%", ")", ",", "1e3,2e3", "1e3))"])
 def test_a_token_that_is_no_number_is_refused_by_every_reader(token: str):
     readings = _readings(token)
     assert set(readings.values()) == {None}, (token, readings)
@@ -89,6 +98,21 @@ def test_the_recording_shows_both_builds_read_the_number_before_the_bracket():
         (line,) = [line for line in text.splitlines() if line.startswith("vat:")]
         at_one_ms = float(line.split("=")[1].split()[0])
         assert at_one_ms == pytest.approx(1e-3 * (1 - 1 / 2.718281828459045), rel=5e-3), build
+
+
+@pytest.mark.parametrize("token", ["{1/0}", "{(}", "{1e999*1e999}"])
+def test_a_compare_of_a_braced_value_that_is_no_constant_compares_its_text(token: str):
+    assert values_equal(token, token, 1e-6)
+    assert not values_equal(token, "1", 1e-6)
+
+
+def test_a_braced_constant_the_simulators_compute_differently_compares_as_text():
+    """LTspice binds the sign to the number (``{-2**2}`` is 4, recorded:
+    deck/expr_grid_negated_power_star); ngspice takes -4. A compare does not
+    know which simulator runs the deck."""
+    assert not values_equal("{-2**2}", "4", 1e-6)
+    assert not values_equal("{-2**2}", "-4", 1e-6)
+    assert values_equal("{2**2}", "4", 1e-6)
 
 
 def test_a_comma_separated_list_reads_each_number():

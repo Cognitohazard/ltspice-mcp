@@ -83,7 +83,7 @@ def _power(
     is 1 in both builds. A zero base with a negative exponent gives no power
     (26 takes 1e200 and XVII 1e308), so it is declined. A negative base with
     a fractional exponent is 0 in LTspice 26, and XVII refuses the deck
-    ("invalid exponentiation range"); ``ltspice_build`` says which build reads
+    ("invalid exponentiation range"); the build argument says which build reads
     the deck, and with none known it is declined.
 
     ngspice: a zero base with a zero or negative exponent differs by mode
@@ -150,7 +150,7 @@ def _parenthesised(source: bytes, node: ast.expr) -> bool:
 #: An element's value with no braces that is one number or one name, with a
 #: sign or none: any other such value LTspice reads as one parameter name.
 _BARE_VALUE = re.compile(
-    r"[+-]?\s*(?:[^\W\d]\w*|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[^\W\d_]*+\w*)"
+    r"[+-]?\s*(?:[^\W\d]\w*|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?[^\W\d_]*+\w*)"
 )
 
 
@@ -184,7 +184,7 @@ def evaluate(
     one name LTspice reads as one parameter name, and refuses (recorded:
     ``deck/expr_grid_bare``), so the reader declines it too.
 
-    ``ltspice_build`` is the recorded LTspice build that reads the deck
+    The build argument is the recorded LTspice build that reads the deck
     (``LTSPICE_26``, ``LTSPICE_XVII``), or None when it is not known: where
     the builds compute a power differently, it decides (``_power``).
 
@@ -284,7 +284,7 @@ def evaluate(
 class Environment:
     """Lexical environment with caller-evaluated overrides and lazy dependencies.
 
-    ``simulator``, ``ngbehavior`` and ``ltspice_build`` are who reads the
+    The simulator, its ngspice mode and the LTspice build are who reads the
     expressions, as ``evaluate`` takes them: the mode is required for ngspice."""
 
     def __init__(

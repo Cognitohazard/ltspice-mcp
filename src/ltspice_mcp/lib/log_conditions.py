@@ -559,6 +559,17 @@ _RULES: tuple[_Rule, ...] = (
 
 _SEVERITY = re.compile(r"^(Fatal Error|Error|ERROR|Warning|WARNING|Note)\b")
 
+
+def severity_word(line: str) -> str | None:
+    """The severity word a simulator's own diagnostic line starts with, in the
+    case it prints it (``WARNING``, ``Error``, ``Fatal Error``...), or None for
+    a line that starts with none. The match is case-sensitive: both LTspice
+    builds print a measurement's name in lower case on its result line
+    (recorded: log/meas_grid_name_upper, where T_UP prints as t_up), so a
+    measurement named ``error`` is no diagnostic."""
+    m = _SEVERITY.match(line.strip())
+    return None if m is None else m[1]
+
 #: How strong each word ``_SEVERITY`` reads is, for a condition written with
 #: more than one: its severity is the strongest.
 _SEVERITY_RANK: dict[str, int] = {
@@ -766,7 +777,7 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
     channel: Channel
     for channel in ("log", "console"):
         for code, block in _occurrences(channels.get(channel) or "", rules):
-            words = [m[1] for line in block if (m := _SEVERITY.match(line.strip())) is not None]
+            words = [word for line in block if (word := severity_word(line)) is not None]
             strongest = max(words, key=_SEVERITY_RANK.__getitem__, default=None)
             text = _held("\n".join(block))
             entry = entries.get((code, channel))

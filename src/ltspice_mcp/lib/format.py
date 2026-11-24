@@ -205,7 +205,7 @@ def parse_spice_value(s: str) -> float:
             holds more than one token. ``inf`` and ``nan`` are no numbers:
             LTspice 26 refuses them and XVII takes 0.
     """
-    s = s.strip().rstrip("),")
+    s = _token(s)
 
     if _PLAIN_NUMBER_RE.fullmatch(s):
         return _finite(s)
@@ -245,6 +245,15 @@ def parse_spice_value(s: str) -> float:
                 "(1.55k, not 1.5k5)"
             )
     return _finite(mantissa, multiplier)
+
+
+def _token(s: str) -> str:
+    """``s`` without its surrounding space and without one closing parenthesis
+    or comma at its end, which is no part of a number: both LTspice builds read
+    ``PWL(0 0 1u 1m)`` as ending in 1 mV (recorded: raw/compress_1mv). Only one
+    is dropped; what LTspice makes of ``1e3))`` is not recorded."""
+    s = s.strip()
+    return s[:-1] if s[-1:] in (")", ",") else s
 
 
 def _finite(number: str, scale: float = 1.0) -> float:
@@ -298,10 +307,13 @@ def parse_plain_value(s: str) -> float:
     ``1N4148`` is not a number here. For a caller that tells a value from a
     name; ``parse_spice_value`` is the reading of a value LTspice will run.
 
+    A closing parenthesis or a comma after it is no part of it, as for
+    ``parse_spice_value``.
+
     Raises:
         ValueError: If ``s`` is not written that way.
     """
-    s = s.strip()
+    s = _token(s)
     if _PLAIN_NUMBER_RE.fullmatch(s):
         return _finite(s)
     m = _LETTER_TAIL_RE.match(s)

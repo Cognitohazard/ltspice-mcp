@@ -24,7 +24,7 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
-from ltspice_mcp.lib.log_conditions import classify_channels, log_lines, rules_for
+from ltspice_mcp.lib.log_conditions import classify_channels, log_lines, rules_for, severity_word
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
@@ -1228,13 +1228,6 @@ _RE_MEAS_RESULT_LINE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# The words a simulator's own diagnostic line starts with, in the case it
-# prints them. Both LTspice builds print a measurement's name in lower case on
-# its result line (recorded: log/meas_grid_name_upper, where T_UP prints as
-# t_up), so ``WARNING: Can't resolve .param p1=(-8)**(1/3)`` (XVII, recorded:
-# deck/pow_neg_base_cube_root) is a warning and no result of a measurement
-# named warning.
-_DIAGNOSTIC_WORDS = frozenset({"WARNING", "Warning", "ERROR", "Error"})
 
 # The heading of a stepped run's table for one measurement.
 _RE_MEAS_HEADING = re.compile(r"^Measurement:[ \t]*(?P<name>\S+)")
@@ -1263,7 +1256,9 @@ def _printed_on(line: str) -> tuple[str, PrintedMeasurement] | None:
     if (
         result is not None
         and result["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS
-        and result["name"] not in _DIAGNOSTIC_WORDS
+        # A diagnostic such as XVII's ``WARNING: Can't resolve .param ...``
+        # (recorded: deck/pow_neg_base_cube_root) is no measurement's result.
+        and severity_word(line) is None
     ):
         return result["name"], PrintedMeasurement(
             result[0].strip(), result["value"] or result["word"]

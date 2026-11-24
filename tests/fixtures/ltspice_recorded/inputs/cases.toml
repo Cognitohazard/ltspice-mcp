@@ -434,7 +434,7 @@ inputs = [
 
 [behaviour.expression-grid]
 summary = "The cells of the expression-value grid (at the end of this file) that no other recording fills: each arithmetic operator over a positive, a negative and a zero operand on each side; ** and the caret over a positive, zero and negative base to a whole, negative, zero and fractional exponent; a unary minus and plus; chains of minus, of division and of powers, a negated power, a negated name as an exponent, precedence and parentheses; and the same sum written in quotes, in braces in braces, with no braces and in a .param. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/hierarchy_expr.py", "lib/hierarchy.py", "lib/hierarchy_expr.py:evaluate", "lib/hierarchy_expr.py:_power", "lib/hierarchy_expr.py:Environment", "lib/netlist_graph.py:values_equal"]
+model = ["lib/hierarchy_expr.py", "lib/hierarchy.py", "lib/hierarchy_expr.py:evaluate", "lib/hierarchy_expr.py:_power", "lib/hierarchy_expr.py:Environment", "lib/netlist_graph.py", "lib/netlist_graph.py:values_equal"]
 # Each source's value is one expression over the parameters the deck's first
 # .param sets, so the voltage of its node in the .op raw is what LTspice
 # computed. A division by zero, a power that may have no real value, and a
