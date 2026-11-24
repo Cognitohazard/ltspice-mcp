@@ -3591,6 +3591,81 @@ at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
 PhaseMargin_1 = {}
 GainMargin_1 = { not_a_number = "infdB" }
 
+# A .op measured with FIND and no point: LTspice 26 prints the operating
+# point's value; XVII refuses the card ("FIND can not be evaluated over an
+# interval.") and prints no measurement.
+[[grid.printed-measurement.cell]]
+cases = ["deck/card_grid_directive_variants_lower", "deck/card_grid_directive_variants_upper"]
+at = { analysis = "op", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice17 = "XVII refuses the card: FIND can not be evaluated over an interval." }
+[grid.printed-measurement.cell.items]
+m03 = "find"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/card_grid_directives_lower", "deck/card_grid_directives_upper"]
+at = { analysis = "op", stepped = "yes", outcome = "value", printed = "line" }
+refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." }
+[grid.printed-measurement.cell.items]
+m08 = { form = "find", printed_once = { step = 1, of = 2 } }
+
+# A stepped run in which one measurement fails in every step and another
+# reads 0 in every step.
+[[grid.printed-measurement.cell]]
+cases = ["log/cond_grid_step_meas_failed"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+before = "max"
+never = { form = "when", level = "number", outcome = "failed", printed = "failed" }
+after = { form = "min", outcome = "step_zero", steps = [1, 2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/cond_grid_step_meas_unsaved"]
+at = { analysis = "tran", stepped = "yes", outcome = "failed", printed = "failed" }
+[grid.printed-measurement.cell.items]
+vfinal = { form = "find_at", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." } }
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_subckt_dotted"]
+at = { analysis = "tran", stepped = "no", outcome = "failed", printed = "failed" }
+[grid.printed-measurement.cell.items]
+vmid = { form = "find_at", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." } }
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/layout_grid_text_tran_param"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+vfinal = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/layout_grid_text_ac_param"]
+at = { analysis = "ac", stepped = "yes", outcome = "value", printed = "table", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+fc = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/layout_grid_text_dc_no"]
+at = { analysis = "dc", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vmid = "find_at"
+
+# Stepped .fra runs' loop margins. Where the loop's gain never crosses 0 dB
+# in a step, LTspice 26 prints the phase margin inf° there.
+[[grid.printed-measurement.cell]]
+cases = ["raw/layout_grid_fra_source", "raw/layout_grid_text_fra_param", "raw/layout_grid_text_fra_source"]
+at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.printed-measurement.cell.items]
+PhaseMargin_1 = {}
+GainMargin_1 = { not_a_number = "infdB" }
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/layout_grid_fra_model", "raw/layout_grid_fra_temp", "raw/layout_grid_text_fra_model", "raw/layout_grid_text_fra_temp"]
+at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.printed-measurement.cell.items]
+PhaseMargin_1 = { not_a_number = "inf°" }
+GainMargin_1 = { not_a_number = "infdB" }
+
 # Cells written to be recorded (behaviour log-meas-grid, pending) -------------
 
 [[grid.printed-measurement.cell]]
@@ -3672,15 +3747,19 @@ param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tran_find"]
 at = { analysis = "tran", stepped = "no", printed = "line", outcome = "value" }
+refused = { ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." }
 [grid.printed-measurement.cell.items]
 find_v = "find"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tran_step_find"]
 at = { analysis = "tran", stepped = "yes", printed = "table" }
+refused = { ltspice17 = "XVII prints no result of a FIND with no point over a sweep." }
 [grid.printed-measurement.cell.items]
-find_v = { form = "find", outcome = "value" }
-find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+# The sweep starts where V(out) is 0, so a FIND with no point reads 0 in
+# every step.
+find_v = { form = "find", outcome = "step_zero", steps = [1, 2] }
+find_sz = { form = "find", outcome = "step_zero", steps = [1, 2] }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_ac_value"]
@@ -3701,16 +3780,16 @@ max_v = "max"
 cases = ["log/meas_grid_ac_failed"]
 at = { analysis = "ac", stepped = "no", printed = "line", complex_format = "default", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-max_f = { form = "max", printed = "failed" }
-min_f = { form = "min", printed = "failed" }
-pp_f = { form = "pp", printed = "failed" }
-avg_f = { form = "avg", printed = "failed" }
-rms_f = { form = "rms", printed = "failed" }
-integ_f = { form = "integ", printed = "failed" }
-find_at_f = { form = "find_at", printed = "failed" }
+max_f = { form = "max", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
+min_f = { form = "min", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
+pp_f = { form = "pp", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
+avg_f = { form = "avg", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
+rms_f = { form = "rms", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
+integ_f = { form = "integ", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
+find_at_f = { form = "find_at", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
 find_when_f = { form = "find_when", printed = "failed" }
 when_f = { form = "when", printed = "failed", level = "number" }
-deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_at_f = { form = "deriv_at", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "line" } } }
 deriv_when_f = { form = "deriv_when", printed = "failed" }
 trig_targ_f = { form = "trig_targ", printed = "failed" }
 param_f = { form = "param", printed = "failed" }
@@ -3735,16 +3814,16 @@ param_v = "param"
 cases = ["log/meas_grid_ac_step_failed"]
 at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-max_f = { form = "max", printed = "failed" }
-min_f = { form = "min", printed = "failed" }
-pp_f = { form = "pp", printed = "failed" }
-avg_f = { form = "avg", printed = "failed" }
-rms_f = { form = "rms", printed = "failed" }
-integ_f = { form = "integ", printed = "failed" }
-find_at_f = { form = "find_at", printed = "failed" }
+max_f = { form = "max", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
+min_f = { form = "min", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
+pp_f = { form = "pp", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
+avg_f = { form = "avg", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
+rms_f = { form = "rms", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
+integ_f = { form = "integ", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
+find_at_f = { form = "find_at", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
 find_when_f = { form = "find_when", printed = "failed" }
 when_f = { form = "when", printed = "failed", level = "number" }
-deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_at_f = { form = "deriv_at", printed = "failed", on = { ltspice17 = { outcome = "value", printed = "table" } } }
 deriv_when_f = { form = "deriv_when", printed = "failed" }
 trig_targ_f = { form = "trig_targ", printed = "failed" }
 param_f = { form = "param", printed = "failed" }
@@ -3782,12 +3861,14 @@ param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_ac_find"]
 at = { analysis = "ac", stepped = "no", printed = "line", complex_format = "default", outcome = "value" }
+refused = { ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." }
 [grid.printed-measurement.cell.items]
 find_v = "find"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_ac_step_find"]
 at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default" }
+refused = { ltspice17 = "XVII prints no result of a FIND with no point over a sweep." }
 [grid.printed-measurement.cell.items]
 find_v = { form = "find", outcome = "value" }
 find_sz = { form = "find", outcome = "step_zero", steps = [2] }
@@ -3842,7 +3923,7 @@ find_when_v = "find_when"
 when_v = { form = "when", level = "number" }
 deriv_at_v = "deriv_at"
 deriv_when_v = "deriv_when"
-trig_targ_v = "trig_targ"
+trig_targ_v = { form = "trig_targ", outcome = "step_fails", steps = [2] }
 param_v = "param"
 
 [[grid.printed-measurement.cell]]
@@ -3897,15 +3978,19 @@ param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_dc_find"]
 at = { analysis = "dc", stepped = "no", printed = "line", outcome = "value" }
+refused = { ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." }
 [grid.printed-measurement.cell.items]
 find_v = "find"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_dc_step_find"]
 at = { analysis = "dc", stepped = "yes", printed = "table" }
+refused = { ltspice17 = "XVII prints no result of a FIND with no point over a sweep." }
 [grid.printed-measurement.cell.items]
-find_v = { form = "find", outcome = "value" }
-find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+# The sweep starts where V(out) is 0, so a FIND with no point reads 0 in
+# every step.
+find_v = { form = "find", outcome = "step_zero", steps = [1, 2] }
+find_sz = { form = "find", outcome = "step_zero", steps = [1, 2] }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_noise_value"]
@@ -3918,11 +4003,11 @@ avg_v = "avg"
 rms_v = "rms"
 integ_v = "integ"
 find_at_v = "find_at"
-find_when_v = "find_when"
-when_v = { form = "when", level = "number" }
+find_when_v = { form = "find_when", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+when_v = { form = "when", level = "number", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 deriv_at_v = "deriv_at"
-deriv_when_v = "deriv_when"
-trig_targ_v = { form = "trig_targ", printed = "line_bare" }
+deriv_when_v = { form = "deriv_when", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_v = { form = "trig_targ", printed = "line_bare", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 param_v = "param"
 
 [[grid.printed-measurement.cell]]
@@ -3954,11 +4039,11 @@ avg_v = "avg"
 rms_v = "rms"
 integ_v = "integ"
 find_at_v = "find_at"
-find_when_v = "find_when"
-when_v = { form = "when", level = "number" }
+find_when_v = { form = "find_when", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+when_v = { form = "when", level = "number", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 deriv_at_v = "deriv_at"
-deriv_when_v = "deriv_when"
-trig_targ_v = "trig_targ"
+deriv_when_v = { form = "deriv_when", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_v = { form = "trig_targ", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 param_v = "param"
 
 [[grid.printed-measurement.cell]]
@@ -4012,466 +4097,508 @@ param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_noise_find"]
 at = { analysis = "noise", stepped = "no", printed = "line", outcome = "value" }
+refused = { ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." }
 [grid.printed-measurement.cell.items]
 find_v = "find"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_noise_step_find"]
 at = { analysis = "noise", stepped = "yes", printed = "table" }
+refused = { ltspice17 = "XVII prints no result of a FIND with no point over a sweep." }
 [grid.printed-measurement.cell.items]
 find_v = { form = "find", outcome = "value" }
 find_sz = { form = "find", outcome = "step_zero", steps = [2] }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_max"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-max_v = { form = "max", outcome = "value" }
-max_f = { form = "max", outcome = "failed", printed = "failed" }
+max_v = "max"
+max_f = "max"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_min"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-min_v = { form = "min", outcome = "value" }
-min_f = { form = "min", outcome = "failed", printed = "failed" }
+min_v = "min"
+min_f = "min"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_pp"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-pp_v = { form = "pp", outcome = "value" }
-pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+pp_v = "pp"
+pp_f = "pp"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_avg"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-avg_v = { form = "avg", outcome = "value" }
-avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+avg_v = "avg"
+avg_f = "avg"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_rms"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-rms_v = { form = "rms", outcome = "value" }
-rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+rms_v = "rms"
+rms_f = "rms"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_integ"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-integ_v = { form = "integ", outcome = "value" }
-integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+integ_v = "integ"
+integ_f = "integ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_find_at"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_at_v = { form = "find_at", outcome = "value" }
-find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
+find_at_v = "find_at"
+find_at_f = "find_at"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_find_when"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-find_when_v = { form = "find_when", outcome = "value" }
-find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
+find_when_v = "find_when"
+find_when_f = "find_when"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_when"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-when_v = { form = "when", outcome = "value", level = "number" }
-when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
-param_f = { form = "param", outcome = "failed", printed = "failed" }
+when_v = { form = "when", level = "number" }
+when_f = { form = "when", level = "number" }
+param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_deriv_at"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = { form = "deriv_at", outcome = "value" }
-deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+deriv_at_v = "deriv_at"
+deriv_at_f = "deriv_at"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_deriv_when"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-deriv_when_v = { form = "deriv_when", outcome = "value" }
-deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+deriv_when_v = "deriv_when"
+deriv_when_f = "deriv_when"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_trig_targ"]
-at = { analysis = "op", stepped = "no", printed = "line" }
+at = { analysis = "op", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-trig_targ_v = { form = "trig_targ", outcome = "value", printed = "line_bare" }
-trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+trig_targ_v = "trig_targ"
+trig_targ_f = "trig_targ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_find"]
 at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_v = "find"
-param_v = "param"
+find_v = { form = "find", refused = { ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval." } }
+param_v = { form = "param", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 
+# Of a stepped .op, LTspice 26 fails each MAX, MIN, PP, AVG, RMS and INTEG, and
+# XVII prints a line for each, measured across the stepped values.
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_max"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
+on = { ltspice26 = { outcome = "failed", printed = "failed" } }
 [grid.printed-measurement.cell.items]
-max_v = { form = "max", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-max_f = { form = "max", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+max_v = "max"
+max_f = "max"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_min"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
+on = { ltspice26 = { outcome = "failed", printed = "failed" } }
 [grid.printed-measurement.cell.items]
-min_v = { form = "min", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-min_f = { form = "min", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+min_v = "min"
+min_f = "min"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_pp"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
+on = { ltspice26 = { outcome = "failed", printed = "failed" } }
 [grid.printed-measurement.cell.items]
-pp_v = { form = "pp", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-pp_f = { form = "pp", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+pp_v = "pp"
+pp_f = "pp"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_avg"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
+on = { ltspice26 = { outcome = "failed", printed = "failed" } }
 [grid.printed-measurement.cell.items]
-avg_v = { form = "avg", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-avg_f = { form = "avg", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+avg_v = "avg"
+avg_f = "avg"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_rms"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
+on = { ltspice26 = { outcome = "failed", printed = "failed" } }
 [grid.printed-measurement.cell.items]
-rms_v = { form = "rms", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-rms_f = { form = "rms", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+rms_v = "rms"
+rms_f = "rms"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_integ"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
+on = { ltspice26 = { outcome = "failed", printed = "failed" } }
 [grid.printed-measurement.cell.items]
-integ_v = { form = "integ", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-integ_f = { form = "integ", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+integ_v = "integ"
+integ_f = "integ"
 
+# A point outside the stepped values (AT 5 of steps 1 and 2) fails on LTspice
+# 26; XVII extrapolates.
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_find_at"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_at_v = { form = "find_at", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-find_at_f = { form = "find_at", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+find_at_v = "find_at"
+find_at_f = { form = "find_at", on = { ltspice26 = { outcome = "failed", printed = "failed" } } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_find_when"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-find_when_v = { form = "find_when", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-find_when_f = { form = "find_when", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+find_when_v = "find_when"
+find_when_f = "find_when"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_when"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-when_v = { form = "when", outcome = "value", level = "number", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-when_f = { form = "when", outcome = "failed", printed = "failed", level = "number", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-param_f = { form = "param", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+when_v = { form = "when", level = "number" }
+when_f = { form = "when", level = "number" }
+param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_deriv_at"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = { form = "deriv_at", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+deriv_at_v = "deriv_at"
+deriv_at_f = { form = "deriv_at", on = { ltspice26 = { outcome = "failed", printed = "failed" } } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_deriv_when"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-deriv_when_v = { form = "deriv_when", outcome = "value", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+deriv_when_v = "deriv_when"
+deriv_when_f = "deriv_when"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_trig_targ"]
-at = { analysis = "op", stepped = "yes", printed = "line" }
+at = { analysis = "op", stepped = "yes", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-trig_targ_v = { form = "trig_targ", outcome = "value", printed = "line_bare", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+trig_targ_v = "trig_targ"
+trig_targ_f = "trig_targ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_find"]
 at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_v = { form = "find", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-param_v = { form = "param", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+find_v = { form = "find", printed_once = { step = 1, of = 2 }, refused = { ltspice17 = "XVII prints nothing for a FIND with no point of a stepped .op." } }
+param_v = { form = "param", printed_once = { step = 1, of = 2 }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 
+# In an unstepped .tf both builds measure a form over an interval or at a
+# point as though the transfer function were its own axis: MAX FROM 2 TO 3
+# prints 3 and FIND AT 5 prints 5 where the deck's transfer function is 0.8,
+# and a point or interval outside it is not a failure. AVG, RMS and INTEG
+# differ between the builds (LTspice 26 prints AVG 0 FROM 0 TO 1, XVII 0.5).
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_max"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-max_v = { form = "max", outcome = "value" }
-max_f = { form = "max", outcome = "failed", printed = "failed" }
+max_v = "max"
+max_f = "max"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_min"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-min_v = { form = "min", outcome = "value" }
-min_f = { form = "min", outcome = "failed", printed = "failed" }
+min_v = "min"
+min_f = "min"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_pp"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-pp_v = { form = "pp", outcome = "value" }
-pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+pp_v = "pp"
+pp_f = "pp"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_avg"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-avg_v = { form = "avg", outcome = "value" }
-avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+avg_v = "avg"
+avg_f = "avg"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_rms"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-rms_v = { form = "rms", outcome = "value" }
-rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+rms_v = "rms"
+rms_f = "rms"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_integ"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-integ_v = { form = "integ", outcome = "value" }
-integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+integ_v = "integ"
+integ_f = "integ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_find_at"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_at_v = { form = "find_at", outcome = "value" }
-find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
+find_at_v = "find_at"
+find_at_f = "find_at"
 
+# A WHEN of a sweepless .tf fails on both builds, at a level the transfer
+# function holds as well as at one it does not.
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_find_when"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-find_when_v = { form = "find_when", outcome = "value" }
-find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
+find_when_v = { form = "find_when" }
+find_when_f = { form = "find_when" }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_when"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-when_v = { form = "when", outcome = "value", level = "number" }
-when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
-param_f = { form = "param", outcome = "failed", printed = "failed" }
+when_v = { form = "when", level = "number" }
+when_f = { form = "when", level = "number" }
+param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_deriv_at"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = { form = "deriv_at", outcome = "value" }
-deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+deriv_at_v = "deriv_at"
+deriv_at_f = "deriv_at"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_deriv_when"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-deriv_when_v = { form = "deriv_when", outcome = "value" }
-deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+deriv_when_v = "deriv_when"
+deriv_when_f = "deriv_when"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_trig_targ"]
-at = { analysis = "tf", stepped = "no", printed = "line" }
+at = { analysis = "tf", stepped = "no", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-trig_targ_v = { form = "trig_targ", outcome = "value", printed = "line_bare" }
-trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+trig_targ_v = "trig_targ"
+trig_targ_f = "trig_targ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_find"]
 at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_v = "find"
-param_v = "param"
+find_v = { form = "find", refused = { ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval, and prints no value." } }
+param_v = { form = "param", on = { ltspice17 = { printed = "failed", outcome = "failed" } } }
 
+# Of a stepped .tf, LTspice 26 fails a form over an interval, and XVII prints
+# one line, no table, measured over the step number as the axis: with
+# transfer functions 0.8 and 0.888889 in steps 1 and 2, MAX FROM 0 TO 1
+# prints 0.8, MIN FROM 0 TO 1 0.711111 and FIND AT 5 1.15556. LTspice 26
+# reads a point the same way, and fails one past the last step.
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_max"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+on = { ltspice17 = { printed = "line", outcome = "value" } }
 [grid.printed-measurement.cell.items]
-max_v = { form = "max", outcome = "value" }
-max_f = { form = "max", outcome = "failed", printed = "failed" }
+max_v = "max"
+max_f = "max"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_min"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+on = { ltspice17 = { printed = "line", outcome = "value" } }
 [grid.printed-measurement.cell.items]
-min_v = { form = "min", outcome = "value" }
-min_f = { form = "min", outcome = "failed", printed = "failed" }
+min_v = "min"
+min_f = "min"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_pp"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+on = { ltspice17 = { printed = "line", outcome = "value" } }
 [grid.printed-measurement.cell.items]
-pp_v = { form = "pp", outcome = "value", zero_by_form = true }
-pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+pp_v = "pp"
+pp_f = "pp"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_avg"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+on = { ltspice17 = { printed = "line", outcome = "value" } }
 [grid.printed-measurement.cell.items]
-avg_v = { form = "avg", outcome = "value" }
-avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+avg_v = "avg"
+avg_f = "avg"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_rms"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+on = { ltspice17 = { printed = "line", outcome = "value" } }
 [grid.printed-measurement.cell.items]
-rms_v = { form = "rms", outcome = "value" }
-rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+rms_v = "rms"
+rms_f = "rms"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_integ"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+on = { ltspice17 = { printed = "line", outcome = "value" } }
 [grid.printed-measurement.cell.items]
-integ_v = { form = "integ", outcome = "value" }
-integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+integ_v = "integ"
+integ_f = "integ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_find_at"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_at_v = { form = "find_at", outcome = "value" }
-find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
-
-[[grid.printed-measurement.cell]]
-cases = ["log/meas_grid_tf_step_find_when"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
-[grid.printed-measurement.cell.items]
-find_when_v = { form = "find_when", outcome = "value" }
-find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
-
-[[grid.printed-measurement.cell]]
-cases = ["log/meas_grid_tf_step_when"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
-[grid.printed-measurement.cell.items]
-when_v = { form = "when", outcome = "value", level = "number" }
-when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
-param_f = { form = "param", outcome = "failed", printed = "failed" }
+find_at_v = { form = "find_at", printed_once = { step = 1, of = 2 } }
+find_at_f = { form = "find_at", outcome = "failed", printed = "failed", on = { ltspice17 = { printed = "line", outcome = "value" } } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_deriv_at"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = { form = "deriv_at", outcome = "value", zero_by_form = true }
-deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+deriv_at_v = "deriv_at"
+deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed", on = { ltspice17 = { printed = "line", outcome = "value" } } }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_find_when"]
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_when_v = "find_when"
+find_when_f = "find_when"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_when"]
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+when_v = { form = "when", level = "number" }
+when_f = { form = "when", level = "number" }
+param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_deriv_when"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-deriv_when_v = { form = "deriv_when", outcome = "value", zero_by_form = true }
-deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+deriv_when_v = "deriv_when"
+deriv_when_f = "deriv_when"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_trig_targ"]
-at = { analysis = "tf", stepped = "yes", printed = "table" }
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
 [grid.printed-measurement.cell.items]
-trig_targ_v = { form = "trig_targ", outcome = "value", zero_by_form = true }
-trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+trig_targ_v = "trig_targ"
+trig_targ_f = "trig_targ"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_find"]
-at = { analysis = "tf", stepped = "yes", printed = "table", outcome = "value" }
+at = { analysis = "tf", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_v = "find"
-param_v = "param"
+find_v = { form = "find", printed_once = { step = 1, of = 2 }, refused = { ltspice17 = "XVII prints nothing for a FIND with no point in a stepped .tf." } }
+param_v = { form = "param", printed_once = { step = 1, of = 2 }, on = { ltspice17 = { printed = "failed", outcome = "failed" } } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tran_find_failed"]
 at = { analysis = "tran", stepped = "no", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tran_step_find_failed"]
 at = { analysis = "tran", stepped = "yes", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII prints no result of a FIND with no point over a sweep." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_ac_find_failed"]
 at = { analysis = "ac", stepped = "no", printed = "failed", complex_format = "default", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_ac_step_find_failed"]
 at = { analysis = "ac", stepped = "yes", printed = "failed", complex_format = "default", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII prints no result of a FIND with no point over a sweep." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_dc_find_failed"]
 at = { analysis = "dc", stepped = "no", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_dc_step_find_failed"]
 at = { analysis = "dc", stepped = "yes", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII prints no result of a FIND with no point over a sweep." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_noise_find_failed"]
 at = { analysis = "noise", stepped = "no", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval and prints no result." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_noise_step_find_failed"]
 at = { analysis = "noise", stepped = "yes", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f measures a voltage the run did not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save.", ltspice17 = "XVII prints no result of a FIND with no point over a sweep." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_find_failed"]
 at = { analysis = "op", stepped = "no", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f names a voltage the run does not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 refuses the deck: the card names a voltage the run does not save.", ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_op_step_find_failed"]
 at = { analysis = "op", stepped = "yes", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: find_f names a voltage the run does not save." }
 [grid.printed-measurement.cell.items]
-find_f = { form = "find", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
-param_f = { form = "param", refused = { ltspice17 = "XVII prints no measurement of a stepped .op (log/meas_step_op)." } }
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 refuses the deck: the card names a voltage the run does not save.", ltspice17 = "XVII prints nothing for a FIND with no point of a stepped .op." } }
+param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_find_failed"]
 at = { analysis = "tf", stepped = "no", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: the FIND names a voltage the run does not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at the card: the voltage is not found.", ltspice17 = "XVII reports that a FIND with no point cannot be evaluated over an interval, and prints no value." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_find_failed"]
 at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: the FIND names a voltage the run does not save." }
 [grid.printed-measurement.cell.items]
-find_f = "find"
+find_f = { form = "find", refused = { ltspice26 = "LTspice 26 stops at the card: the voltage is not found.", ltspice17 = "XVII prints nothing for a FIND with no point in a stepped .tf." } }
 param_f = "param"
 
 [[grid.printed-measurement.cell]]
@@ -4536,7 +4663,7 @@ at = { analysis = "tran", stepped = "yes", outcome = "value", name = "reserved" 
 refused = { ltspice26 = "LTspice 26 refuses the deck: e is a reserved name." }
 [grid.printed-measurement.cell.items]
 e = { form = "max", printed = "table", refused = { ltspice26 = "LTspice 26 refuses the deck: e is a reserved name (log/meas_name_e).", ltspice17 = "XVII reports e as a reserved name and takes the other measurements (log/meas_name_e)." } }
-after = { form = "min", name = "plain", printed = "table" }
+after = { form = "min", name = "plain", printed = "table", outcome = "step_zero", steps = [1, 2] }
 
 # The condition a log line states --------------------------------------------
 
