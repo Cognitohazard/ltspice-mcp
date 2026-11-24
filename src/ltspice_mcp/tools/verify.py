@@ -270,6 +270,32 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
             "name on export (Xd as X§Xd or XXd). Not a difference."
         ),
     },
+    "components_ambiguous": {
+        "type": "array",
+        CUT: ITEMS,
+        "items": {
+            "type": "object",
+            "properties": {
+                "before": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The parts in the baseline, as written.",
+                },
+                "after": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The parts in the compared deck, as written.",
+                },
+                "subckt": _SCOPE_FIELD,
+            },
+            "required": ["before", "after"],
+        },
+        "description": (
+            "Parts not compared because their name without LTspice's § stands for "
+            "more than one part on a side (R§Load and RL§oad against RLoad), so which "
+            "is which is not known. A difference."
+        ),
+    },
     "components_changed": {
         "type": "array",
         CUT: ITEMS,
@@ -843,8 +869,33 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "items": _RENAMED_INSTANCE_SCHEMA,
             "description": (
                 "equivalence: subcircuit instances matched across the X LTspice puts "
-                "before an instance name on export (Xe as X§Xe, read XXe). Not a "
+                "before an instance name on export (Xe as X§Xe or XXe). Not a "
                 "difference."
+            ),
+        },
+        "ambiguous": {
+            "type": "array",
+            CUT: ITEMS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "reference_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The parts in the reference, as written.",
+                    },
+                    "candidate_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The parts in this circuit, as written.",
+                    },
+                },
+                "required": ["reference_refs", "candidate_refs"],
+            },
+            "description": (
+                "equivalence: parts not compared because their name without LTspice's § "
+                "stands for more than one part on a side, so which is which is not "
+                "known. Makes 'equivalent' false."
             ),
         },
         "retyped": {

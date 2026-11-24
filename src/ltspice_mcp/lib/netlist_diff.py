@@ -38,10 +38,11 @@ Two rules keep the delta quiet when nothing changed:
   disagree about what the model is.
 
 Components are matched by reference within a scope the way the equivalence mode
-matches them (``netlist_graph.canon_ref``), and across the ``X`` LTspice puts
-before a subcircuit instance's name on export
-(``netlist_graph.rekey_across_added_x``), which is listed as a rename and is not
-a difference. They are compared on their model or value plus their instance
+matches them (``netlist_graph.pair_parts``): as written first, then without
+LTspice's ``§`` instance marker, then across the ``X`` LTspice puts before a
+subcircuit instance's name on export, which is listed as a rename and is not a
+difference. Parts that pair only without the marker, where that name stands for
+more than one part on a side, are listed as ambiguous and not compared. They are compared on their model or value plus their instance
 parameters. Nodes are left out: equivalence is the mode that compares wiring,
 and the delta's ``not_compared`` says so. The export's ``diff_vs_prior`` adds
 the pins moved to another net, read from that wiring comparison
@@ -67,7 +68,8 @@ from ltspice_mcp.lib.netlist_graph import (
     NetlistGraph,
     canon_ref,
     compare_graphs,
-    rekey_across_added_x,
+    pair_parts,
+    part_key,
 )
 from ltspice_mcp.lib.spice_lex import (
     AS_WRITTEN,
@@ -226,9 +228,9 @@ class Scope:
     definition, nested ones each their own.
 
     ``names`` are the definitions it is inside as written, outermost first.
-    ``components`` maps a reference as the equivalence mode matches it
-    (``canon_ref``: LTspice's ``§`` instance marker dropped, case folded) to
-    the reference as written and its signature. ``directives`` are its own
+    ``components`` maps a reference's key within its deck
+    (``netlist_graph.part_key``: as written, case folded) to the reference as
+    written and its signature. ``directives`` are its own
     directive cards. ``definitions`` holds the opener and closer of each
     definition in it, by its name case-folded: they are compared with its
     directives unless that name is not compared (``Deck.unread``).
@@ -347,7 +349,7 @@ def read_deck(source: str | Path | StoredDeck) -> Deck:
                 if (key, bounds[i]) not in twice and (directive := _directive_of(card)):
                     scope.definitions.setdefault(bounds[i], []).append(directive)
             elif card.kind == "instance" and card.name:
-                scope.components[canon_ref(card.name)] = (card.name, instance_signature(card))
+                scope.components[part_key(card.name)] = (card.name, instance_signature(card))
             elif (directive := _directive_of(card)) is not None:
                 scope.directives.append(directive)
                 if card.kind == "directive" and directive_head(card) in INCLUDE_HEADS:
@@ -479,13 +481,16 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     in ``(in .subckt NAME)``, an object carries ``subckt``, nested
     definitions joined with ``/``. ``components_renamed`` lists the
     components matched only across LTspice's added ``X``; it is the one list
-    here that is not a difference. ``not_compared`` says what was not
+    here that is not a difference. ``components_ambiguous`` lists parts left
+    unpaired because their name without LTspice's ``§`` stands for more than
+    one part on a side (``netlist_graph.pair_parts``). ``not_compared`` says what was not
     compared: a definition either deck gives more than once in one scope, and
     included files' cards.
     """
     added: list[str] = []
     removed: list[str] = []
     renamed: list[dict[str, str]] = []
+    ambiguous: list[dict[str, str | list[str]]] = []
     changed: list[dict[str, str]] = []
     directives_added: list[str] = []
     directives_removed: list[str] = []
@@ -502,10 +507,15 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
         suffix = _in(scope)
         where = {"subckt": scope.label} if scope.names else {}
         a = before.components if before else {}
-        b, paired = rekey_across_added_x(a, after.components if after else {})
+        pairing = pair_parts(a, after.components if after else {})
+        a, b = pairing.reference, pairing.candidate
+        ambiguous += [
+            {"before": [r[0] for r in refs], "after": [c[0] for c in cands], **where}
+            for refs, cands in pairing.ambiguous
+        ]
         added += sorted(b[ref][0] + suffix for ref in b.keys() - a.keys())
         removed += sorted(a[ref][0] + suffix for ref in a.keys() - b.keys())
-        renamed += [{"before": a[ref][0], "after": b[ref][0], **where} for ref in paired]
+        renamed += [{"before": a[ref][0], "after": b[ref][0], **where} for ref in pairing.across_x]
         changed += [
             {"reference": b[ref][0], **where, "before": a[ref][1], "after": b[ref][1]}
             for ref in sorted(a.keys() & b.keys())
@@ -542,6 +552,7 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
         "components_added": added,
         "components_removed": removed,
         "components_renamed": renamed,
+        "components_ambiguous": ambiguous,
         "components_changed": changed,
         "directives_added": directives_added,
         "directives_removed": directives_removed,
@@ -622,7 +633,7 @@ def connection_delta(
         and sorted(before) == sorted(after)
     }
     moved = {
-        (canon_ref(ref), pin): {"reference": ref, "pin": pin, "before": before, "after": after}
+        (part_key(ref), pin): {"reference": ref, "pin": pin, "before": before, "after": after}
         for ref, pin, before, after in rows
         if before != after and (before in anchored or after in anchored) and ref not in turned
     }

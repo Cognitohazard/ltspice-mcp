@@ -595,8 +595,8 @@ def test_the_probe_pattern_rule_catches_what_it_names():
 # An instance card is matched by its reference in its scope
 # --------------------------------------------------------------------------
 
-#: The functions that key a lexed card by its reference (``canon_ref`` of its
-#: ``name``), each with what keeps the scope in the key. Two elements of one
+#: The functions that key a lexed card by its reference (``canon_ref`` or
+#: ``part_key`` of its ``name``), each with what keeps the scope in the key. Two elements of one
 #: reference in two definitions are two elements; a reader that keys every
 #: card of a deck by its bare reference merges them, the last one read
 #: winning, and once answered "no change" for a real one.
@@ -614,7 +614,7 @@ def _keys_a_card_by_reference(function: ast.AST) -> bool:
     return any(
         isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
-        and call.func.id == "canon_ref"
+        and call.func.id in ("canon_ref", "part_key")
         and call.args
         and isinstance(call.args[0], ast.Attribute)
         and call.args[0].attr in ("name", "instance_ref")

@@ -157,6 +157,13 @@ class SheetPart:
         )
 
     @property
+    def element_known(self) -> bool:
+        """Whether :attr:`element` is the letter the part netlists as: it is
+        when the part has its own ``Prefix`` or its symbol is usable, and is
+        only a guess from the reference when neither is so."""
+        return bool(self.attribute(INSTANCE_PREFIX)) or self.usable
+
+    @property
     def spice_model(self) -> str:
         """The model the part's ``SpiceModel`` attribute selects, or ``""``."""
         return self.attribute("SpiceModel") or ""

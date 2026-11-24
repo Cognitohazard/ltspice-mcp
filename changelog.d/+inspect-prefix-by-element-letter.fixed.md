@@ -1,0 +1,1 @@
+`inspect(kind="components")` on a schematic filters `prefix` by each part's element letter, the letter of the card LTspice exports, instead of the start of its name, so a resistor named `Mload` is listed under `R`. A part whose letter cannot be read from its symbol is named under `letter_unknown`.

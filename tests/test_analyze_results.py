@@ -3651,3 +3651,52 @@ async def test_a_summary_that_caps_its_signal_list_names_the_call_that_lists_the
         if cursor is None:
             break
     assert listed == names
+
+
+#: Every recipe that reads a stepped results file, one per kind of reader.
+_STEPPED_RAW_RECIPES = [
+    {"key": "value", "metric": "value", "expr": "V(out)", "at": "500u"},
+    {"key": "stats", "metric": "signal_stats", "signal": "V(out)"},
+    {"key": "edges", "metric": "edges", "signal": "V(out)"},
+    {"key": "periodic", "metric": "periodic", "signal": "V(out)"},
+    {"key": "thd", "metric": "thd", "signal": "V(out)"},
+    {"key": "wave", "metric": "waveform", "signals": ["V(out)"], "max_points": 5},
+]
+
+
+def _first_step_note(data: dict[str, Any]) -> dict[str, Any]:
+    (note,) = [o for o in data.get("observations", []) if o["code"] == "first_step_read"]
+    return note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recipe", _STEPPED_RAW_RECIPES, ids=lambda r: r["metric"])
+@pytest.mark.parametrize("route", ["handler", "python_api"])
+async def test_a_stepped_result_read_at_no_named_step_says_it_read_step_0_of_how_many(
+    state_no_sim: SessionState, work_dir: Path, recipe: dict[str, Any], route: str
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    if route == "handler":
+        data = await _analyze(state_no_sim, raw, [recipe])
+    else:
+        data = await asyncio.to_thread(
+            SyncApi(state_no_sim).analyze_results,
+            sources=[_source(raw)],
+            recipes=[recipe],
+        )
+    rows = data["results"][recipe["key"]]["values"]
+    assert rows and {row["step_index"] for row in rows} == {0}
+    note = _first_step_note(data)
+    assert note["evidence"] == {"step_index": 0, "step_counts": {"dut": 3}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection", [{"step": {"axis": "r", "value": 22}}, {"all_steps": True}], ids=["step", "all_steps"]
+)
+async def test_a_named_step_or_every_step_adds_no_first_step_note(
+    state_no_sim: SessionState, work_dir: Path, selection: dict[str, Any]
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    data = await _analyze(state_no_sim, raw, [_STEPPED_RAW_RECIPES[0]], **selection)
+    assert not [o for o in data.get("observations", []) if o["code"] == "first_step_read"]

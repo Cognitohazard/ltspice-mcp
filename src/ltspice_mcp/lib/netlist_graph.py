@@ -86,10 +86,10 @@ verdict is unaffected.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.asc_document import is_asc
@@ -211,7 +211,9 @@ class Component:
     """One element instance, projected out of a lexed card.
 
     ``ref`` has the LTspice ``§`` marker stripped but otherwise preserves source
-    spelling; matching is case-insensitive (:func:`canon_ref`). ``nodes`` are
+    spelling; ``written`` is the reference as the card writes it, ``§``
+    included, which is what pairs parts across two decks (:func:`pair_parts`)
+    and names them in a comparison. ``nodes`` are
     canonicalized net names (ground folded to ``0``, lowercased; in a
     subcircuit body, a port named like ground keeps its name). ``type_letter``
     is the uppercased element prefix. ``model`` is the model / subcircuit name
@@ -227,6 +229,7 @@ class Component:
     model: str | None
     value: str | None
     params: tuple[tuple[str, str], ...]
+    written: str
     line: int = 0
 
 
@@ -358,7 +361,8 @@ class NetlistGraph:
 class FlatComponent:
     """A leaf component after hierarchy flattening.
 
-    ``ref`` is the hierarchical device path (``X1.M2``); ``nodes`` are the
+    ``ref`` is the hierarchical device path (``X1.M2``), and ``written`` the
+    same path as the cards write it (``Component.written``); ``nodes`` are the
     flattened net names (internal subcircuit nets carry a unique
     ``<instance-path>/<net>`` name so distinct instances never collide).
     """
@@ -369,6 +373,7 @@ class FlatComponent:
     model: str | None
     value: str | None
     params: tuple[tuple[str, str], ...]
+    written: str
 
 
 @dataclass(frozen=True)
@@ -382,6 +387,8 @@ class FlatCall:
     ref: str
     definition: str
     params: tuple[tuple[str, str], ...]
+    #: ``ref`` as the cards write it (``Component.written``).
+    written: str
 
 
 @dataclass(frozen=True)
@@ -411,6 +418,17 @@ class ComponentDelta:
     ref: str
     type_letter: str
     detail: str
+
+
+@dataclass(frozen=True)
+class AmbiguousParts:
+    """Parts that pair only by their name without LTspice's ``§``, where that
+    name stands for more than one part on a side (``R§Load`` and ``RL§oad``
+    against ``RLoad``): which is which is not known, so none of them is
+    compared, and the two decks are not called equivalent."""
+
+    reference_refs: list[str]
+    candidate_refs: list[str]
 
 
 @dataclass(frozen=True)
@@ -546,6 +564,7 @@ class GraphComparison:
     removed: list[ComponentDelta] = field(default_factory=list)
     # Fact-level, like the subckt facts below: a pairing, not a difference.
     renamed: list[RenamedInstance] = field(default_factory=list)
+    ambiguous: list[AmbiguousParts] = field(default_factory=list)
     retyped: list[RetypeDiff] = field(default_factory=list)
     value_mismatches: list[ValueDiff] = field(default_factory=list)
     param_mismatches: list[ParamDiff] = field(default_factory=list)
@@ -571,6 +590,7 @@ class GraphComparison:
             "added": [vars(d) for d in self.added],
             "removed": [vars(d) for d in self.removed],
             "renamed": [vars(d) for d in self.renamed],
+            "ambiguous": [vars(d) for d in self.ambiguous],
             "retyped": [vars(d) for d in self.retyped],
             "value_mismatches": [vars(d) for d in self.value_mismatches],
             "param_mismatches": [vars(d) for d in self.param_mismatches],
@@ -626,9 +646,18 @@ def canon_net(name: str, reader: SemanticProfile, ports: Sequence[str] = ()) -> 
 
 
 def canon_ref(ref: str) -> str:
-    """Canonicalize a reference for matching: drop the ``§`` marker
-    (``without_section_sign``), folded (``device_names.fold_name``)."""
+    """A reference without the ``§`` marker (``without_section_sign``),
+    folded (``device_names.fold_name``): the name an LTspice export and its
+    ngspice copy share. Two parts of one deck can share it, so pairing parts
+    asks :func:`pair_parts`."""
     return fold_name(without_section_sign(ref).strip())
+
+
+def part_key(ref: str) -> str:
+    """A reference as written, folded (``device_names.fold_name``): the key a
+    part has within its deck, where ``RLoad`` and ``R§Load`` are two parts.
+    :func:`pair_parts` takes maps keyed by it."""
+    return fold_name(ref.strip())
 
 
 def _normalize_value_text(text: str) -> str:
@@ -1200,6 +1229,7 @@ def _component_from_card(
         ),
         params=tuple(line.param_pairs()),
         line=getattr(card, "line_start", 0),
+        written=line.ref,
     )
 
 
@@ -1242,6 +1272,7 @@ def _flatten(
             comp,
             graph.subckts,
             path=(),
+            written=(),
             net_map=None,
             global_nets=graph.global_nets,
             reader=graph.reader,
@@ -1266,6 +1297,7 @@ def _expand(
     subckts: dict[str, SubcktDef],
     *,
     path: tuple[str, ...],
+    written: tuple[str, ...],
     net_map: dict[str, str] | None,
     global_nets: frozenset[str],
     reader: SemanticProfile,
@@ -1280,7 +1312,8 @@ def _expand(
     ``net_map`` translates a net name as written inside the current subcircuit
     body to its flattened name; ``None`` at the top level means identity. ``path``
     is the chain of enclosing instance refs (for hierarchical naming and unique
-    internal-net keys). ``unresolved`` collects the names of subcircuits an ``X``
+    internal-net keys), and ``written`` the same chain as the cards write it.
+    ``unresolved`` collects the names of subcircuits an ``X``
     asked for but nothing defined.
 
     With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`;
@@ -1311,7 +1344,7 @@ def _expand(
                     ),
                     line=comp.line,
                 )
-            ref = path_text((*path, comp.ref))
+            ref = path_text((*written, comp.written))
             arity.append(
                 ArityError(
                     ref=ref,
@@ -1340,6 +1373,7 @@ def _expand(
                 model=comp.model,
                 value=comp.value,
                 params=comp.params,
+                written=path_text((*written, comp.written)),
             )
         )
         return
@@ -1347,13 +1381,22 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     child_path = (*path, comp.ref)
-    calls.append(FlatCall(path_text(child_path), model_key, _passed(sub, comp.params)))
+    child_written = (*written, comp.written)
+    calls.append(
+        FlatCall(
+            path_text(child_path),
+            model_key,
+            _passed(sub, comp.params),
+            written=path_text(child_written),
+        )
+    )
     child_map = _build_child_net_map(sub, flat_nodes, path_text(child_path), global_nets, reader)
     for child in sub.components:
         _expand(
             child,
             subckts,
             path=child_path,
+            written=child_written,
             net_map=child_map,
             global_nets=global_nets,
             reader=reader,
@@ -1452,20 +1495,26 @@ def compare_graphs(
     result.anchor_violations.extend(_check_anchors(ref_flat, cand_flat, colors, anchor_set))
 
     # --- per-component diffs, by reference-name matching ----------------------
-    ref_by_ref = {canon_ref(c.ref): c for c in ref_flat.components}
-    cand_by_ref = {canon_ref(c.ref): c for c in cand_flat.components}
-    cand_by_ref, paired = rekey_across_added_x(ref_by_ref, cand_by_ref)
-    result.renamed = _renamed_instances(ref_by_ref, cand_by_ref, paired)
+    pairing = pair_parts(
+        {part_key(c.written): c for c in ref_flat.components},
+        {part_key(c.written): c for c in cand_flat.components},
+    )
+    ref_by_ref, cand_by_ref = pairing.reference, pairing.candidate
+    result.renamed = _renamed_instances(ref_by_ref, cand_by_ref, pairing.across_x)
+    result.ambiguous = [
+        AmbiguousParts([c.written for c in refs], [c.written for c in cands])
+        for refs, cands in pairing.ambiguous
+    ]
 
     for key, rc in ref_by_ref.items():
         if key not in cand_by_ref:
             result.removed.append(
-                ComponentDelta(ref=rc.ref, type_letter=rc.type_letter, detail=_describe(rc))
+                ComponentDelta(ref=rc.written, type_letter=rc.type_letter, detail=_describe(rc))
             )
     for key, cc in cand_by_ref.items():
         if key not in ref_by_ref:
             result.added.append(
-                ComponentDelta(ref=cc.ref, type_letter=cc.type_letter, detail=_describe(cc))
+                ComponentDelta(ref=cc.written, type_letter=cc.type_letter, detail=_describe(cc))
             )
 
     for key in ref_by_ref.keys() & cand_by_ref.keys():
@@ -1475,7 +1524,7 @@ def compare_graphs(
     # body's values read, so an instance both sides have compares them too.
     result.calls = paired_calls(ref_flat, cand_flat)
     for ref_call, cand_call in result.calls:
-        _diff_params(ref_call.ref, ref_call.params, cand_call.params, rtol, result)
+        _diff_params(ref_call.written, ref_call.params, cand_call.params, rtol, result)
 
     # --- named node-partition mismatches, via reference-keyed propagation -----
     result.node_partition_mismatches.extend(
@@ -1493,13 +1542,14 @@ def compare_graphs(
             for key, values in copies_by_name(comp.params).items():
                 if len(values) > 1:
                     result.duplicate_params.append(
-                        DuplicateParam(comp.ref, subckt, side, key, tuple(values))
+                        DuplicateParam(comp.written, subckt, side, key, tuple(values))
                     )
 
     result.equivalent = (
         result.structurally_equivalent
         and not result.added
         and not result.removed
+        and not result.ambiguous
         and not result.retyped
         and not result.value_mismatches
         and not result.param_mismatches
@@ -1513,37 +1563,77 @@ def compare_graphs(
 _V = TypeVar("_V")
 
 
-def rekey_across_added_x(
-    reference: Mapping[str, object], candidate: Mapping[str, _V]
-) -> tuple[dict[str, _V], list[str]]:
-    """``candidate`` with each key that matches a reference key only across
-    LTspice's added ``X`` re-keyed to that reference key, and those keys.
+@dataclass
+class PartPairing(Generic[_V]):
+    """Which parts of two decks are one part (:func:`pair_parts`).
 
-    LTspice exports a subcircuit symbol's instance with an ``X`` before its
-    name whatever the name is: ``Xe`` is ``X§Xe`` from LTspice 24 on and ``XXe``
-    from XVII, where a netlist written by hand names it ``Xe``. Keys are
-    :func:`canon_ref` keys, hierarchical ones included. Only keys left unmatched
-    by name on both sides are paired, and only one to one, so a netlist that
-    really holds both ``Xe`` and ``XXe`` is compared by name. The re-keyed
-    reference keys come back sorted.
+    ``candidate`` is keyed by the reference key of the part it pairs with.
+    ``across_x`` are the reference keys paired only across LTspice's added
+    ``X`` (a rename). ``ambiguous`` holds the parts left out of both maps,
+    per side, because a name without the ``§`` stands for more than one of
+    them on a side.
     """
 
-    def unmatched(keys: Iterable[str], others: Mapping[str, object]) -> dict[str, list[str]]:
+    reference: dict[str, _V]
+    candidate: dict[str, _V]
+    across_x: list[str]
+    ambiguous: list[tuple[list[_V], list[_V]]]
+
+
+def pair_parts(reference: Mapping[str, _V], candidate: Mapping[str, _V]) -> PartPairing[_V]:
+    """Which parts of two decks are one part, from maps keyed by
+    :func:`part_key`, hierarchical keys (``x1.r§load``) included.
+
+    LTspice exports a part named ``Load`` drawn with a resistor symbol as
+    ``R§Load``, and an ngspice copy of that deck names it ``RLoad``
+    (recorded: ``deck/section_sign_utf8``); a subcircuit symbol's instance
+    ``Xe`` is exported as ``XXe`` or ``X§Xe``, where a netlist written by
+    hand names it ``Xe``. So a part pairs by its key first. A part left
+    unpaired then pairs by its name without the ``§`` (:func:`canon_ref`),
+    one to one; where that name stands for more than one unpaired part on a
+    side, none of them pairs and they are returned as ambiguous. A part
+    still unpaired pairs across the added ``X`` (``without_added_x``), one
+    to one, so a netlist that really holds both ``Xe`` and ``XXe`` is
+    compared by name.
+
+    A variation target answers this differently: ``RLoad`` in a deck that
+    holds ``RLoad`` and ``R§Load`` names both and is refused
+    (``variations._DeckTargets.component_sites``), because an ngspice run
+    reads a copy in which both parts are ``RLoad``. Pinned by
+    ``test_a_target_two_parts_answer_to_is_refused_where_a_comparison_pairs_by_exact_name``.
+    """
+    ref = dict(reference)
+    cand = dict(candidate)
+
+    def unmatched(
+        side: Mapping[str, _V], other: Mapping[str, _V], fold: Callable[[str], str]
+    ) -> dict[str, list[str]]:
         grouped: dict[str, list[str]] = {}
-        for key in keys:
-            if key not in others:
-                grouped.setdefault(without_added_x(key), []).append(key)
+        for key in side:
+            if key not in other:
+                grouped.setdefault(fold(key), []).append(key)
         return grouped
 
-    by_reference = unmatched(reference, candidate)
-    rekeyed = dict(candidate)
+    ambiguous: list[tuple[list[_V], list[_V]]] = []
+    by_reference = unmatched(ref, cand, canon_ref)
+    for name, cand_keys in unmatched(cand, ref, canon_ref).items():
+        ref_keys = by_reference.get(name, [])
+        if len(ref_keys) == 1 and len(cand_keys) == 1:
+            cand[ref_keys[0]] = cand.pop(cand_keys[0])
+        elif ref_keys:
+            ambiguous.append(([ref.pop(k) for k in ref_keys], [cand.pop(k) for k in cand_keys]))
+
+    def across_x(key: str) -> str:
+        return without_added_x(canon_ref(key))
+
+    by_reference = unmatched(ref, cand, across_x)
     paired: list[str] = []
-    for stripped, cand_keys in unmatched(candidate, reference).items():
-        ref_keys = by_reference.get(stripped, [])
-        if len(cand_keys) == 1 and len(ref_keys) == 1:
-            rekeyed[ref_keys[0]] = rekeyed.pop(cand_keys[0])
+    for name, cand_keys in unmatched(cand, ref, across_x).items():
+        ref_keys = by_reference.get(name, [])
+        if len(ref_keys) == 1 and len(cand_keys) == 1:
+            cand[ref_keys[0]] = cand.pop(cand_keys[0])
             paired.append(ref_keys[0])
-    return rekeyed, sorted(paired)
+    return PartPairing(ref, cand, sorted(paired), ambiguous)
 
 
 def _cards_in_use(graph: NetlistGraph) -> list[tuple[str | None, Component]]:
@@ -1569,7 +1659,7 @@ def _renamed_instances(
     renamed: dict[tuple[str, str], RenamedInstance] = {}
     for key in paired:
         segments = zip(
-            ref_by_ref[key].ref.split("."), cand_by_ref[key].ref.split("."), strict=False
+            ref_by_ref[key].written.split("."), cand_by_ref[key].written.split("."), strict=False
         )
         for ref_seg, cand_seg in segments:
             if canon_ref(ref_seg) != canon_ref(cand_seg):
@@ -1684,7 +1774,7 @@ def _diff_matched_pair(
     """Populate retype / arity / value / param diffs for one matched pair."""
     if len(rc.nodes) != len(cc.nodes):
         detail = (
-            f"{rc.ref} has {len(rc.nodes)} terminal(s) in the reference "
+            f"{rc.written} has {len(rc.nodes)} terminal(s) in the reference "
             f"({', '.join(rc.nodes)}) and {len(cc.nodes)} in the candidate "
             f"({', '.join(cc.nodes)})."
         )
@@ -1692,7 +1782,7 @@ def _diff_matched_pair(
             detail += _THREE_NODE_MOSFET
         result.arity_errors.append(
             ArityError(
-                ref=rc.ref,
+                ref=rc.written,
                 reference_arity=len(rc.nodes),
                 candidate_arity=len(cc.nodes),
                 detail=detail,
@@ -1701,16 +1791,16 @@ def _diff_matched_pair(
     if _type_signature(rc).lower() != _type_signature(cc).lower():
         result.retyped.append(
             RetypeDiff(
-                ref=rc.ref,
+                ref=rc.written,
                 reference_type=_type_signature(rc),
                 candidate_type=_type_signature(cc),
             )
         )
     if not values_equal(rc.value, cc.value, rtol):
         result.value_mismatches.append(
-            ValueDiff(ref=rc.ref, reference_value=rc.value, candidate_value=cc.value)
+            ValueDiff(ref=rc.written, reference_value=rc.value, candidate_value=cc.value)
         )
-    _diff_params(rc.ref, rc.params, cc.params, rtol, result)
+    _diff_params(rc.written, rc.params, cc.params, rtol, result)
 
 
 def _passed(
@@ -1750,11 +1840,14 @@ def paired_calls(
     reference: FlatNetlist, candidate: FlatNetlist
 ) -> list[tuple[FlatCall, FlatCall]]:
     """The subcircuit instances both sides expand, paired by path as the
-    leaves are (``canon_ref``, across the ``X`` LTspice adds), in path order:
+    leaves are (:func:`pair_parts`), in path order:
     what tells which definition on one side stands for which on the other,
     whatever each is named."""
-    ref = {canon_ref(call.ref): call for call in reference.calls}
-    cand, _ = rekey_across_added_x(ref, {canon_ref(call.ref): call for call in candidate.calls})
+    pairing = pair_parts(
+        {part_key(call.written): call for call in reference.calls},
+        {part_key(call.written): call for call in candidate.calls},
+    )
+    ref, cand = pairing.reference, pairing.candidate
     return [(ref[key], cand[key]) for key in sorted(ref.keys() & cand.keys())]
 
 
@@ -1807,7 +1900,7 @@ def _wl_refine(ref: FlatNetlist, cand: FlatNetlist) -> dict[tuple[str, str], int
             pins.setdefault(nid, [])
             init[nid] = ("gnd",) if net == _GROUND else ("net",)
         for comp in flat.components:
-            cid = (comp_side, canon_ref(comp.ref))
+            cid = (comp_side, part_key(comp.written))
             pins.setdefault(cid, [])
             init[cid] = ("comp", str(len(comp.nodes)))
             for idx, net in enumerate(comp.nodes):
@@ -1844,8 +1937,8 @@ def _histograms_match(
     ref: FlatNetlist, cand: FlatNetlist, colors: dict[tuple[str, str], int]
 ) -> bool:
     """1-WL necessary condition: component and net color multisets must match."""
-    ref_comp = Counter(colors[("rc", canon_ref(c.ref))] for c in ref.components)
-    cand_comp = Counter(colors[("cc", canon_ref(c.ref))] for c in cand.components)
+    ref_comp = Counter(colors[("rc", part_key(c.written))] for c in ref.components)
+    cand_comp = Counter(colors[("cc", part_key(c.written))] for c in cand.components)
     if ref_comp != cand_comp:
         return False
     ref_net = Counter(colors[("rn", n)] for n in ref.nets)
@@ -1961,7 +2054,7 @@ def _propagate_partition(
 
     for rc, cc in ordered:
         for idx, (rnet, cnet) in enumerate(zip(rc.nodes, cc.nodes, strict=True)):
-            equate(rnet, cnet, rc.ref, idx)
+            equate(rnet, cnet, rc.written, idx)
 
     # Fixpoint over symmetric passives. A resistor's two terminals are
     # interchangeable, so the orientation is fixed by whichever terminal is
@@ -1987,7 +2080,7 @@ def _propagate_partition(
                 if fwd.get(rnet) == cnet and bwd.get(cnet) == rnet:
                     continue  # already established, no work
                 fresh = rnet not in fwd and cnet not in bwd
-                equate(rnet, cnet, rc.ref, idx)
+                equate(rnet, cnet, rc.written, idx)
                 if fresh and fwd.get(rnet) == cnet:
                     changed = True
 

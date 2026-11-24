@@ -492,8 +492,7 @@ def section_sign_names(ref: str) -> tuple[str, ...]:
     """The other names of an instance LTspice exported with its section sign.
 
     ``R§Load`` is ``RLoad`` without the marker, as an ngspice copy of the deck
-    names it (``without_section_sign``) and ``verify_circuit`` reports it, and
-    ``Load``, the part's own name on the sheet, which LTspice's results use
+    names it (``without_section_sign``), and ``Load``, the part's own name on the sheet, which LTspice's results use
     (``I(Load)``, recorded ``deck/section_sign_*``). A reference without the
     marker has no other name.
     """

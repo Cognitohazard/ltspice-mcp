@@ -164,6 +164,7 @@ from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.export_nets import exported_name
 from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.hierarchy import (
     SUPPORTED_FAMILIES,
@@ -725,7 +726,12 @@ class ComponentsQuery(StrictModel):
 
     kind: Literal["components"]
     path: str = Field(min_length=1, description=_CIRCUIT_PATH_DESCRIPTION)
-    prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
+    prefix: str | None = Field(
+        default=None,
+        description=_PREFIX_DESCRIPTION
+        + " On a .asc, a part's reference here is its netlist name, which starts"
+        " with its element letter.",
+    )
     detail: Literal["list", "full"] = Field(
         default="list",
         description=(
@@ -2011,13 +2017,24 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     identity = {"path": str(path), "prefix": prefix, "detail": detail}
     digest: str | None = None
     lex_notes: list[str] = []
+    letter_unknown: list[str] = []
 
     if _route_circuit_kind(path, "components") == "asc":
         sheet, digest = await _sheet_of_file(path, state)
         # By reference; two parts of one reference both listed, in file order.
         parts = sorted(sheet.parts, key=lambda part: part.reference)
         if prefix is not None:
-            parts = [part for part in parts if matches_prefix(part.reference, prefix)]
+            # A part matches by the name its exported card carries, whose
+            # first letter is its element letter (``Load`` on a resistor
+            # symbol is ``RLoad``), as a netlist's card does; a part whose
+            # letter is not known is named apart instead.
+            letter_unknown = [part.reference for part in parts if not part.element_known]
+            parts = [
+                part
+                for part in parts
+                if part.element_known
+                and matches_prefix(exported_name(part.reference, part.element), prefix)
+            ]
         page = _paginate(parts, "components", identity, q.cursor, [path], view)
         rows = [_component_row(part, detail) for part in page["items"]]
         lex_notes = sheet.unread_notes(
@@ -2046,6 +2063,8 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     }
     if digest is not None:
         data["sha256"] = digest
+    if letter_unknown:
+        data["letter_unknown"] = letter_unknown
     if lex_notes:
         # Every page of this deck carries them: they describe the read the rows
         # came out of, and a caller who pages past the first one is reading the
@@ -3191,6 +3210,17 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             **_OPEN_DESIGNS_DATA_PROPERTIES,
                             **_MEASUREMENTS_DATA_PROPERTIES,
                             "values_read_otherwise": stored_values.SUMMARIES_SCHEMA,
+                            "letter_unknown": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                CUT: NEVER,
+                                "description": (
+                                    "components with a prefix on a .asc: the parts whose "
+                                    "element letter is not known, since neither the part nor "
+                                    "a symbol found for it gives a Prefix. The prefix could "
+                                    "not be applied to them, so they are not listed."
+                                ),
+                            },
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
                             "dialect": {"type": "string"},

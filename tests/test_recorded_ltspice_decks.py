@@ -509,6 +509,23 @@ def test_a_name_holding_two_section_signs_is_one_name_without_them(tmp_path: Pat
     assert not comparison.renamed, comparison
 
 
+def test_a_target_two_parts_answer_to_is_refused_where_a_comparison_pairs_by_exact_name(
+    tmp_path: Path,
+):
+    """In a deck holding ``RLoad`` and LTspice's ``R§Load``, the target
+    ``RLoad`` names both parts, since the deck an ngspice run reads calls
+    both ``RLoad``; a comparison of two such decks pairs ``RLoad`` with the
+    part written ``RLoad`` and reports its change under that name."""
+    text = deck_text("deck/section_sign_utf8").replace(".op", "RLoad a 0 3k\n.op")
+    with pytest.raises(VariationError) as exc:
+        variant_values(text, tmp_path / "load.cir", "RLoad", tmp_path / "out")
+    assert exc.value.code == "ambiguous_target"
+    changed = text.replace("RLoad a 0 3k", "RLoad a 0 4k")
+    comparison = compare_graphs(text, changed, reader=LTSPICE_READER)
+    assert [m.ref for m in comparison.value_mismatches] == ["RLoad"]
+    assert not comparison.ambiguous
+
+
 def test_a_name_two_parts_answer_to_is_refused(tmp_path: Path):
     """``RLoad`` is both a part and the other name of ``R§Load``, which an
     ngspice copy would also call ``RLoad``: no target can mean one of them."""

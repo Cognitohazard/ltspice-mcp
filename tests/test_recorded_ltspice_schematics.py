@@ -2721,3 +2721,30 @@ def test_an_a_device_pin_on_nothing_is_exported_as_ground(build: str, tmp_path: 
     assert {pin for group in modelled if len(group) == 1 for pin in group} >= (
         OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY
     )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", ["export/load_name_op", "export/instance_prefix"])
+async def test_a_prefix_lists_the_parts_whose_exported_card_has_that_letter(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``inspect``'s ``prefix`` on a sheet lists the same parts per element
+    letter as the export LTspice wrote of it: ``Load`` on a resistor is an R
+    (``R§Load``), a resistor with its own Prefix X is an X (``X§R2``) and a
+    block with its own Prefix R is an R (``R§U1``)."""
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    exported = list(rec.export_instances(build, case_id))
+    for letter in sorted({name[0] for name in exported}):
+        data = await inspect_one(
+            state_no_sim, {"kind": "components", "path": str(sheet), "prefix": letter}
+        )
+        listed = [row["reference"].casefold() for row in data.get("components", [])]
+        assert "letter_unknown" not in data
+        cards = sorted(
+            name
+            for reference in listed
+            for name in exported
+            if name[0] == letter and name in (reference, letter + reference)
+        )
+        assert cards == sorted(name for name in exported if name[0] == letter), letter
+        assert len(listed) == len(cards), letter

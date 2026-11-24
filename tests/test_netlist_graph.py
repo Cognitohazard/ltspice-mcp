@@ -434,7 +434,8 @@ def test_pdk_export_compares_equal_to_itself() -> None:
 def test_pdk_fet_widening_is_a_param_mismatch() -> None:
     widened = PDK_WRAPPED.replace("W=10u L=2u", "W=20u L=2u")
     result = compare_graphs(PDK_WRAPPED, widened, anchors=["VDD5"], reader=LTSPICE_READER)
-    assert any(p.ref == "XMB1" and p.key == "w" for p in result.param_mismatches)
+    # Named as the deck writes it.
+    assert any(p.ref == "X§MB1" and p.key == "w" for p in result.param_mismatches)
     assert result.equivalent is False
 
 
@@ -855,15 +856,15 @@ R2 m q 1k
 
 def test_an_instance_ltspice_exported_with_an_added_x_is_a_rename() -> None:
     """``Xe`` written by hand and ``X§Xe`` as LTspice 24 and later export it
-    are one instance: its leaves pair, and the rename is named once, without
-    the marker, as every comparison reference is."""
+    are one instance: its leaves pair, and the rename is named once, as each
+    deck writes it."""
     written = f"* t\nVin in 0 5\nXe in 0 HALF\n{_HALVES}.end\n"
     exported = f"* t\nVin in 0 5\nX§Xe in 0 HALF\n{_HALVES}.end\n"
     result = compare_graphs(written, exported, reader=LTSPICE_READER)
     assert (result.added, result.removed) == ([], [])
-    assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [("Xe", "XXe")]
+    assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [("Xe", "X§Xe")]
     assert result.equivalent
-    assert result.as_dict()["renamed"] == [{"reference_ref": "Xe", "candidate_ref": "XXe"}]
+    assert result.as_dict()["renamed"] == [{"reference_ref": "Xe", "candidate_ref": "X§Xe"}]
 
 
 def test_a_netlist_holding_both_spellings_is_compared_by_name() -> None:

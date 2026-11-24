@@ -211,7 +211,7 @@ extra = ["export/res.asy"]
 
 [behaviour.export-instance-names]
 summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own, and what a run's raw calls such a resistor's current."
-model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py", "lib/trace_names.py", "lib/trace_names.py:find_trace"]
+model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py", "lib/trace_names.py", "lib/trace_names.py:find_trace", "lib/netlist_diff.py", "lib/variations.py", "tools/verify.py", "tools/inspect_tools.py", "lib/export_nets.py"]
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
@@ -259,7 +259,7 @@ pending = "Written where no LTspice runs: record on Windows with scripts/record_
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
-model = ["lib/schematic_ops.py"]
+model = ["lib/schematic_ops.py", "lib/sheet.py", "lib/export_nets.py", "tools/inspect_tools.py"]
 inputs = ["export/instance_prefix.asc"]
 extra = ["export/res.asy", "export/cell4.asy"]
 
@@ -887,7 +887,7 @@ inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir", "deck/subckt_mu
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
-model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py", "lib/step_values.py", "lib/recipes.py", "lib/raw_header.py", "lib/result_kinds.py", "lib/log_parser.py:read_step_line", "lib/raw_decode.py:_step_facts", "lib/step_values.py:step_axis_key", "lib/step_values.py:same_step_value", "lib/step_values.py:steps_with", "lib/step_values.py:step_with", "lib/recipes.py:StepSelector", "lib/raw_header.py:leading_parameters", "lib/result_kinds.py:sampled_axis", "lib/result_kinds.py:stepped_kind"]
+model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py", "lib/step_values.py", "lib/recipes.py", "lib/raw_header.py", "lib/result_kinds.py", "lib/log_parser.py:read_step_line", "lib/raw_decode.py:_step_facts", "lib/step_values.py:step_axis_key", "lib/step_values.py:same_step_value", "lib/step_values.py:steps_with", "lib/step_values.py:step_with", "lib/recipes.py:StepSelector", "tools/analyze.py", "lib/raw_header.py:leading_parameters", "lib/result_kinds.py:sampled_axis", "lib/result_kinds.py:stepped_kind"]
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
 [behaviour.step-value-digits]

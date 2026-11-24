@@ -1654,6 +1654,8 @@ StepPlan = list[tuple[int, dict[str, Any]]]
 class _RawStepPlan:
     steps: StepPlan
     descriptor: PlotDescriptor
+    #: How many steps the results file holds.
+    count: int
 
 
 async def _step_plan(
@@ -1684,7 +1686,8 @@ async def _build_step_plan(
 ) -> _RawStepPlan:
     raw = await services.load_raw(source, state)
     step_values = [dict(step.parameters) for step in raw.descriptor.steps]
-    return _RawStepPlan(steps.plan(get_step_count(raw), step_values), raw.descriptor)
+    count = get_step_count(raw)
+    return _RawStepPlan(steps.plan(count, step_values), raw.descriptor, count)
 
 
 async def _measurement_step_plan(
@@ -4457,6 +4460,10 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
     ]
     if not_rechecked:
         observations.append(_not_rechecked(runs, not_rechecked))
+    if steps.step is None and not steps.all_steps:
+        first_only = _first_step_read(runs, step_plans)
+        if first_only is not None:
+            observations.append(first_only)
     if postcheck:
         failed_ids = set(postcheck)
         await asyncio.to_thread(
@@ -4544,6 +4551,34 @@ def _not_rechecked(runs: Sequence[_ResolvedRun], manifest_ids: Sequence[str]) ->
             "rows are as read, not confirmed unchanged since. Ask again for those sources, "
             "or with a larger analysis_budget_s, to check them."
         ),
+    )
+
+
+def _first_step_read(
+    runs: Sequence[_ResolvedRun],
+    step_plans: Mapping[tuple[_CaptureKey, int], _RawStepPlan],
+) -> Observation | None:
+    """The observation that a call naming no step read only the first step
+    of each stepped results file, with how many steps each holds; ``None``
+    when no recipe read a file of more than one step. A row's
+    ``step_index`` says which step it is; only this says there are others."""
+    counts: dict[str, int] = {}
+    for run in runs:
+        plan = step_plans.get((_capture_key(run.source), run.source.plot_index))
+        if plan is not None and plan.count > 1:
+            counts.setdefault(run.label, plan.count)
+    if not counts:
+        return None
+    named = ", ".join(f"{label} {count}" for label, count in counts.items())
+    return Observation(
+        code="first_step_read",
+        kind="coverage",
+        detail=(
+            f"The request named no step, so each recipe that read a results file read "
+            f"only step 0 of a stepped run (steps per source: {named}). Name one with "
+            "step, or set all_steps, to read the others."
+        ),
+        evidence={"step_index": 0, "step_counts": counts},
     )
 
 

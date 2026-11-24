@@ -1619,7 +1619,10 @@ way. A stepped run's row has `stats`, with `failed_measurements` and
 `unreadable` over all its steps.
 
 `step` and `all_steps` apply to the whole call, so every recipe reads the same
-iteration. `run_experiments`' attached `analyze` block takes
+iteration. With neither, a recipe that reads a results file reads its first
+step, and when any source read that way holds more than one step a
+`first_step_read` observation (kind `coverage`) names each with its step count
+(`evidence.step_counts`). `run_experiments`' attached `analyze` block takes
 the same two arguments (§3.1). Both are part of the request a stored answer
 answers, so a page reads the steps its first reply read.
 
@@ -2506,7 +2509,12 @@ cursors where listed:
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
-    but not L1. It is plain text; a wildcard is refused with the plain
+    but not L1. On a .asc a part's reference is matched as its exported
+    card names it, which starts with its element letter (`Load` on a
+    resistor symbol is `RLoad`, `Q1` with its own `Prefix` X is `XQ1`); a
+    part whose letter is not known, since neither it nor a symbol found
+    for it gives a `Prefix`, is not listed and is named in
+    `letter_unknown`. It is plain text; a wildcard is refused with the plain
     spelling to use. A netlist's components are the cards the simulator
     reads, as the net query's members are: neither the deck's first line,
     its title, nor a card after `.end`. They are the top level's cards; a

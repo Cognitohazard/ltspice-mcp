@@ -555,7 +555,14 @@ class _DeckTargets:
         another name of an instance exported as ``R§Load`` (``RLoad``, as an
         ngspice copy names it, or ``Load``, as LTspice's results do), so one
         target names the part on either simulator. A name that is one part's
-        reference and another's other name returns both, and is refused."""
+        reference and another's other name returns both, and is refused.
+
+        This differs from ``netlist_graph.pair_parts``, which pairs a part of
+        one deck with the part of another that bears its exact name first: a
+        target is applied to the deck the run reads, and an ngspice run reads
+        a copy without the ``§`` (``strip_instance_section_signs``), in which
+        ``RLoad`` and ``R§Load`` are both ``RLoad``. Pinned by
+        ``test_a_target_two_parts_answer_to_is_refused_where_a_comparison_pairs_by_exact_name``."""
         return [*self.components.get(folded, []), *self.aliases.get(folded, [])]
 
 

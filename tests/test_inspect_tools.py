@@ -1721,3 +1721,65 @@ class TestASheetReadOncePerCall:
         # A later call reads it again: nothing is kept between calls.
         await handle_inspect(InspectInput.model_validate({"queries": queries[:1]}), asc_state)
         assert len(reads) == 2
+
+
+#: A sheet whose part names start with a letter other than their element's:
+#: a resistor ``Mload``, a MOSFET ``Q1``, a block ``U1`` whose symbol has
+#: Prefix X, and ``Z9``, whose symbol is nowhere to be found.
+_MISNAMED_ASC = """Version 4
+SHEET 1 880 680
+SYMBOL res 96 96 R0
+SYMATTR InstName Mload
+SYMATTR Value 1k
+SYMBOL nmos 288 96 R0
+SYMATTR InstName Q1
+SYMATTR Value nch
+SYMBOL blk 480 96 R0
+SYMATTR InstName U1
+SYMBOL nosuch 672 96 R0
+SYMATTR InstName Z9
+"""
+
+_BLK_ASY = """Version 4
+SymbolType BLOCK
+RECTANGLE Normal -32 -32 32 32
+SYMATTR Prefix X
+SYMATTR Value blk
+PIN -32 0 LEFT 8
+PINATTR PinName a
+PINATTR SpiceOrder 1
+"""
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"), [("R", ["Mload"]), ("M", ["Q1"]), ("X", ["U1"]), ("Q", [])]
+)
+async def test_components_prefix_on_a_sheet_is_the_element_letter_not_the_name(
+    asc_state: SessionState, work_dir: Path, prefix: str, expected: list[str]
+):
+    """On a sheet the prefix matches the name each part's card carries, whose
+    first letter is its element letter, as it does on a netlist: a resistor
+    named ``Mload`` is an R, not an M. A part whose symbol is not found has no
+    known letter, so it is named apart instead of listed or dropped."""
+    (work_dir / "blk.asy").write_text(_BLK_ASY)
+    sheet = work_dir / "misnamed.asc"
+    sheet.write_text(_MISNAMED_ASC)
+
+    (res,) = await _run(asc_state, [{"kind": "components", "path": str(sheet), "prefix": prefix}])
+
+    assert res["ok"] is True, res
+    assert [c["reference"] for c in res["data"].get("components", [])] == expected
+    assert res["data"]["letter_unknown"] == ["Z9"]
+
+
+async def test_components_on_a_sheet_without_a_prefix_name_no_unknown_letter(
+    asc_state: SessionState, work_dir: Path
+):
+    (work_dir / "blk.asy").write_text(_BLK_ASY)
+    sheet = work_dir / "misnamed.asc"
+    sheet.write_text(_MISNAMED_ASC)
+
+    (res,) = await _run(asc_state, [{"kind": "components", "path": str(sheet)}])
+
+    assert {c["reference"] for c in res["data"]["components"]} == {"Mload", "Q1", "U1", "Z9"}
+    assert "letter_unknown" not in res["data"]
