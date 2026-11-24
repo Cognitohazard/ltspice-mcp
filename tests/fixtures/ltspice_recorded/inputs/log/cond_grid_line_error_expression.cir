@@ -1,0 +1,7 @@
+* a behavioural source whose expression has an operator with no operand
+V1 a 0 1
+R1 a 0 1k
+B1 b 0 V=V(a)+*2
+R2 b 0 1k
+.op
+.end

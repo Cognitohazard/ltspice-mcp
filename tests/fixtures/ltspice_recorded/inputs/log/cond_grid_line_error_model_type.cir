@@ -1,0 +1,6 @@
+* a model of a type LTspice does not have
+V1 a 0 1
+R1 a 0 1k
+.model mq frobnitz(a=1)
+.op
+.end

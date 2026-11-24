@@ -1369,6 +1369,13 @@ inputs = [
 ]
 keep = ["log", "raw"]
 
+[behaviour.log-line-error]
+summary = "Two faults of a deck that XVII should report as an error on a line followed by an explanation that names no unknown parameter or directive, which only the last of XVII's line-error rules takes: a model of a type LTspice does not have, and a behavioural source whose expression has an operator with no operand. Each fault has a deck of its own, since a fault may stop the run. What the cells declare is a prediction, which the recording settles."
+model = ["lib/log_conditions.py", "lib/log_parser.py", "lib/log_conditions.py:_RULES", "lib/log_conditions.py:log_lines", "lib/log_conditions.py:classify", "lib/log_conditions.py:rules_for", "lib/log_conditions.py:run_diagnostics", "lib/log_conditions.py:decoded_run_diagnostics", "lib/log_parser.py:classify_line"]
+inputs = ["log/cond_grid_line_error_expression.cir", "log/cond_grid_line_error_model_type.cir"]
+keep = ["log"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
 [behaviour.step-value-grid]
 summary = "The cells of the step-value grid (at the end of this file) that no other recording fills: a .step of each sweep (list, linear, decade, octave) over each thing a deck steps (a parameter, the temperature, a model parameter, a source), alone, two nested and three nested, with the names spelled in each case; and a negative value, zero and a value of more than six digits, in a run that keeps its step values in its log and in one that keeps them in its raw. Each cell is what the recording of each build shows."
 model = ["lib/log_parser.py", "lib/raw_decode.py", "lib/step_values.py", "lib/recipes.py", "lib/log_parser.py:read_step_line", "lib/log_parser.py:parse_step_iterations", "lib/raw_decode.py:_step_facts", "lib/step_values.py:step_axis_key", "lib/step_values.py:same_step_value", "lib/step_values.py:steps_with", "lib/step_values.py:step_with", "lib/recipes.py:StepSelector"]
@@ -4557,7 +4564,7 @@ item_axis = "form"
 # differs, a route or a function that answers otherwise than the cell, with
 # the reason, pinned in the test.
 item_keys = ["states", "text", "not_established", "differs"]
-behaviours = ["log-diagnostics", "log-convergence", "undefined-element-models", "log-meas-failed", "log-timestep-collapse", "log-condition-grid"]
+behaviours = ["log-diagnostics", "log-convergence", "undefined-element-models", "log-meas-failed", "log-timestep-collapse", "log-condition-grid", "log-line-error"]
 groups = [
     ["rule"],
     ["form", "phase"],
@@ -4968,6 +4975,16 @@ cases = ["log/cond_grid_model_value_word"]
 word = { states = "undefined_parameter", text = { ltspice26 = "No such parameter defined.", ltspice17 = "Questionable use of curly braces" }, on = { ltspice26 = { rule = "undefined_parameter.lt26" }, ltspice17 = { rule = "undefined_parameter.xvii" } } }
 ignored = { states = "unknown_model_parameter", text = { ltspice17 = "Error on line 5 : .model dx" }, refused = { ltspice26 = "LTspice 26 writes the undefined parameter and then the model it makes undefined." }, on = { ltspice17 = { rule = "unknown_model_parameter.xvii" } } }
 model = { states = "missing_model", text = { ltspice26 = 'Undefined model "dx"' }, refused = { ltspice17 = "XVII ignores the word and runs the diode." }, on = { ltspice26 = { rule = "missing_model.lt26" } } }
+
+[[grid.log-condition.cell]]
+cases = ["log/cond_grid_line_error_model_type"]
+[grid.log-condition.cell.items]
+model_type = { form = "deck_error", phase = "deck", states = "deck_error", text = { ltspice26 = "mq", ltspice17 = "Error on line 4 : .model mq" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "deck_error.xvii.1" } }, not_established = "No recording shows a model of a type LTspice does not have; the recording settles the line each build writes and the rule that takes it." }
+
+[[grid.log-condition.cell]]
+cases = ["log/cond_grid_line_error_expression"]
+[grid.log-condition.cell.items]
+expression = { form = "deck_error", phase = "deck", states = "deck_error", text = { ltspice26 = "b1", ltspice17 = "Error on line 4 : b1" }, on = { ltspice26 = { rule = "deck_error.lt26.1" }, ltspice17 = { rule = "deck_error.xvii.1" } }, not_established = "No recording shows an expression with an operator and no operand; the recording settles the line each build writes and the rule that takes it." }
 
 # The step a value belongs to ------------------------------------------------
 

@@ -47,7 +47,8 @@ GRIDS = grids()
 #: and simulator_warning and deck_error.xvii.1 none on XVII: no recording
 #: shows a build write a line that only they take, so they claim the build on
 #: no evidence. The deck written for the last (log/cond_grid_model_value_word)
-#: gives XVII an unrecognized model parameter instead.
+#: gives XVII an unrecognized model parameter instead; two decks of behaviour
+#: log-line-error wait for a recording run to give it the line.
 #:
 #: step-value: every coordinate has a recorded cell on both builds.
 #:
