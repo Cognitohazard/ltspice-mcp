@@ -113,8 +113,8 @@ UNRECORDED: dict[str, dict[str, int]] = {
     "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
     "log-condition": {"ltspice26": 20, "ltspice17": 21},
     "step-value": {"ltspice26": 56, "ltspice17": 56},
-    "results-layout": {"ltspice26": 85, "ltspice17": 87},
-    "trace-name": {"ltspice26": 27, "ltspice17": 27},
+    "results-layout": {"ltspice26": 0, "ltspice17": 2},
+    "trace-name": {"ltspice26": 0, "ltspice17": 0},
 }
 
 
