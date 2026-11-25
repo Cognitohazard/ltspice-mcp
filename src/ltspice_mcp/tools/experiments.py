@@ -38,6 +38,7 @@ from ltspice_mcp.lib import (
     response_budget,
 )
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.continuation import Unfilled
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -87,9 +88,9 @@ from ltspice_mcp.lib.pdk_native import (
 from ltspice_mcp.lib.recent import is_circuit_file
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
-    DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
+    dormant_pointer,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.said_once import Delivery
@@ -459,7 +460,7 @@ _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "type": "object",
     "description": (
         "An analyze_results.recipes entry, checked on submit."
-        + DORMANT_POINTER.format(metric="<metric>")
+        + dormant_pointer(Unfilled("metric"))
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},

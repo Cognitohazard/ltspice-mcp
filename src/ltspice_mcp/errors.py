@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
-from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue, inspect_call
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError
 
 _MAX_VALIDATION_ERRORS = 6
@@ -501,7 +501,7 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "mistyped, evicted, or from a previous server session."
     ),
     ResultError: (
-        'Verify the run reached a terminal state with jobs (action:"status"), '
+        'Verify the run reached a terminal state with jobs (action:"status", job_id:...), '
         "and read signals with analyze_results."
     ),
     ResultFileNotFoundError: (
@@ -514,8 +514,8 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "simulator's own libraries, or add .lib/.include directives to the netlist."
     ),
     RecipeInvalidError: (
-        "Correct the recipe and send the call again; inspect(queries=[{'kind': "
-        "'reference', 'query': '<metric>'}]) lists each recipe's fields."
+        "Correct the recipe and send the call again; "
+        f"{inspect_call('reference', query=Unfilled('metric'))} lists each recipe's fields."
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "

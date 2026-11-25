@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import functools
 import inspect
+import itertools
 import json
 import re
 from collections.abc import Iterator
@@ -383,7 +384,10 @@ def _parse_call(name: str, inner: str) -> _Call | None:
     # Elisions (``...`` or ``…``) and a Markdown table's escaped ``\|``.
     text = inner.replace("…", "...").replace("\\|", "|")
     text = re.sub(r",\s*\.\.\.\s*([}\]]|$)", r"\1", text)
-    for attempt in (text, re.sub(r"(?<![\w\"'])(\w+)\s*:\s*(?=[\"'\[{\w])", r"\1=", text)):
+    # An unquoted ``<your sheet>`` is a placeholder too.
+    holed = re.sub(r"<[^<>]*>", "...", text)
+    colons = r"(?<![\w\"'])(\w+)\s*:\s*(?=[\"'\[{\w.])"
+    for attempt in (text, re.sub(colons, r"\1=", text), holed, re.sub(colons, r"\1=", holed)):
         try:
             node = ast.parse(f"_({attempt})", mode="eval").body
         except SyntaxError:
@@ -444,8 +448,8 @@ _HOLE = _Hole()
 
 def _value(node: ast.AST) -> Any:
     """What a node spells, with a hole wherever the caller supplies the value.
-    Alternatives (``'status'|'wait'``) are checked one by one by
-    :func:`_check_keys`; the call is validated with the first."""
+    A call's alternatives (``action='status'|'wait'``) are validated one by one
+    by :func:`_validation_problems`; one nested deeper, with its first."""
     if isinstance(node, ast.Constant):
         if node.value is Ellipsis:
             return _HOLE
@@ -563,6 +567,20 @@ def _validation_problems(tool: str, keywords: dict[str, ast.AST], where: str) ->
 
     ``inspect`` takes its queries unvalidated and validates each one apart
     (``SkipValidation``), so each query is held to the query union too."""
+    options = [
+        [(key, ast.Constant(value)) for value in strings]
+        if (strings := _strings(node)) is not None
+        else [(key, node)]
+        for key, node in keywords.items()
+    ]
+    found: list[str] = []
+    for chosen in itertools.product(*options):
+        found += _validated(tool, dict(chosen))
+    return [f"{where}: {tool} refuses it: {problem}" for problem in dict.fromkeys(found)]
+
+
+def _validated(tool: str, keywords: dict[str, ast.AST]) -> list[str]:
+    """What the tool says of one call, each argument a single value."""
     model = _tool_models()[tool]
     branches = _select(list(_variants(model)), keywords)
     if len(branches) != 1:
@@ -577,7 +595,7 @@ def _validation_problems(tool: str, keywords: dict[str, ast.AST], where: str) ->
     if tool == "inspect" and isinstance(arguments.get("queries"), list):
         query_holes = [hole[1:] for hole in holes if hole[:1] == ("queries",)]
         found += _rejections(_query_adapter(), arguments["queries"], query_holes)
-    return [f"{where}: {tool} refuses it: {problem}" for problem in found]
+    return found
 
 
 def _check_api_call(method: str, inner: str, where: str, served: bool = True) -> list[str]:
@@ -690,10 +708,12 @@ def _problems(referral: _Referral) -> list[str]:
     where = f"{referral.where} {referral.name}({referral.inner[:60]})"
     if referral.form == "api":
         return _check_api_call(referral.name, referral.inner, where, referral.served)
-    if referral.form == "call":
-        call = _parse_call(referral.name, referral.inner)
-        if call is not None:
-            return _check_tool_call(call, where, referral.served)
+    call = _parse_call(referral.name, referral.inner)
+    # Prose that spells arguments (``jobs (action:"status")``) is a call too.
+    if call is not None and (
+        referral.form == "call" or (call.keywords and not call.positional)
+    ):
+        return _check_tool_call(call, where, referral.served)
     # Prose, or a call written loosely: every snake_case name is the tool's.
     vocabulary = _vocabulary(_tool_models()[referral.name]) | set(_tool_models())
     return [
@@ -842,6 +862,9 @@ class TestTheHardCases:
             ":11 ": "net query without its point",
             ":12 ": "api.wait without job_id",
             ":13 ": "built flat inspect",
+            ":14 ": "either of two jobs actions without job_id",
+            ":15 ": "an unquoted placeholder, the call still lacking ops",
+            ":16 ": "prose spelling arguments without job_id",
         }
         missed = [
             what

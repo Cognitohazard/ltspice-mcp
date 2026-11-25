@@ -69,6 +69,7 @@ from ltspice_mcp.lib.ltspice_window import (
     WindowsUnavailable,
 )
 from ltspice_mcp.lib.metrics import (
+    RESULTS_TABLE_CALL,
     guarded_axis,
     parse_time,
     signal_stats_defined,
@@ -2153,8 +2154,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         if not args.in_ltspice:
             raise NoAxisError(
                 f"This plot has no sampled axis to chart: {_why_no_axis(raw.descriptor)}. "
-                "analyze_results' value metric or inspect(queries=[{'kind': 'results', "
-                "'job_id': ..., 'view': 'table'}]) "
+                f"analyze_results' value metric or {RESULTS_TABLE_CALL} "
                 "reads its values, and in_ltspice=true opens it in LTspice without a chart.",
                 show_hint=False,
             )

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.config import ServerConfig, ToolListing
+from ltspice_mcp.lib.continuation import inspect_call
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools._base import registry
@@ -240,7 +241,7 @@ class TestDormantBranchesKeepTheirDescription:
         pointers are a Python import and a resource read."""
         for name, body in self._exempt("full").items():
             metric = body["properties"]["metric"]["const"]
-            pointer = f"inspect(queries=[{{'kind': 'reference', 'query': '{metric}'}}])"
+            pointer = inspect_call("reference", query=metric)
             assert pointer in body["description"], name
             assert body["description"].index(pointer) < body["description"].index("api.reference(")
             assert "guide section 'tools'" in body["description"]

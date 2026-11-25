@@ -29,11 +29,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ltspice_mcp.lib.continuation import mcp_call
+from ltspice_mcp.lib.continuation import inspect_call
 from ltspice_mcp.lib.families import DISPLAY, FAMILIES, HOSTS
+from ltspice_mcp.lib.hierarchy import HIERARCHY_CALL
 
 #: The call that shows this session's view of the table.
-CAPABILITIES_CALL = mcp_call("inspect", {"queries": [{"kind": "capabilities"}]})
+CAPABILITIES_CALL = inspect_call("capabilities")
 
 Kind = Literal["baseline", "refinement"]
 Status = Literal["supported", "gap", "unverified"]
@@ -150,7 +151,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "hierarchy",
         "baseline",
         "Resolve nested instances, models and parameters as this simulator does, for "
-        "instance targeting and inspect(queries=[{'kind': 'hierarchy', 'path': ..., 'simulator': ...}]).",
+        f"instance targeting and {HIERARCHY_CALL}.",
         "ltspice_mcp.lib.hierarchy",
     ),
     Capability(

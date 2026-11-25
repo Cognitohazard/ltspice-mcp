@@ -2354,8 +2354,8 @@ class TestRemoveWireAndNetLabelOps:
         assert data["failed_count"] == 1
         assert data["results"][0]["error"] == (
             "No wire to remove: no wire has an end at (0,0) or (16,0). To see the wires of "
-            'a net with their ends, call inspect(queries=[{"kind": "net", "path": ..., "at": '
-            '[x, y]}]) on a point of it.'
+            'a net with their ends, call inspect(queries=[{"kind": "net", "path": <sheet>, '
+            '"at": [<x>, <y>]}]) on a point of it.'
         )
 
     async def test_remove_net_label_no_match_raises(self, asc_state: SessionState, work_dir: Path):
@@ -2371,8 +2371,8 @@ class TestRemoveWireAndNetLabelOps:
         assert data["failed_count"] == 1
         assert data["results"][0]["error"] == (
             "No net label at (999,999), and nothing else is there. To see the labels of a "
-            'net with their points, call inspect(queries=[{"kind": "net", "path": ..., "at": '
-            '[x, y]}]) on a point of it.'
+            'net with their points, call inspect(queries=[{"kind": "net", "path": <sheet>, '
+            '"at": [<x>, <y>]}]) on a point of it.'
         )
 
     async def test_remove_directive_round_trip(self, asc_state: SessionState, work_dir: Path):

@@ -159,7 +159,7 @@ from ltspice_mcp.lib.connectivity import (
     name_keys,
     named_labels,
 )
-from ltspice_mcp.lib.continuation import call_to_continue
+from ltspice_mcp.lib.continuation import call_to_continue, inspect_call
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
@@ -2162,8 +2162,9 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
 # ---------------------------------------------------------------------------
 
 _REFERENCE_CONTENTS_HINT = (
-    "Ask again with a 'query' in plain words — inspect(queries=[{'kind': 'reference', "
-    "'query': 'phase margin'}]) — for a branch's fields, types, defaults and units."
+    "Ask again with a 'query' in plain words — "
+    f"{inspect_call('reference', query='phase margin')} — for a branch's fields, types, "
+    "defaults and units."
 )
 
 
@@ -2204,8 +2205,8 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
     }
     if not matches:
         data["hint"] = (
-            f"Nothing matched {q.query!r}. Call inspect(queries=[{{'kind': 'reference'}}]) "
-            "for the whole vocabulary, or read the guide: inspect(queries=[{'kind': 'guide'}])."
+            f"Nothing matched {q.query!r}. Call {inspect_call('reference')} "
+            f"for the whole vocabulary, or read the guide: {inspect_call('guide')}."
         )
     elif total > len(matches):
         # Name the lever that is actually free. Under a response budget the

@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.continuation import Unfilled, inspect_call
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.signal_analysis import THD_HARMONICS_CAP
@@ -167,10 +168,12 @@ TRANSIENT_FIELDS_BY_MODE: dict[str, frozenset[str]] = {
 # surface can call and which reads these same models; the Python API's
 # catalogue; and the guide. The helper owning it makes the pointer structural,
 # not a per-call-site convention.
-DORMANT_POINTER = (
-    " Full arguments: inspect(queries=[{{'kind': 'reference', 'query': '{metric}'}}]), "
-    "api.reference('analyze_results'), or guide section 'tools'."
-)
+def dormant_pointer(metric: str | Unfilled) -> str:
+    """The pointer for ``metric``'s full arguments."""
+    return (
+        f" Full arguments: {inspect_call('reference', query=metric)}, "
+        "api.reference('analyze_results'), or guide section 'tools'."
+    )
 
 
 def _dormant_wire_stub() -> ConfigDict:
@@ -203,7 +206,7 @@ def _dormant_wire_stub() -> ConfigDict:
         schema.update(
             {
                 "type": "object",
-                "description": summary + DORMANT_POINTER.format(metric=metric["const"]),
+                "description": summary + dormant_pointer(metric["const"]),
                 "properties": {"metric": metric},
                 "required": ["metric"],
             }

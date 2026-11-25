@@ -11,3 +11,6 @@ JOBS_WITHOUT_ID = "Stop it with jobs(action='cancel')."
 NET_WITHOUT_POINT = 'Call inspect(queries=[{"kind": "net", "path": "<your sheet>"}]).'
 API_WITHOUT_JOB = "Read it with api.wait()."
 BUILT_FLAT_INSPECT = mcp_call("inspect", {"kind": "capabilities"})
+EITHER_WITHOUT_JOB = "Read it with jobs(action='status'|'runs')."
+UNQUOTED_PLACEHOLDER = "Save it with edit_schematic(path=<this sheet>, open_window='save')."
+PROSE_ARGUMENTS = 'Check it with jobs (action:"status").'

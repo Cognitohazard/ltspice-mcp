@@ -83,6 +83,11 @@ def mcp_call(tool: str, arguments: Mapping[str, Any] | Unfilled) -> str:
     return f"{tool}(" + ", ".join(f"{k}={_mcp_value(v)}" for k, v in arguments.items()) + ")"
 
 
+def inspect_call(kind: str, **fields: Any) -> str:
+    """The MCP call of one ``inspect`` query, for a referral several messages make."""
+    return mcp_call("inspect", {"queries": [{"kind": kind, **fields}]})
+
+
 def python_call(tool: str, arguments: Mapping[str, Any] | Unfilled) -> str:
     """The same call through the Python API, which takes a paging argument
     only with ``raw_page=True``. An argument whose name is a Python keyword

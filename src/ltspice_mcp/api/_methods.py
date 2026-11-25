@@ -459,7 +459,7 @@ def _note_detached_owner(
             f"This job is already terminal. Pid {owner_pid} is the process its "
             "record names as having run it; nothing is supervising it now and "
             "there is nothing to cancel. Read its results with "
-            "jobs(action='status'|'runs') or analyze_results by job_id. The "
+            "jobs(action='status'|'runs', job_id=...) or analyze_results by job_id. The "
             "process this call spawned to look the job up wrote its console "
             f"output to {log_file}."
         )

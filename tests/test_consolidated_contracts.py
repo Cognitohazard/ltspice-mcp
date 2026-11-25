@@ -678,7 +678,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 65 characters for the job_id and resume_request_id its
     # field descriptions now give the jobs calls they suggest, which the tool
     # refused without them. Measured 17,652.
-    "run_experiments": 17655,
+    # The recipe pointer is now built by the one helper that writes inspect
+    # calls, with JSON quoting. Measured 17,656.
+    "run_experiments": 17656,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -751,7 +753,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 55 characters for the queries list its reference
     # pointers now carry: the flat inspect(kind=...) they named is refused.
     # Measured 22,204.
-    "analyze_results": 22205,
+    # Raised by about 35 characters: the reference pointers are built by the
+    # one helper that writes inspect calls, with JSON quoting. Measured 22,238.
+    "analyze_results": 22238,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -1006,13 +1010,13 @@ class TestDormantRecipeWireStubs:
 
     def test_reference_still_renders_the_stubbed_field_trees(self):
         from ltspice_mcp.api import _reference
-        from ltspice_mcp.lib.recipes import DORMANT_POINTER
+        from ltspice_mcp.lib.recipes import dormant_pointer
 
         text = _reference.reference("analyze_results")
         # The catalogue renders from the live models; the wire stub appearing
         # here would mean the renderer started reading the advertised schema —
         # exactly the regression that would also erase the field trees.
-        assert DORMANT_POINTER not in text
+        assert dormant_pointer("noise_integral") not in text
         for metric, fields in {
             "noise_integral": ("from_hz", "to_hz"),
             "periodic": ("signal", "window"),

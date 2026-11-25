@@ -19,7 +19,7 @@ with `jobs`, and measure a finished job with `analyze_results`.
 |-|-|
 | run a deck — once, swept, or perturbed | `run_experiments(circuits=[{"path": …}], variations=[…])` |
 | get the measurements without a second round trip | `run_experiments(circuits=[…], analyze={"recipes": […]})` |
-| follow, cancel, resume, or page a job's runs | `jobs(action="status"\|"wait"\|"cancel"\|"resume"\|"list"\|"runs")` |
+| follow, cancel, resume, or page a job's runs | `jobs(action="status"\|"wait"\|"cancel"\|"runs", job_id=…)`, `jobs(action="resume", job_id=…, resume_request_id=…)`, `jobs(action="list")` |
 | measure a finished job | `analyze_results(sources=[{"job_id": …}], recipes=[…])` |
 | read `.meas` results | recipe `{"metric": "measurements"}` |
 | page RAW plots, trace descriptors, or printed log facts | `inspect(queries=[{"kind": "results", "path": …, "view": …}])` |
