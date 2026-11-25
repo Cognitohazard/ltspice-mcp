@@ -1197,10 +1197,12 @@ _RE_MEAS_FAILED = re.compile(r"Measurement\s+\"([^\"]+)\"\s+FAIL[''`]?ed", re.IG
 # A measurement's name as a log prints it: as the deck wrote it, a dot
 # included on both builds and a dash on XVII (recorded: log/meas_name_dot,
 # log/meas_name_dash; LTspice 26 refuses a dash), on a line where ``: ``
-# follows the name. spicelib's reader reads neither (docs/spicelib_bugs.md,
-# Bug 44). A name holding either is taken only there: a Fourier block's
-# ``N-Period=1`` is no measurement.
-_MEAS_NAME = r"(?:\w+|\w[\w.\-]*(?=:[ \t]))"
+# follows the name, and on a TRIG/TARG's line, where ``=`` follows it and
+# ``FROM <a> TO <b>`` ends the line (``t.bare=0.00022 FROM 1.1e-05 TO 0.00023``,
+# recorded: log/meas_grid_name_dot, log/meas_grid_name_dash). spicelib's reader
+# reads neither (docs/spicelib_bugs.md, Bug 44). A name holding either is taken
+# only there: a Fourier block's ``N-Period=1`` is no measurement.
+_MEAS_NAME = r"(?:\w+|\w[\w.\-]*(?=:[ \t]|=[^\r\n]*?[ \t]FROM[ \t]))"
 
 # AT/WHEN crossing line, e.g. ``tcross: V(out)=0.5  AT 0.000693147672285``.
 # spicelib's LTSpiceLogReader matches the AT clause with a literal single-space

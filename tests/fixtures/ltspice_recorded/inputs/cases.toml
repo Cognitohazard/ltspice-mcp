@@ -3118,7 +3118,8 @@ stepped = { values = ["no", "yes"] }
 # measurement (FAIL'ed), a failure in one step (failed in a row, or XVII's 0:
 # answered_measurements' not_established), a result of 0 in one step.
 outcome = { values = ["value", "failed", "step_fails", "step_zero"] }
-# How the name is spelled: _MEAS_NAME reads a dot or a dash only before ": ";
+# How the name is spelled: _MEAS_NAME reads a dot or a dash only before ": "
+# or, on a TRIG/TARG's line, before "=" on a line that ends "FROM a TO b";
 # names are keyed in lower case; a reserved name is refused.
 name = { values = ["plain", "punctuation", "reserved", "upper"], default = "plain" }
 # The line the name is printed on: "name: expr=value ...", a TRIG/TARG's
