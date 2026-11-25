@@ -25,6 +25,7 @@ The tests after it pin the decision itself on inputs no recording holds.
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 import shutil
@@ -248,17 +249,22 @@ async def _every_route(
     directory: Path,
     fields: Fields | None = None,
     said: Said | None = None,
+    failed: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Answer]]:
     """Each measurement's result per step, by route: the measurements recipe,
     the summary recipe, ``inspect``'s measurements view and the Python API,
     each over the log's path and over a job. ``fields``, when given, gets the
     field each route that names one says holds the result, and ``said`` what
-    each route says beside it (:data:`Said`)."""
+    each route says beside it (:data:`Said`). ``failed``, when given, gets
+    the failures of a recipe route that gives no row, which then answers
+    nothing; without it a summary that gives no row fails the call."""
     deck, raw, log = _stage(build, case_id, directory)
     routes: dict[str, dict[str, Answer]] = {}
     named: Fields = {} if fields is None else fields
     told: Said = {} if said is None else said
     reply = await _whole_recipe(state, {"path": str(log), "label": "log"})
+    if failed is not None and "failures" in reply and not reply["results"]["m"].get("values"):
+        failed["recipe, by path"] = json.dumps(reply["failures"])
     routes["recipe, by path"] = _recipe_answers(reply)
     told["recipe, by path"] = _recipe_said(reply)
     summary = await dispatched(
@@ -268,12 +274,18 @@ async def _every_route(
         recipes=[{"key": "s", "metric": "summary"}],
         include={"fields": ["value"]},
     )
-    (row,) = summary["results"]["s"]["values"]
-    routes["summary, by path"] = {
-        name: _entry_answer(entry) for name, entry in row["value"].get("measurements", {}).items()
-    }
-    named["summary, by path"] = _entry_fields(row["value"].get("measurements", {}))
-    told["summary, by path"] = _entries_said(row["value"].get("measurements", {}))
+    if failed is not None and "values" not in summary["results"]["s"]:
+        failed["summary, by path"] = json.dumps(summary.get("failures"))
+        routes["summary, by path"] = {}
+        told["summary, by path"] = {}
+    else:
+        (row,) = summary["results"]["s"]["values"]
+        routes["summary, by path"] = {
+            name: _entry_answer(entry)
+            for name, entry in row["value"].get("measurements", {}).items()
+        }
+        named["summary, by path"] = _entry_fields(row["value"].get("measurements", {}))
+        told["summary, by path"] = _entries_said(row["value"].get("measurements", {}))
     page = await dispatched(
         state, "inspect", queries=[{"kind": "results", "view": "measurements", "path": str(log)}]
     )
@@ -294,6 +306,8 @@ async def _every_route(
     job.simulator = "LTspice"
     job.cases[0].simulator_version = rec.manifest(build)["reported_build"]
     reply = await _whole_recipe(state, {"job_id": job_id, "label": "job"})
+    if failed is not None and "failures" in reply and not reply["results"]["m"].get("values"):
+        failed["recipe, by job"] = json.dumps(reply["failures"])
     routes["recipe, by job"] = _recipe_answers(reply)
     told["recipe, by job"] = _recipe_said(reply)
     by_job = await dispatched(
@@ -303,12 +317,18 @@ async def _every_route(
         recipes=[{"key": "s", "metric": "summary"}],
         include={"fields": ["value"]},
     )
-    (row,) = by_job["results"]["s"]["values"]
-    routes["summary, by job"] = {
-        name: _entry_answer(entry) for name, entry in row["value"].get("measurements", {}).items()
-    }
-    named["summary, by job"] = _entry_fields(row["value"].get("measurements", {}))
-    told["summary, by job"] = _entries_said(row["value"].get("measurements", {}))
+    if failed is not None and "values" not in by_job["results"]["s"]:
+        failed["summary, by job"] = json.dumps(by_job.get("failures"))
+        routes["summary, by job"] = {}
+        told["summary, by job"] = {}
+    else:
+        (row,) = by_job["results"]["s"]["values"]
+        routes["summary, by job"] = {
+            name: _entry_answer(entry)
+            for name, entry in row["value"].get("measurements", {}).items()
+        }
+        named["summary, by job"] = _entry_fields(row["value"].get("measurements", {}))
+        told["summary, by job"] = _entries_said(row["value"].get("measurements", {}))
     page = await dispatched(
         state, "inspect", queries=[{"kind": "results", "view": "measurements", "job_id": job_id}]
     )
@@ -327,6 +347,73 @@ async def _every_route(
 # The printed-measurement grid --------------------------------------------------
 
 GRID = grid("printed-measurement")
+
+#: The routes :func:`_every_route` reads, in its order.
+ROUTES = tuple(
+    f"{route}, by {source}"
+    for source in ("path", "job")
+    for route in ("recipe", "summary", "inspect", "api measurements")
+)
+
+#: Where a route answers otherwise than a recorded cell's log: the statement
+#: that the line of an AT form of a stepped ``.op`` or ``.tf`` holds the first
+#: step's value, where LTspice measures that form over the stepped parameter
+#: (log/meas_grid_op_step_find_at prints V(out) at the step value 1, and
+#: log/meas_grid_op_step_deriv_at the slope across both steps).
+STEP_STATED_FOR_A_MEASUREMENT_OVER_THE_STEPPED_PARAMETER = (
+    "step stated for a measurement over the stepped parameter"
+)
+#: The recipes' refusal of a run stepped over a model's parameter, whose
+#: ``.step`` lines (``.step dm(is)=1e-14``) the log's steps section does not
+#: decode: it reads the name as ``is``.
+RECIPES_REFUSE_A_RUN_STEPPED_OVER_A_MODEL_PARAMETER = (
+    "recipes refuse a run stepped over a model parameter"
+)
+
+#: What each recipe route's failure says of such a run.
+_REFUSAL = {
+    "recipe": "Step rows were not completely decoded",
+    "summary": "Step boundaries are unresolved",
+}
+
+#: How many (measurement, route) pairs answer otherwise than a recorded
+#: cell's log, per build and difference, each declared on its cell
+#: (``differs``: the build, the difference, the routes, every route when it
+#: names none, and the reason). A count may only fall: a fix lowers it here in
+#: the same change.
+KNOWN_DIFFERENCES: dict[str, dict[str, int]] = {
+    "ltspice26": {
+        STEP_STATED_FOR_A_MEASUREMENT_OVER_THE_STEPPED_PARAMETER: 32,
+        RECIPES_REFUSE_A_RUN_STEPPED_OVER_A_MODEL_PARAMETER: 16,
+    },
+    "ltspice17": {},
+}
+
+
+def _differs(cell: Cell, build: str) -> dict[str, str]:
+    """The difference each route of ``cell`` declares on ``build``, by route."""
+    declared: dict[str, str] = {}
+    for entry in cell.extra.get("differs", ()):
+        if entry["build"] != build:
+            continue
+        assert entry["difference"] in KNOWN_DIFFERENCES[build], (cell.id, entry)
+        assert entry["reason"], (cell.id, entry)
+        for route in entry.get("routes", ROUTES):
+            assert route in ROUTES, (cell.id, route)
+            declared[route] = entry["difference"]
+    return declared
+
+
+def test_the_count_of_known_differences_only_falls():
+    for build in rec.BUILDS:
+        counts: dict[str, int] = {}
+        for cell in GRID.cells:
+            for difference in _differs(cell, build).values():
+                counts[difference] = counts.get(difference, 0) + 1
+        for difference, pinned in KNOWN_DIFFERENCES[build].items():
+            count = counts.get(difference, 0)
+            assert count <= pinned, (build, difference, count)
+            assert count == pinned, f"lower the pin for {build}, {difference!r}, to {count}"
 
 #: A number as LTspice prints one in a ``.meas`` result.
 _NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
@@ -452,7 +539,7 @@ def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
     a point (a WHEN) holds that point alone, under a heading of one column."""
     at = cell.at(build)
     outcome = at["outcome"]
-    steps = [step - 1 for step in cell.extra.get("steps", ())]
+    steps = [step - 1 for step in cell.extra_on("steps", build, ())]
     assert shown.printed == at["printed"], (cell.id, build, shown)
     if outcome == "failed":
         assert shown.printed == "failed", (cell.id, build)
@@ -469,7 +556,7 @@ def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
         zero = row != "failed" and _printed_number(row, at.get("complex_format", "")) == 0
         if step not in steps:
             assert row != "failed", (cell.id, build, step, row)
-            assert not zero or cell.extra.get("zero_by_form"), (cell.id, build, step, row)
+            assert not zero or cell.extra_on("zero_by_form", build), (cell.id, build, step, row)
         elif outcome == "step_zero":
             assert zero, (cell.id, build, step, row)
         elif rec.generation(build) == "xvii":
@@ -531,18 +618,37 @@ async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
 
     fields: Fields = {}
     said: Said = {}
-    routes = await _every_route(build, case_id, state_no_sim, work_dir, fields, said)
+    failed: dict[str, str] = {}
+    routes = await _every_route(build, case_id, state_no_sim, work_dir, fields, said, failed)
+    # A route that failed where the log printed a measurement refused the run.
+    refused = {route: error for route, error in failed.items() if expected}
+    for route in refused:
+        del routes[route]
     for route, answers in routes.items():
         assert set(answers) == set(expected), (route, set(answers) ^ set(expected))
+    # A route that gives no answer for the run is declared on each cell it
+    # reads, with the difference that refuses it, and on no other.
+    for cell in cells:
+        if cell.item.lower() not in expected:
+            continue
+        declared = {
+            route
+            for route, difference in _differs(cell, build).items()
+            if difference == RECIPES_REFUSE_A_RUN_STEPPED_OVER_A_MODEL_PARAMETER
+        }
+        assert declared == set(refused), (cell.id, declared, refused)
+    for route, error in refused.items():
+        assert _REFUSAL[route.split(",")[0]] in error, (route, error)
     for cell in cells:
         name = cell.item.lower()
         if name not in expected:
             continue
+        differs = _differs(cell, build)
         want: Answer = expected[name]
         # A cell whose log printed a number that is not finite declares the
         # text (``not_a_number``): its value is null on every route, and each
         # says what the log printed. An undeclared one fails the comparison.
-        not_a_number = cell.extra.get("not_a_number")
+        not_a_number = cell.extra_on("not_a_number", build)
         if not_a_number is not None:
             assert isinstance(want, list) and any(
                 not math.isfinite(v) for v in want if isinstance(v, float)
@@ -555,9 +661,19 @@ async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
         # A cell whose log printed one value for a run of several steps
         # declares the step, from 1, and how many (``printed_once``): every
         # route says both; no route says it of any other measurement.
-        once = cell.extra.get("printed_once")
+        once = cell.extra_on("printed_once", build)
         for route in routes:
             statement = said[route].get(name, {}).get("printed_once")
+            if differs.get(route) == STEP_STATED_FOR_A_MEASUREMENT_OVER_THE_STEPPED_PARAMETER:
+                # The difference, as the route states it, so the pin fails
+                # once the route no longer does.
+                assert once is None, (cell.id, once)
+                assert statement is not None and statement.get("step") == 0, (
+                    cell.id,
+                    route,
+                    statement,
+                )
+                continue
             if once is None:
                 assert statement is None, (cell.id, route, statement)
                 continue

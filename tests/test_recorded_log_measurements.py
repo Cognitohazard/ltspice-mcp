@@ -39,10 +39,23 @@ def recorded_logs() -> list[str]:
 LOGS = recorded_logs()
 
 #: Measurements a recorded log prints that no ``.meas`` card of its deck asks
-#: for: LTspice 26 prints each loop margin of a stepped ``.fra`` run as a
-#: measurement table of its own (``raw/fra_step``).
-UNASKED: dict[str, frozenset[str]] = {
-    "raw/fra_step": frozenset({"phasemargin_1", "gainmargin_1"}),
+#: for, by build and case: LTspice 26 prints each loop margin of a stepped
+#: ``.fra`` run as a measurement table of its own (``raw/fra_step``), and of
+#: one stepped over a model, a source, a parameter or the temperature
+#: (``raw/layout_grid_fra_*``); XVII has no ``.fra``.
+_MARGINS = frozenset({"phasemargin_1", "gainmargin_1"})
+UNASKED: dict[tuple[str, str], frozenset[str]] = {
+    ("ltspice26", case_id): _MARGINS
+    for case_id in (
+        "raw/fra_step",
+        "raw/layout_grid_fra_model",
+        "raw/layout_grid_fra_source",
+        "raw/layout_grid_fra_temp",
+        "raw/layout_grid_text_fra_model",
+        "raw/layout_grid_text_fra_param",
+        "raw/layout_grid_text_fra_source",
+        "raw/layout_grid_text_fra_temp",
+    )
 }
 
 
@@ -69,7 +82,7 @@ def measured(build: str, case_id: str) -> set[str]:
         *(card for text in included for card in lex_deck(text, title=False).cards),
     ]
     names = {card.name.lower() for card in cards if card.kind == "meas" and card.name}
-    return names | UNASKED.get(case_id, frozenset())
+    return names | UNASKED.get((build, case_id), frozenset())
 
 
 def test_a_measurement_is_named_as_meas_card_reads_it():
@@ -114,7 +127,7 @@ def test_every_recorded_logs_measurements_decode(name: str, tmp_path: Path):
     printed = printed_measurements(read_log_text(FIXTURES / name))
     assert entries == set(printed)
     assert entries <= measured(build, case_id)
-    assert UNASKED.get(case_id, frozenset()) <= entries
+    assert UNASKED.get((build, case_id), frozenset()) <= entries
 
 
 def test_a_stepped_fra_runs_margins_read_as_the_numbers_printed(tmp_path: Path):

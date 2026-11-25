@@ -79,6 +79,15 @@ class Cell:
         """The cell's coordinates on ``build``."""
         return {**self.coordinates, **self.on.get(build, {})}
 
+    def extra_on(self, key: str, build: str, default: Any = None) -> Any:
+        """The grid's own key ``key`` of the cell on ``build``: its value, or,
+        where the builds differ, the entry for ``build`` of a table keyed by
+        build (``steps = { ltspice26 = [2] }``)."""
+        value = self.extra.get(key, default)
+        if isinstance(value, Mapping) and value and set(value) <= set(recorded_builds()):
+            return value.get(build, default)
+        return value
+
     @property
     def id(self) -> str:
         return f"{self.case}:{self.item}"

@@ -1407,8 +1407,8 @@ inputs = [
 pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.log-meas-grid]
-summary = "The cells of the printed-measurement grid (at the end of this file) that no other recording fills: each .meas form in each analysis (.tran, .ac, .dc, .noise, .op, .tf), alone and stepped, with a result and failing whole, and where there is a sweep failing in one step and with a result of 0 in one step (in one deck, so that XVII's 0 for a failed step stands beside a true 0); and names with a dot, with a dash, in upper case and reserved, printed on a line with and without a colon, in a table and as FAIL'ed. A .tf deck measures the run's own trace, transfer_function (raw/tf). A form a build may refuse in an analysis (any form but a FIND with no point or a PARAM where there is no sweep, a FIND with no point where there is one, a signal the run does not save) has a deck of its own, since a refusal stops the run. A cell's declared outcome where no recording shows the form is a prediction, which the recording settles"
-model = ["lib/log_parser.py", "lib/spice_lex_views.py", "lib/log_parser.py:printed_measurements", "lib/log_parser.py:printed_form", "lib/log_parser.py:parse_measurements", "lib/log_parser.py:measurement_cards", "lib/log_parser.py:measurement_answer", "lib/log_parser.py:answered_measurements", "lib/spice_lex_views.py:MeasCard"]
+summary = "The cells of the printed-measurement grid (at the end of this file) that no other recording fills: each .meas form in each analysis (.tran, .ac, .dc, .noise, .op, .tf), alone and stepped, with a result and failing whole, and where there is a sweep failing in one step and with a result of 0 in one step (in one deck, so that XVII's 0 for a failed step stands beside a true 0); and names with a dot, with a dash, in upper case and reserved, printed on a line with and without a colon, in a table and as FAIL'ed. A .tf deck measures the run's own trace, transfer_function (raw/tf). A form a build may refuse in an analysis (any form but a FIND with no point or a PARAM where there is no sweep, a FIND with no point where there is one, a signal the run does not save) has a deck of its own, since a refusal stops the run."
+model = ["lib/log_parser.py", "lib/spice_lex_views.py", "lib/log_parser.py:printed_measurements", "lib/log_parser.py:printed_form", "lib/log_parser.py:parse_measurements", "lib/log_parser.py:measurement_cards", "lib/log_parser.py:measurement_answer", "lib/log_parser.py:answered_measurements", "lib/spice_lex_views.py:MeasCard", "lib/log_decode.py", "lib/log_conditions.py", "lib/metrics.py"]
 inputs = [
     "log/meas_grid_ac_failed.cir",
     "log/meas_grid_ac_find.cir",
@@ -1512,7 +1512,6 @@ inputs = [
     "log/meas_grid_tran_step_value.cir",
 ]
 keep = ["log"]
-pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.step-temp-upper-case]
 summary = "How the log and the raw name a temperature stepped as TEMP in upper case, beside raw/step_temp, which writes temp."
@@ -3089,12 +3088,14 @@ item_axis = "form"
 # Keys of a cell beside its coordinates: the steps, from 1, that an outcome in
 # one step concerns; and zero_by_form, for a result that is 0 in every step by
 # what its form is where each step has one point (a PP, a derivative, a
-# TRIG/TARG at one level, in a stepped .tf). not_a_number: the text the log
+# TRIG/TARG at one level, in a stepped .tf; and LTspice 26's derivative over
+# a stepped AC sweep). A key whose value differs between builds is a table
+# keyed by build (`steps = { ltspice26 = [2] }`). not_a_number: the text the log
 # printed where the result's number belongs, a number that is not finite;
 # every route gives null and says what was printed. printed_once: the step,
 # from 1, whose value a line printed once for a run of several steps holds,
 # and how many steps the run had (`of`); every route says both.
-item_keys = ["steps", "zero_by_form", "not_a_number", "printed_once"]
+item_keys = ["steps", "zero_by_form", "not_a_number", "printed_once", "differs"]
 groups = [
     ["form", "analysis", "stepped", "outcome"],
     ["name", "printed"],
@@ -3145,7 +3146,15 @@ reason = "An AC or noise sweep starts above 0 Hz, so a WHEN never crosses at 0."
 
 [[grid.printed-measurement.exclude]]
 at = { analysis = ["op", "tf"], outcome = ["step_fails", "step_zero"] }
-reason = "A sweepless analysis has one point in each step, so a form over a sweep (PP, a derivative, a TRIG/TARG, a WHEN) comes to 0 or fails in every step, and no card tells a failure or a 0 in one step apart from the form's own; and of a stepped .op, LTspice 26 prints one line, not a table, and XVII prints nothing (log/meas_step_op)."
+reason = "A sweepless analysis has one point in each step, so a form over a sweep (PP, a derivative, a TRIG/TARG, a WHEN) comes to 0 or fails in every step, and no card tells a failure or a 0 in one step apart from the form's own; and of a stepped .op both builds print one line for each measurement, not a table: LTspice 26 the first step's value of a FIND with no point, which XVII does not print (log/meas_step_op), and either build a FIND or DERIV with AT measured over the stepped parameter (log/meas_grid_op_step_find_at)."
+
+[[grid.printed-measurement.exclude]]
+at = { form = ["max", "min", "pp", "avg", "rms", "integ", "find_at", "deriv_at"], analysis = ["op", "tf"], stepped = ["no"], outcome = ["failed"] }
+reason = "Of a sweepless analysis with no .step, neither build fails a range or an AT point that leaves its one point: MAX V(out) FROM 2 TO 3 and FIND V(out) AT 5 print a number, LTspice 26 the one point's value (log/meas_grid_op_max, log/meas_grid_op_find_at, log/meas_grid_tf_deriv_at)."
+
+[[grid.printed-measurement.exclude]]
+at = { form = ["find_when", "when", "deriv_when", "trig_targ"], analysis = ["op", "tf"], outcome = ["value"] }
+reason = "A sweepless analysis has no sweep for a level to cross, stepped or not: both builds FAIL a WHEN, a FIND or DERIV at a WHEN, and a TRIG/TARG even at the level the one point holds (log/meas_grid_op_when, log/meas_grid_op_step_trig_targ, log/meas_grid_tf_step_find_when)."
 
 [[grid.printed-measurement.exclude]]
 at = { form = ["find"], outcome = ["step_fails"] }
@@ -3660,14 +3669,22 @@ PhaseMargin_1 = {}
 GainMargin_1 = { not_a_number = "infdB" }
 
 [[grid.printed-measurement.cell]]
-cases = ["raw/layout_grid_fra_model", "raw/layout_grid_fra_temp", "raw/layout_grid_text_fra_model", "raw/layout_grid_text_fra_temp"]
+cases = ["raw/layout_grid_fra_temp", "raw/layout_grid_text_fra_temp"]
 at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.printed-measurement.cell.items]
 PhaseMargin_1 = { not_a_number = "inf°" }
 GainMargin_1 = { not_a_number = "infdB" }
 
-# Cells written to be recorded (behaviour log-meas-grid, pending) -------------
+[[grid.printed-measurement.cell]]
+cases = ["raw/layout_grid_fra_model", "raw/layout_grid_text_fra_model"]
+at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.printed-measurement.cell.items]
+PhaseMargin_1 = { not_a_number = "inf°", differs = [{ build = "ltspice26", difference = "recipes refuse a run stepped over a model parameter", routes = ["recipe, by path", "summary, by path", "recipe, by job", "summary, by job"], reason = "the step line .step dm(is)=1e-14 is read as a step of the name is, so the steps section does not decode" }] }
+GainMargin_1 = { not_a_number = "infdB", differs = [{ build = "ltspice26", difference = "recipes refuse a run stepped over a model parameter", routes = ["recipe, by path", "summary, by path", "recipe, by job", "summary, by job"], reason = "the step line .step dm(is)=1e-14 is read as a step of the name is, so the steps section does not decode" }] }
+
+# Cells of behaviour log-meas-grid ------------------------------------------
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tran_failed"]
@@ -3718,19 +3735,19 @@ param_f = { form = "param", printed = "failed" }
 cases = ["log/meas_grid_tran_step_step_outcomes"]
 at = { analysis = "tran", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-max_sf = { form = "max", outcome = "step_fails", steps = [2] }
-min_sf = { form = "min", outcome = "step_fails", steps = [2] }
-pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
-avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
-rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
-integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
-find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
-find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
-when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
-deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
-deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
-trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
-param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sf = { form = "max", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+min_sf = { form = "min", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+pp_sf = { form = "pp", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+avg_sf = { form = "avg", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+rms_sf = { form = "rms", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+integ_sf = { form = "integ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+when_sf = { form = "when", outcome = "step_fails", steps = { ltspice26 = [2] }, level = "braced", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+param_sf = { form = "param", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 max_sz = { form = "max", outcome = "step_zero", steps = [2] }
 min_sz = { form = "min", outcome = "step_zero", steps = [2] }
 pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
@@ -3739,10 +3756,10 @@ rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
 integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
 find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
 find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
-when_sz = { form = "when", outcome = "step_zero", steps = [1], level = "braced" }
+when_sz = { form = "when", outcome = "step_zero", steps = { ltspice26 = [1] }, level = "braced", on = { ltspice17 = { outcome = "value" } } }
 deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
 deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
-trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = { ltspice26 = [2], ltspice17 = [1, 2] } }
 param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 
 [[grid.printed-measurement.cell]]
@@ -3806,8 +3823,8 @@ avg_v = "avg"
 rms_v = "rms"
 integ_v = "integ"
 find_when_v = "find_when"
-deriv_at_v = "deriv_at"
-deriv_when_v = "deriv_when"
+deriv_at_v = { form = "deriv_at", zero_by_form = { ltspice26 = true } }
+deriv_when_v = { form = "deriv_when", zero_by_form = { ltspice26 = true } }
 trig_targ_v = "trig_targ"
 param_v = "param"
 
@@ -3833,30 +3850,30 @@ param_f = { form = "param", printed = "failed" }
 cases = ["log/meas_grid_ac_step_step_outcomes"]
 at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default" }
 [grid.printed-measurement.cell.items]
-max_sf = { form = "max", outcome = "step_fails", steps = [2] }
-min_sf = { form = "min", outcome = "step_fails", steps = [2] }
-pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
-avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
-rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
-integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
-find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
-find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
-when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
-deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
-deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
-trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
-param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sf = { form = "max", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+min_sf = { form = "min", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+pp_sf = { form = "pp", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+avg_sf = { form = "avg", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+rms_sf = { form = "rms", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+integ_sf = { form = "integ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "value" } } }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+when_sf = { form = "when", outcome = "step_fails", steps = { ltspice26 = [2] }, level = "braced", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = { ltspice26 = [2] }, zero_by_form = { ltspice26 = true }, on = { ltspice17 = { outcome = "value" } } }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = { ltspice26 = [2] }, zero_by_form = { ltspice26 = true }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+param_sf = { form = "param", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 max_sz = { form = "max", outcome = "step_zero", steps = [2] }
 min_sz = { form = "min", outcome = "step_zero", steps = [2] }
-pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = { ltspice26 = [2] }, not_a_number = { ltspice17 = "(-1.#INDdB,-1.#IND°)" }, on = { ltspice17 = { outcome = "value" } } }
 avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
 rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
 integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
 find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
 find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
-deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
-deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
-trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2], zero_by_form = { ltspice26 = true } }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2], zero_by_form = { ltspice26 = true } }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = { ltspice26 = [2], ltspice17 = [1, 2] } }
 param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 
 [[grid.printed-measurement.cell]]
@@ -3949,19 +3966,19 @@ param_f = { form = "param", printed = "failed" }
 cases = ["log/meas_grid_dc_step_step_outcomes"]
 at = { analysis = "dc", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-max_sf = { form = "max", outcome = "step_fails", steps = [2] }
-min_sf = { form = "min", outcome = "step_fails", steps = [2] }
-pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
-avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
-rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
-integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
-find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
-find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
-when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
-deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
-deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
-trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
-param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sf = { form = "max", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+min_sf = { form = "min", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+pp_sf = { form = "pp", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+avg_sf = { form = "avg", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+rms_sf = { form = "rms", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+integ_sf = { form = "integ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+when_sf = { form = "when", outcome = "step_fails", steps = { ltspice26 = [2] }, level = "braced", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+param_sf = { form = "param", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 max_sz = { form = "max", outcome = "step_zero", steps = [2] }
 min_sz = { form = "min", outcome = "step_zero", steps = [2] }
 pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
@@ -3970,10 +3987,10 @@ rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
 integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
 find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
 find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
-when_sz = { form = "when", outcome = "step_zero", steps = [1], level = "braced" }
+when_sz = { form = "when", outcome = "step_zero", steps = { ltspice26 = [1] }, level = "braced", on = { ltspice17 = { outcome = "value" } } }
 deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
 deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
-trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = { ltspice26 = [2], ltspice17 = [1, 2] } }
 param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 
 [[grid.printed-measurement.cell]]
@@ -4069,19 +4086,19 @@ param_f = { form = "param", printed = "failed" }
 cases = ["log/meas_grid_noise_step_step_outcomes"]
 at = { analysis = "noise", stepped = "yes", printed = "table" }
 [grid.printed-measurement.cell.items]
-max_sf = { form = "max", outcome = "step_fails", steps = [2] }
-min_sf = { form = "min", outcome = "step_fails", steps = [2] }
-pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
-avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
-rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
-integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
-find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
-find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
-when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
-deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
-deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
-trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
-param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sf = { form = "max", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+min_sf = { form = "min", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+pp_sf = { form = "pp", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+avg_sf = { form = "avg", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+rms_sf = { form = "rms", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+integ_sf = { form = "integ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+when_sf = { form = "when", outcome = "step_fails", steps = { ltspice26 = [2] }, level = "braced", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+param_sf = { form = "param", outcome = "step_fails", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 max_sz = { form = "max", outcome = "step_zero", steps = [2] }
 min_sz = { form = "min", outcome = "step_zero", steps = [2] }
 pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
@@ -4089,10 +4106,10 @@ avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
 rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
 integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
 find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
-find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
-deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
-trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = { ltspice26 = [2] }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 param_sz = { form = "param", outcome = "step_zero", steps = [2] }
 
 [[grid.printed-measurement.cell]]
@@ -4258,7 +4275,7 @@ integ_f = "integ"
 cases = ["log/meas_grid_op_step_find_at"]
 at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_at_v = "find_at"
+find_at_v = { form = "find_at", differs = [{ build = "ltspice26", difference = "step stated for a measurement over the stepped parameter", reason = "LTspice measures an AT form of a stepped run with no .step line over the stepped parameter, not at one step" }] }
 find_at_f = { form = "find_at", on = { ltspice26 = { outcome = "failed", printed = "failed" } } }
 
 [[grid.printed-measurement.cell]]
@@ -4280,7 +4297,7 @@ param_f = "param"
 cases = ["log/meas_grid_op_step_deriv_at"]
 at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = "deriv_at"
+deriv_at_v = { form = "deriv_at", differs = [{ build = "ltspice26", difference = "step stated for a measurement over the stepped parameter", reason = "LTspice measures an AT form of a stepped run with no .step line over the stepped parameter, not at one step" }] }
 deriv_at_f = { form = "deriv_at", on = { ltspice26 = { outcome = "failed", printed = "failed" } } }
 
 [[grid.printed-measurement.cell]]
@@ -4302,7 +4319,7 @@ cases = ["log/meas_grid_op_step_find"]
 at = { analysis = "op", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
 find_v = { form = "find", printed_once = { step = 1, of = 2 }, refused = { ltspice17 = "XVII prints nothing for a FIND with no point of a stepped .op." } }
-param_v = { form = "param", printed_once = { step = 1, of = 2 }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+param_v = { form = "param", printed_once = { ltspice26 = { step = 1, of = 2 } }, on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
 
 # In an unstepped .tf both builds measure a form over an interval or at a
 # point as though the transfer function were its own axis: MAX FROM 2 TO 3
@@ -4460,14 +4477,14 @@ integ_f = "integ"
 cases = ["log/meas_grid_tf_step_find_at"]
 at = { analysis = "tf", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-find_at_v = { form = "find_at", printed_once = { step = 1, of = 2 } }
+find_at_v = { form = "find_at", differs = [{ build = "ltspice26", difference = "step stated for a measurement over the stepped parameter", reason = "LTspice measures an AT form of a stepped run with no .step line over the stepped parameter, not at one step" }] }
 find_at_f = { form = "find_at", outcome = "failed", printed = "failed", on = { ltspice17 = { printed = "line", outcome = "value" } } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tf_step_deriv_at"]
 at = { analysis = "tf", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
-deriv_at_v = "deriv_at"
+deriv_at_v = { form = "deriv_at", differs = [{ build = "ltspice26", difference = "step stated for a measurement over the stepped parameter", reason = "LTspice measures an AT form of a stepped run with no .step line over the stepped parameter, not at one step" }] }
 deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed", on = { ltspice17 = { printed = "line", outcome = "value" } } }
 
 [[grid.printed-measurement.cell]]
@@ -4504,7 +4521,7 @@ cases = ["log/meas_grid_tf_step_find"]
 at = { analysis = "tf", stepped = "yes", printed = "line", outcome = "value" }
 [grid.printed-measurement.cell.items]
 find_v = { form = "find", printed_once = { step = 1, of = 2 }, refused = { ltspice17 = "XVII prints nothing for a FIND with no point in a stepped .tf." } }
-param_v = { form = "param", printed_once = { step = 1, of = 2 }, on = { ltspice17 = { printed = "failed", outcome = "failed" } } }
+param_v = { form = "param", printed_once = { ltspice26 = { step = 1, of = 2 } }, on = { ltspice17 = { printed = "failed", outcome = "failed" } } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_grid_tran_find_failed"]

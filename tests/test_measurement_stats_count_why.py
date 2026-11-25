@@ -181,7 +181,7 @@ def _meas_step_expected(build: str) -> Counts:
     cell = _grid_item("log/meas_step", "s_when")
     at = cell.at(build)
     assert at["outcome"] == "step_fails"
-    (step,) = cell.extra["steps"]
+    (step,) = cell.extra_on("steps", build)
     cells = _table_cells(read_log_text(rec.recorded(build, "log/meas_step.log")))["s_when"]
     total = len(cells)
     if rec.generation(build) == "xvii":

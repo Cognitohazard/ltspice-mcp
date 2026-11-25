@@ -37,11 +37,15 @@ GRIDS = grids()
 #: the same change. A new coordinate with no recording raises it, with a line
 #: below saying why.
 #:
-#: printed-measurement: every coordinate has a cell. The decks of behaviour
-#: log-meas-grid fill all but the .fra margins on XVII (raw/fra_step is
-#: recorded on LTspice 26 only), and wait for a recording run on Windows. A
-#: coordinate a build fills only by refusing the deck for another card is not
-#: recorded.
+#: printed-measurement: of LTspice 26, a stepped .op or .tf range that
+#: prints a value, a stepped .tran or .dc FIND that prints one at every step
+#: (the stepped FIND decks read 0 at the sweep's start), and a stepped .dc
+#: TRIG/TARG that does (log/meas_grid_dc_step_value fails at its second
+#: step). Of XVII, the coordinates whose outcome its recordings do not show
+#: (most of them stepped .ac, noise, .dc and .tran forms), the .param of an
+#: .op or a .tf, and the .fra margins (raw/fra_step is recorded on LTspice 26
+#: only). A coordinate a build fills only by refusing the deck for another
+#: card is not recorded.
 #:
 #: log-condition: of the rules, simulator_error has no line on LTspice 26,
 #: and simulator_warning and deck_error.xvii.1 none on XVII: no recording
@@ -110,7 +114,7 @@ UNRECORDED: dict[str, dict[str, int]] = {
     "declaration": {"ltspice26": 11, "ltspice17": 11},
     "value-number": {"ltspice26": 162, "ltspice17": 162},
     "expression-value": {"ltspice26": 76, "ltspice17": 76},
-    "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
+    "printed-measurement": {"ltspice26": 15, "ltspice17": 112},
     "log-condition": {"ltspice26": 20, "ltspice17": 21},
     "step-value": {"ltspice26": 56, "ltspice17": 56},
     "results-layout": {"ltspice26": 85, "ltspice17": 87},
@@ -233,13 +237,6 @@ _AGGREGATES = frozenset({"max", "min", "pp", "avg", "rms", "integ"})
 #: cells of the grid, with the reason. None today.
 OUTSIDE_THE_GRID: dict[tuple[str, str], str] = {}
 
-#: ``MeasCard`` knows no ``tf`` analysis word (``spice_lex_views.MeasAnalysis``),
-#: so it reads ``.meas tf name ...`` as a measurement named ``tf``. Whether
-#: LTspice takes ``tf`` there waits for the recordings of the
-#: ``log/meas_grid_tf_*`` decks; until then the index reads the name after it.
-MEAS_CARD_READS_TF_AS_THE_NAME = True
-
-
 @functools.cache
 def _deck_cards(source: str) -> tuple[SpiceCard, ...]:
     return tuple(lex_deck(read_spice_text(INPUTS / source)).cards)
@@ -262,11 +259,7 @@ def _meas_cards(source: str) -> dict[str, tuple[str, list[str]]]:
             found[name.lower()] = (name, [w.lower() for w in words[words.index(name) + 1 :]])
             continue
         words = [t.text.casefold() for t in meas.body_tokens if t.kind == TokenKind.BARE]
-        name = meas.name
-        if meas.analysis is None and name.lower() == "tf":
-            assert MEAS_CARD_READS_TF_AS_THE_NAME
-            name, words = meas.body_tokens[0].text, words[1:]
-        found[name.lower()] = (name, words)
+        found[meas.name.lower()] = (meas.name, words)
     return found
 
 
@@ -326,12 +319,23 @@ def test_a_measurement_cell_is_a_card_of_its_deck_as_it_declares(cell: Cell):
     # An outcome in one step names the steps, and only such an outcome does.
     for build in rec.BUILDS:
         one_step = cell.at(build)["outcome"] in ("step_fails", "step_zero")
-        assert bool(cell.extra.get("steps")) == one_step, (cell.id, build)
-        assert all(step >= 1 for step in cell.extra.get("steps", ())), cell.id
-    # Only a result over a sweep can be 0 by its form, where a step has one point.
-    if cell.extra.get("zero_by_form"):
-        assert at["analysis"] in ("op", "tf") and at["outcome"] == "value", cell.id
-        assert at["form"] in ("pp", "deriv_at", "deriv_when", "trig_targ"), cell.id
+        steps = cell.extra_on("steps", build, ())
+        assert bool(steps) == one_step, (cell.id, build)
+        assert all(step >= 1 for step in steps), cell.id
+    # Only a result over a sweep can be 0 by its form, where a step has one
+    # point; and LTspice 26 prints a derivative over a stepped AC sweep as 0
+    # in every step (log/meas_grid_ac_step_value), where XVII prints a number.
+    for build in rec.BUILDS:
+        if not cell.extra_on("zero_by_form", build):
+            continue
+        on = cell.at(build)
+        if on["analysis"] == "ac":
+            assert rec.generation(build) == "current", (cell.id, build)
+            assert on["stepped"] == "yes", (cell.id, build)
+            assert on["form"] in ("deriv_at", "deriv_when"), (cell.id, build)
+            continue
+        assert on["analysis"] in ("op", "tf") and on["outcome"] == "value", (cell.id, build)
+        assert on["form"] in ("pp", "deriv_at", "deriv_when", "trig_targ"), (cell.id, build)
 
 
 def test_every_card_of_a_measurement_deck_is_a_cell():
@@ -394,11 +398,3 @@ def test_every_recorded_log_that_prints_a_measurement_is_indexed():
                     missing.append(f"{build}/{case_id}:{name}")
     assert not missing, missing
 
-
-def test_meas_card_reads_the_tf_analysis_word_as_the_name():
-    """Pinned: ``MeasCard`` reads ``.meas tf name FIND ...`` as a measurement
-    named ``tf`` with no analysis. When it learns ``tf``, this fails, and
-    ``MEAS_CARD_READS_TF_AS_THE_NAME`` and the reading above come out."""
-    card = next(c for c in _deck_cards("log/meas_grid_tf_find.cir") if c.kind == "meas")
-    meas = MeasCard.from_card(card)
-    assert (meas.analysis, meas.name) == (None, "tf")

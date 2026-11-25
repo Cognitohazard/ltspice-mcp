@@ -1634,10 +1634,13 @@ def _printed_once(producer: Producer, solves: int) -> PrintedOnce:
     step: a stepped ``.op``.
 
     LTspice 26 prints one line for each measurement of a stepped ``.op``
-    (recorded: log/meas_step_op, three steps). The line holds the first
-    step's value: raw/step_op runs the same divider over the same steps, and
-    its results file holds V(out) 0.8, 1.6 and 2.4, where the log printed
-    0.800000011921. Which build wrote the log is :func:`which_ltspice`'s
+    (recorded: log/meas_step_op, three steps). The line of a FIND with no
+    point holds the first step's value: raw/step_op runs the same divider
+    over the same steps, and its results file holds V(out) 0.8, 1.6 and 2.4,
+    where the log printed 0.800000011921. A FIND or DERIV with AT is
+    measured over the stepped parameter instead, on both builds
+    (log/meas_grid_op_step_find_at), so its line holds no one step's value.
+    Which build wrote the log is :func:`which_ltspice`'s
     answer. Only LTspice 26 is recorded, so the step is established for it
     alone: for another current release (24, 25 or later), XVII, which printed
     no such line in the recording, IV, and a log no evidence names, it is
