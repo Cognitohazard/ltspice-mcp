@@ -642,7 +642,7 @@ class TestBuildSummaryWiring:
         assert len(summary["signals"]) == 100
         assert summary["signals"] == names[:100]
         assert summary["signals_truncated"] == 150
-        assert "inspect(kind='results', view='signals')" in summary["hint"]
+        assert "inspect(queries=[{'kind': 'results', 'path': ..., 'view': 'signals'}])" in summary["hint"]
 
     def test_small_signals_list_not_truncated(self):
         raw = make_raw_mock(

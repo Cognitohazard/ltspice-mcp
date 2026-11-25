@@ -2306,7 +2306,7 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     refusals = [failure["message"] for failure in data["failures"]]
     assert any("Transfer Function" in message for message in refusals), refusals
     bias_refusal = next(message for message in refusals if "Transfer Function" in message)
-    assert "inspect(kind='results', view='table')" in bias_refusal
+    assert "inspect(queries=[{\"kind\": \"results\", \"job_id\": <job_id>, \"view\": \"table\"}])" in bias_refusal
     assert "value recipe" not in bias_refusal
     assert _answered_nothing(data["results"]["op"])
     assert {failure["where"] for failure in data["failures"]} == {"dut:0"}
@@ -3628,7 +3628,7 @@ async def test_a_summary_that_caps_its_signal_list_names_the_call_that_lists_the
     (row,) = data["results"]["s"]["values"]
     summary = row["value"]
     assert summary["signals_truncated"] == len(names)
-    assert "inspect(kind='results', view='signals')" in summary["hint"]
+    assert "inspect(queries=[{'kind': 'results', 'path': ..., 'view': 'signals'}])" in summary["hint"]
 
     listed: list[str] = []
     cursor = None

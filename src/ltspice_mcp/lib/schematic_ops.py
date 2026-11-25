@@ -98,6 +98,7 @@ from ltspice_mcp.lib.connectivity import (
     named_nets,
     point_on_segment,
 )
+from ltspice_mcp.lib.continuation import Unfilled, inspect_call
 from ltspice_mcp.lib.encoding import read_spice_text, refused_sheet_mark, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
@@ -328,6 +329,9 @@ def create_component(
 # Per-file locks to prevent concurrent edits to the same circuit file.
 # Bounded to avoid unbounded growth; only evicts *unheld* locks.
 _MAX_EDIT_LOCKS = 64
+
+#: The call that lists a net's wires, labels and pins, for refusals that point at it.
+_NET_CALL = inspect_call("net", path=Unfilled("sheet"), at=[Unfilled("x"), Unfilled("y")])
 _edit_locks: dict[Path, asyncio.Lock] = {}
 
 
@@ -3715,7 +3719,7 @@ def _no_wire_text(editor: AscEditor, ends: set[tuple[int, int]]) -> str:
     if not there:
         return (
             f"No wire to remove: no wire has an end at {named}. To see the wires of a "
-            "net with their ends, call inspect(kind=\"net\", at=[x, y]) on a point of it."
+            f"net with their ends, call {_NET_CALL} on a point of it."
         )
     return (
         f"No wire to remove: the wires with an end at {named} are {_listed(there)}. "
@@ -3737,8 +3741,7 @@ def _no_label_text(editor: AscEditor, point: tuple[int, int]) -> str:
     there = [*(f"pin {name}" for name in pins), *(f"wire {wire}" for wire in wires)]
     at = f"({point[0]},{point[1]})"
     fix = (
-        "To see the labels of a net with their points, call "
-        "inspect(kind=\"net\", at=[x, y]) on a point of it."
+        f"To see the labels of a net with their points, call {_NET_CALL} on a point of it."
     )
     if not there:
         return f"No net label at {at}, and nothing else is there. {fix}"

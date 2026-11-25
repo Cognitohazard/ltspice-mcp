@@ -597,7 +597,8 @@ class TestRemovalsInOneBatch:
                 "op": "remove_wire",
                 "error": (
                     "No wire to remove: no wire has an end at (400,100). To see the wires "
-                    "of a net with their ends, call inspect(kind=\"net\", at=[x, y]) on a "
+                    "of a net with their ends, call inspect(queries=[{\"kind\": \"net\", \"path\": "
+                    "<sheet>, \"at\": [<x>, <y>]}]) on a "
                     "point of it."
                 ),
             }

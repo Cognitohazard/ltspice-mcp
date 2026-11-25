@@ -12,14 +12,14 @@ description: >
 Settle the design as a netlist first, then build the sheet, which is for
 presentation and review. Edit `.asc` files only through `edit_schematic` (or
 LTspice's GUI), because it routes wires orthogonally and checks pin collisions
-and junctions. `edit_schematic(path=..., base="blank")` starts a new sheet;
+and junctions. `edit_schematic(path=..., base="blank", ops=[...])` starts a new sheet;
 every mutation below is an entry in its `ops` list. The ops are applied
 together, and the first one that fails aborts the batch with nothing written,
 so batch a whole build into one call. Place components with the
 `add_component` op. The response's `touched` view lists their placed pins and
 nets, and `warnings` reports any overlap. A pin on a net that no label names
 has no `net`; with a `compare`, it has `net_export`, the name LTspice's
-export gives it (`N001`). `inspect(kind="symbol")` previews the same geometry
+export gives it (`N001`). `inspect(queries=[{"kind": "symbol", "name": ...}])` previews the same geometry
 before you place anything (pass `rotation` when you know the placement, to get
 that one instead of all eight), and lists every attribute the symbol has
 (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes
@@ -34,7 +34,7 @@ result's `undo` is the op that puts the old words back.
 ### Finding the sheet the user has open
 
 When the user says "this circuit" and names no file, find out what they have
-open with `inspect(kind="open_in_ltspice")`. It lists the sheets and netlists
+open with `inspect(queries=[{"kind": "open_in_ltspice"}])`. It lists the sheets and netlists
 open in LTspice and marks the one in front `active`. Work on that path as on
 any other. A sheet with `differs_from_file: true` has changes in the window
 that are not in the file, so a run would simulate something other than what
@@ -70,7 +70,7 @@ on a job that ran an `.asc`. The run's results are written beside the sheet
 under its name, replacing the results and log there, and opened from the
 sheet, which makes LTspice tie the plot to the sheet. The reply's `ltspice`
 block then names the `sheet` and has `tied: true`, and a click on a net in the
-sheet plots it. The copy is the one `jobs(action="place_beside_sheet")` makes,
+sheet plots it. The copy is the one `jobs(action="place_beside_sheet", job_id=...)` makes,
 and the block's `not_checked` and `left_in_place` say what it did not check
 and which of the sheet's result files from another run it left beside it. A
 sheet changed since the run is not given its results: the run opens on its
@@ -111,7 +111,7 @@ circuit has changed since the run, since the results would not match it; a
 netlist with a sheet of its name beside it (`results_belong_to_sheet`),
 since LTspice shows that file as the sheet's run: run the sheet, or copy the
 netlist under another name; and a case of a job whose runs have not all
-finished (`job_not_terminal`; `jobs(action="wait", wait_for="runs")` first),
+finished (`job_not_terminal`; `jobs(action="wait", job_id=..., wait_for="runs")` first),
 although a finished case can be read before then.
 When the user wants that before the run starts, pass
 `execution={"results_beside_sheet": true}` to `run_experiments` instead: each
@@ -168,7 +168,7 @@ the user which copy to keep and pass that process as `window_pid` with
 are gone, and `"discard"` drops every copy. Every `open_window` call quotes the
 file's `sha256` as `expected_sha256` and is refused without it: after a refused
 edit the one that edit sent, after a commit the reply's, and otherwise the
-`sha256` that `inspect(kind="open_in_ltspice")` with the sheet as `path` gives.
+`sha256` that `inspect(queries=[{"kind": "open_in_ltspice", "path": ...}])` with the sheet as `path` gives.
 
 ### Component attributes and bus notation
 
@@ -190,13 +190,13 @@ edit the one that edit sent, after a commit the reply's, and otherwise the
 | res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M90→(y,x), M180→(x,-y), M270→(-y,-x). Use `inspect(kind="symbol")` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M90→(y,x), M180→(x,-y), M270→(-y,-x). Use `inspect(queries=[{"kind": "symbol", "name": ...}])` for exact positions.
 
 A pin is addressed as `REF.PIN` (`M1.D`) by its name. When no pin has that name
 and it is all digits, it is the pin's 1-based SpiceOrder, the terminal number a
 netlist uses, so `X1.2` reaches the second pin of a block whose pins are
 lettered. Names are matched first because some symbols name their pins `1`/`2`
-in an order that need not be their SpiceOrder. `inspect(kind="symbol")` lists
+in an order that need not be their SpiceOrder. `inspect(queries=[{"kind": "symbol", "name": ...}])` lists
 each pin's `name` and `order`.
 
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols
@@ -228,7 +228,7 @@ with a level-1 model as having its bulk at the source. A three-node
   toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at
   M180 (gate left, toward center) — gates face each other.
-- Use `inspect(kind="symbol", rotation=...)` with the intended rotation and
+- Use `inspect(queries=[{"kind": "symbol", "name": ..., "rotation": ...}])` with the intended rotation and
   read its pins to verify pin directions before placing.
 
 ### Schematic layout best practices
@@ -239,8 +239,8 @@ pins with net labels instead of routing wires. If your environment supports
 subagents, give one the final netlist and guide section 'schematics' as its
 whole brief. It builds with `edit_schematic`, never by writing the `.asc`
 itself, and verifies before it returns. `verify_circuit` with the `export` and
-`compare` checks must match the source netlist, and `inspect(kind="net")` must
-show no multi-label shorts. Review the result with `inspect(kind="components")`.
+`compare` checks must match the source netlist, and `inspect(queries=[{"kind": "net", "path": ..., "at": ...}])` must
+show no multi-label shorts. Review the result with `inspect(queries=[{"kind": "components", "path": ...}])`.
 
 #### Component placement
 
@@ -254,7 +254,7 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
 - **Pin-to-rail alignment**: Place voltage/current sources so their pins are
   directly on the rail they connect to, with no wire through the source body.
   For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail
-  y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement
+  y-coordinate. Use `inspect(queries=[{"kind": "symbol", "name": ...}])` to compute the exact placement
   origin from the desired pin position (e.g., for voltage `+` at y=128, place
   origin at y=128-16=112).
 - **Keep at least 128 units of vertical space between the pin levels** of
@@ -265,7 +265,7 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   y-level of their functional counterpart (e.g., M3 tail current source).
 - **Plan the full layout before placing**: Decide VDD rail y, tier
   y-coordinates, and bus y-coordinates first. Verify that buses fit between
-  bounding boxes of adjacent tiers. Use `inspect(kind="symbol")` to check bbox
+  bounding boxes of adjacent tiers. Use `inspect(queries=[{"kind": "symbol", "name": ...}])` to check bbox
   extents at the intended rotation.
 
 #### Wiring
@@ -274,7 +274,7 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   route diagonal wires. Use waypoints in the `wire_pins` op for L-shaped or
   multi-segment routes.
 - **Horizontal buses must route outside all component bounding boxes.** Use
-  `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top
+  `inspect(queries=[{"kind": "symbol", "name": ...}])` to check bbox extents. For PMOS M180 with bbox top
   at y=160, a gate bus at y=176 is inside the bbox — route at y=144 (between
   VDD rail and bbox top) instead. Plan bus y-coordinates before placing
   components.
@@ -287,7 +287,7 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   and a `remove_wire` op on the new segment undoes it. The op's entry in the
   response's `results` names the wire it joined under `junctions`. Two wires
   that only cross are not joined. A waypoint that touches another net's wiring
-  is refused rather than silently merging it; `inspect(kind="net")` at a point
+  is refused rather than silently merging it; `inspect(queries=[{"kind": "net", "path": ..., "at": ...}])` at a point
   on a wire traces that wire (`snapped_to_wire`).
 - **Heed the `wire_pins` op's errors and junctions**: it refuses diagonal
   wires, pin collisions, and wire junction overlaps. Where the route joins its

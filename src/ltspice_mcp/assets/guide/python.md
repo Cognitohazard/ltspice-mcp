@@ -91,7 +91,7 @@ starting a session.
   closes or its process exits. In `run_code` that process is the worker, so a
   worker restart interrupts the jobs it owned. `api.run_experiments(wait=False, detach=True)`
   hands the job to an owner process of its own, so it outlives yours;
-  `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
+  `api.wait(job_id)` or `jobs(action="wait", job_id=...)` reads it from anywhere.
 - To open a sheet's run in LTspice, pass
   `execution={"results_beside_sheet": True}`: the results are copied beside
   the `.asc`, or a netlist, under its name as the runs finish, instead of copying them with
@@ -112,14 +112,14 @@ Guide section 'ngspice' covers `simulator_seed` and a deck's own
 `.options seed`, either of which makes a deck's random functions repeatable on
 ngspice.
 
-`api.jobs(detach=True, action="resume", ...)` gives the child its own supervising
+`api.jobs(detach=True, action="resume", job_id=..., resume_request_id=...)` gives the child its own supervising
 process. Detach applies only to resume and cannot be combined with
 `raw_page=True`. As with any resume, pass the parent's `control_token` unless
 this `Api` submitted or resumed the parent; a new `Api` opened after `close()`
 needs it too. The token is checked before the
 owner process starts. The resume's `wait_s` is honored, defaults to zero and
 is held to `limits.dwell.run_experiments_wait_max_s` in
-`inspect(kind="capabilities")`. For a full wait, call `api.wait` on the child
+`inspect(queries=[{"kind": "capabilities"}])`. For a full wait, call `api.wait` on the child
 receipt's job id.
 
 ## Reading results
@@ -308,7 +308,7 @@ Name each further executable, in `[simulator.executables]` of the config
 (`xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"`) or as
 `Api(working_dir=".", simulator_executables={"xvii": "C:/.../XVIIx64.exe"})`,
 and select it per run with `execution={"simulator": "ltspice:xvii"}`. The plain
-family name still runs the default build. `inspect(kind="capabilities")` lists
+family name still runs the default build. `inspect(queries=[{"kind": "capabilities"}])` lists
 the named builds under `named_executables`. Each job records the executable
 that ran it, and its replies name the simulator as `simulator`, the selector
 to pass back to run the same build.

@@ -496,7 +496,7 @@ def verify_replay(
         f"{describe_executable(job.simulator_executable)}; this request would now run "
         f"on {describe_executable(executable)}. Its results cannot be shown to come from "
         "the current build. Submit under a new request_id to run it on the current "
-        "executable; jobs(action='status') still reads the recorded job."
+        "executable; jobs(action='status', job_id=...) still reads the recorded job."
     )
 
 

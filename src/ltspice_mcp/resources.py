@@ -169,7 +169,7 @@ def get_static_resources() -> list[types.Resource]:
                 "What each simulator family can do: every capability's status "
                 "(supported, a declared gap, or unverified) with the evidence or the "
                 "reason, for every family whether or not it is detected here. "
-                "inspect(kind='capabilities') shows the detected families' statuses "
+                f"{capabilities.CAPABILITIES_CALL} shows the detected families' statuses "
                 "without the evidence."
             ),
         ),

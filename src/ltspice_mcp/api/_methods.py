@@ -459,7 +459,7 @@ def _note_detached_owner(
             f"This job is already terminal. Pid {owner_pid} is the process its "
             "record names as having run it; nothing is supervising it now and "
             "there is nothing to cancel. Read its results with "
-            "jobs(action='status'|'runs') or analyze_results by job_id. The "
+            "jobs(action='status'|'runs', job_id=...) or analyze_results by job_id. The "
             "process this call spawned to look the job up wrote its console "
             f"output to {log_file}."
         )
@@ -468,9 +468,9 @@ def _note_detached_owner(
             f"This job is owned by a detached process (pid {owner_pid}) that "
             "supervises it until it is terminal. This Api's session does not "
             "run it, so closing the Api or exiting the interpreter does not "
-            "stop it. Read it back with jobs(action='status'|'wait') by "
-            "job_id, and stop it with jobs(action='cancel') and this receipt's "
-            f"control_token. The owner's console output is at {log_file}."
+            "stop it. Read it back with jobs(action='status'|'wait', "
+            "job_id=...), and stop it with jobs(action='cancel', job_id=...) and "
+            f"this receipt's control_token. The owner's console output is at {log_file}."
         )
     experiment_store.replace_code(
         observations,
@@ -878,7 +878,7 @@ class ApiMethodsMixin(ABC):
         ``guide('bench-craft')`` returns one of them, and
         ``guide('schematics', heading='MOSFET orientation conventions')`` one
         heading of a section, down to the next heading of its level, matched
-        whatever its case. The same text ``inspect(kind='guide')`` serves over
+        whatever its case. The same text ``inspect(queries=[{'kind': 'guide'}])`` serves over
         MCP.
 
         A static method for the same reason as :meth:`reference`: reading the
@@ -1101,7 +1101,7 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("detach must be a bool")
         if detach:
             if arguments.get("action") != "resume":
-                raise ApiValidationError("Only jobs(action='resume') accepts detach=True.")
+                raise ApiValidationError("Only jobs(action='resume', job_id=..., resume_request_id=...) accepts detach=True.")
             if raw_page:
                 raise ApiValidationError("detach=True cannot be combined with raw_page=True.")
             if not self._state.config.persist_jobs:
@@ -1195,7 +1195,7 @@ class ApiMethodsMixin(ABC):
     ) -> dict[str, Any]:
         """Wait for a job, returning a complete snapshot on terminality or timeout.
 
-        ``timeout_s`` is spelled as ``jobs(action="wait")`` spells it; ``timeout``
+        ``timeout_s`` is spelled as ``jobs(action="wait", job_id=...)`` spells it; ``timeout``
         is the older spelling, still accepted. None waits until the job ends.
         """
         self._check_process_and_thread()

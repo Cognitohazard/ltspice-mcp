@@ -159,7 +159,7 @@ from ltspice_mcp.lib.connectivity import (
     name_keys,
     named_labels,
 )
-from ltspice_mcp.lib.continuation import call_to_continue
+from ltspice_mcp.lib.continuation import call_to_continue, inspect_call
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
@@ -167,6 +167,7 @@ from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.hierarchy import (
+    HIERARCHY_CALL,
     SUPPORTED_FAMILIES,
     SemanticProfile,
     established_modes,
@@ -417,7 +418,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         x, y = args.x, args.y
         net = _net_at(sheet, (x, y))
     else:
-        raise NetlistError("inspect(kind='net') needs either 'pin' or both 'x' and 'y'.")
+        raise NetlistError("A net query needs either 'pin' or both 'x' and 'y'.")
 
     root = nets.folded(net)
     coords = sheet.net_points.get(root, ())
@@ -496,7 +497,8 @@ def _net_at(sheet: Sheet, point: tuple[int, int]) -> int:
     if not found:
         raise NetlistError(
             f"Nothing found at ({x},{y}): no component pin, net label or wire "
-            "touches it. Use inspect(kind='components') to inspect the layout."
+            "touches it. Use inspect(queries=[{'kind': 'components', 'path': ...}]) to "
+            "inspect the layout."
         )
     here = nets.pins_at(point)
     if len({nets.folded(nets.of_pin(pin)) for pin in here}) > 1:
@@ -1649,12 +1651,12 @@ def _deck_node(
             " It is a .global net, one node across the deck, but the net query lists "
             "only the deck's own cards"
             + (f", and only .subckt {', '.join(inside)} uses it" if inside else "")
-            + ". inspect(kind='hierarchy') lists the nodes of each subcircuit instance."
+            + f". {HIERARCHY_CALL} lists the nodes of each subcircuit instance."
         )
     elif inside:
         message += (
             f" It is a node inside .subckt {', '.join(inside)}, which the net query "
-            "does not read: it lists the deck's own cards. inspect(kind='hierarchy') "
+            f"does not read: it lists the deck's own cards. {HIERARCHY_CALL} "
             "lists the nodes of each subcircuit instance."
         )
     included = sum(1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS)
@@ -1674,7 +1676,7 @@ def _deck_node(
     if close:
         message += f" Did you mean '{written[close[0]]}'?"
     known = list(spellings.values())
-    route = "inspect(kind='components', detail='full') lists each card's nodes"
+    route = "inspect(queries=[{'kind': 'components', 'path': ..., 'detail': 'full'}]) lists each card's nodes"
     if len(known) > _NODES_LISTED:
         shown = ", ".join(known[:_NODES_LISTED])
         message += (
@@ -2201,8 +2203,9 @@ async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str
 # ---------------------------------------------------------------------------
 
 _REFERENCE_CONTENTS_HINT = (
-    "Ask again with a 'query' in plain words — inspect(kind='reference', "
-    "query='phase margin') — for a branch's fields, types, defaults and units."
+    "Ask again with a 'query' in plain words — "
+    f"{inspect_call('reference', query='phase margin')} — for a branch's fields, types, "
+    "defaults and units."
 )
 
 
@@ -2243,8 +2246,8 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
     }
     if not matches:
         data["hint"] = (
-            f"Nothing matched {q.query!r}. Call inspect(kind='reference') with no "
-            "query for the whole vocabulary, or read the guide: inspect(kind='guide')."
+            f"Nothing matched {q.query!r}. Call {inspect_call('reference')} "
+            f"for the whole vocabulary, or read the guide: {inspect_call('guide')}."
         )
     elif total > len(matches):
         # Name the lever that is actually free. Under a response budget the
@@ -2378,7 +2381,7 @@ def _windows_error(exc: BridgeError) -> _QueryError:
     if isinstance(exc, WindowsUnavailable):
         return _QueryError(
             "open_windows_unavailable",
-            f"{exc}. inspect(kind='capabilities') reports this under open_window_sync.",
+            f"{exc}. {capabilities.CAPABILITIES_CALL} reports this under open_window_sync.",
         )
     return _QueryError(
         "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
@@ -2478,7 +2481,7 @@ async def _window_difference_page(
         else:
             message = (
                 f"No LTspice window has {target.name} open; "
-                "inspect(kind='open_in_ltspice') without a path lists what is open."
+                "inspect(queries=[{'kind': 'open_in_ltspice'}]) lists what is open."
             )
         raise _QueryError("sheet_not_open", message)
     if len(chosen) > 1:
@@ -2563,7 +2566,7 @@ def _hierarchy_simulator(selector: str, state: SessionState) -> type | None:
     simulator = state.named_simulators.get(selector) or state.available_simulators.get(selector)
     if simulator is None and ":" in selector:
         raise NetlistError(
-            f"no executable is named {selector!r}; inspect(kind='capabilities') lists them"
+            f"no executable is named {selector!r}; {capabilities.CAPABILITIES_CALL} lists them"
         )
     return simulator
 

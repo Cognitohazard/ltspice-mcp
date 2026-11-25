@@ -57,6 +57,7 @@ from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
+from ltspice_mcp.lib.continuation import Unfilled, inspect_call
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, declared_unit
 from ltspice_mcp.lib.device_names import (
@@ -173,6 +174,9 @@ from ltspice_mcp.lib.trace_names import (
     naming_note,
 )
 from ltspice_mcp.state import SessionState
+
+#: The call that reads a run's native quantities as a table.
+RESULTS_TABLE_CALL = inspect_call("results", job_id=Unfilled("job_id"), view="table")
 
 #: One metric's answer. See the module docstring for why this is not a
 #: TypedDict: the key set is chosen by the data, not by the recipe.
@@ -306,7 +310,7 @@ def _no_axis_error(raw: DecodedRaw | DecodedPlot) -> NoAxisError:
         )
     else:
         hint = (
-            "Read its quantities through inspect(kind='results', view='table') "
+            f"Read its quantities through {RESULTS_TABLE_CALL} "
             "or api.load_raw(...).table()."
         )
     return NoAxisError(
@@ -2784,7 +2788,7 @@ async def operating_point(
     is_dc = is_dc_analysis(raw)
     if as_bias_point and not (is_operating_point(raw) or is_dc):
         hint = (
-            "Read native quantities with inspect(kind='results', view='table')."
+            f"Read native quantities with {RESULTS_TABLE_CALL}."
             if raw.descriptor.axis is None
             else "Read sampled traces with the value recipe."
         )

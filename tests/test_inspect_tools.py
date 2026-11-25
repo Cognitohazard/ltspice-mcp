@@ -27,6 +27,7 @@ import pytest
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster, wsl
 from ltspice_mcp.lib.deck_staging import stage_deck
+from ltspice_mcp.lib.hierarchy import HIERARCHY_CALL
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
@@ -505,7 +506,7 @@ async def test_net_netlist_refuses_a_name_that_is_no_node_of_the_decks_own_cards
         assert item["error"]["code"] == "not_found"
         assert "Its nodes are a, out;" in item["error"]["message"]
     assert ".subckt cell" in inner["error"]["message"]
-    assert "inspect(kind='hierarchy')" in inner["error"]["message"]
+    assert HIERARCHY_CALL in inner["error"]["message"]
     assert ".subckt" not in dotted["error"]["message"]
     assert "Did you mean 'out'?" in typo["error"]["message"]
     assert ground["ok"] is True, ground
@@ -579,7 +580,8 @@ async def test_net_netlist_refusal_lists_a_few_nodes_and_counts_them_all(
     assert res["error"]["code"] == "not_found"
     assert res["error"]["message"].endswith(
         "Its nodes include n1, n2, n3, n4, n5, n6, n7, n8: showing 8 of 11 nodes; "
-        "inspect(kind='components', detail='full') lists each card's nodes."
+        "inspect(queries=[{'kind': 'components', 'path': ..., 'detail': 'full'}]) lists each "
+        "card's nodes."
     )
 
 
@@ -1500,7 +1502,7 @@ async def test_reference_says_so_when_nothing_matches(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "reference", "query": "zzz quuxbar"}])
     data = res["data"]
     assert "matches" not in data and data["total_matches"] == 0
-    assert "inspect(kind='guide')" in data["hint"]
+    assert 'inspect(queries=[{"kind": "guide"}])' in data["hint"]
 
 
 async def test_reference_limit_above_the_cap_is_held_for_that_item_only(

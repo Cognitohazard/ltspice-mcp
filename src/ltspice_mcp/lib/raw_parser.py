@@ -916,7 +916,8 @@ def build_simulation_summary(
             "signals",
             trace_names,
             _SIGNALS_STRUCTURED_CAP,
-            "inspect(kind='results', view='signals') with this run's path, or its job_id "
+            "inspect(queries=[{'kind': 'results', 'path': ..., 'view': 'signals'}]) with "
+            "this run's path, or its job_id "
             "and run_index, lists every signal, paged.",
         )
 

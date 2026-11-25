@@ -832,7 +832,7 @@ def _not_finished(
             if progress is not None
             else "What its simulator has written so far could not be read."
             if read
-            else "Its run_progress in jobs(action='status') says what its simulator has "
+            else "Its run_progress in jobs(action='status', job_id=...) says what its simulator has "
             "written so far."
         )
     return (

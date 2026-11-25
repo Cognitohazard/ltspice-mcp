@@ -38,6 +38,7 @@ from ltspice_mcp.lib import (
     response_budget,
 )
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.continuation import Unfilled
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -87,9 +88,9 @@ from ltspice_mcp.lib.pdk_native import (
 from ltspice_mcp.lib.recent import is_circuit_file
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
-    DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
+    dormant_pointer,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.said_once import Delivery
@@ -205,7 +206,7 @@ class ExperimentExecution(StrictModel):
         default=False,
         strict=True,
         description=(
-            "Freeze validated inputs for jobs(action='resume'); unsupported inputs "
+            "Freeze validated inputs for jobs(action='resume', job_id=..., resume_request_id=...); unsupported inputs "
             "refuse before submission. Defaults to false; see spice://guide."
         ),
     )
@@ -254,7 +255,7 @@ class ExperimentExecution(StrictModel):
             raise ValueError(
                 "execution.results_beside_sheet cannot be combined with recoverable: a "
                 "resumed job's runs would finish without it. Copy a case's results "
-                "afterwards with jobs(action='place_beside_sheet')"
+                "afterwards with jobs(action='place_beside_sheet', job_id=...)"
             )
         return self
 
@@ -263,7 +264,7 @@ class ExperimentExecution(StrictModel):
         ge=0.0,
         description=(
             f"Dwell before returning, held to {SUBMISSION_DWELL_CAP_S:g}s; the job keeps "
-            "running. Continue with jobs(action='wait'); 0 returns immediately."
+            "running. Continue with jobs(action='wait', job_id=...); 0 returns immediately."
         ),
     )
 
@@ -459,7 +460,7 @@ _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "type": "object",
     "description": (
         "An analyze_results.recipes entry, checked on submit."
-        + DORMANT_POINTER.format(metric="<metric>")
+        + dormant_pointer(Unfilled("metric"))
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},

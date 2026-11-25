@@ -17,6 +17,7 @@ from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
+from ltspice_mcp.lib.continuation import Unfilled, inspect_call
 from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_nodes import unestablished_reason as _unestablished_node
 from ltspice_mcp.lib.deck_staging import (
@@ -90,6 +91,9 @@ _SAFE_NODE = re.compile(r"[A-Za-z0-9_]+\Z")
 #: other family, and a test holds the two to each other.
 Family = Literal["ltspice", "ngspice"]
 SUPPORTED_FAMILIES: frozenset[str] = frozenset(get_args(Family))
+
+#: The call that reads a deck's hierarchy, for the messages that refer to it.
+HIERARCHY_CALL = inspect_call("hierarchy", path=Unfilled("deck"), simulator=Unfilled("simulator"))
 
 ESTABLISHED_NGBEHAVIOR: frozenset[str] = frozenset({"", "hsa", "kiltpsa"})
 """The ngspice modes whose reading rules this module follows were checked
@@ -248,7 +252,7 @@ def unestablished_reason(profile: SemanticProfile, purpose: str) -> str | None:
         f"unsupported hierarchy ngbehavior {profile.ngbehavior!r} for {purpose}: the "
         f"hierarchy reader's rules are established for {established_modes()} only; set "
         "[simulator] ngbehavior to hsa or kiltpsa (unset, the server uses kiltpsa) and "
-        "restart the server. inspect(kind='hierarchy') still reads the deck in this "
+        f"restart the server. {HIERARCHY_CALL} still reads the deck in this "
         "mode where ngspice confirms its values."
     )
 

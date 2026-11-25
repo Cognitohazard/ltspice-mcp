@@ -51,7 +51,7 @@ def _build_characterize_filter(arguments: Mapping[str, str]) -> types.GetPromptR
         f'"metric": "bode_filter", "signal": "{signal}"}}, {{"key": "bode", '
         f'"metric": "plot", "signals": ["{signal}"], "log_x": true}}].\n'
         "3. If it returned a receipt instead of results, follow the job with "
-        'jobs(action="wait"), then read it with analyze_results using the same '
+        'jobs(action="wait", job_id=...), then read it with analyze_results using the same '
         "recipes.\n"
         "Report the filter type, cutoff(s), peak gain, and roll-off (dB/dec)."
     )
@@ -70,7 +70,7 @@ def _build_run_and_plot(arguments: Mapping[str, str]) -> types.GetPromptResult:
         f'["{signal}"]}}, {{"key": "stats", "metric": "signal_stats", "signal": '
         f'"{signal}"}}].\n'
         "3. If it returned a receipt instead of results, follow the job with "
-        'jobs(action="wait"), then analyze_results on it.\n'
+        'jobs(action="wait", job_id=...), then analyze_results on it.\n'
         '4. For the numeric table add a {"metric": "waveform"} recipe, or read one '
         'point with {"metric": "value", "expr": ..., "at": ...}.\n'
         "Report the key observations (final value, overshoot, settling, anomalies)."
@@ -91,7 +91,7 @@ def _build_step_response(arguments: Mapping[str, str]) -> types.GetPromptResult:
         f'"{signal}", "mode": "step"}}, {{"key": "plot", "metric": "plot", '
         f'"signals": ["{signal}"]}}].\n'
         "3. If it returned a receipt instead of results, follow the job with "
-        'jobs(action="wait"), then analyze_results on it.\n'
+        'jobs(action="wait", job_id=...), then analyze_results on it.\n'
         "Report rise time, overshoot %, and settling time."
     )
     return _text_result("Measure a step response", text)

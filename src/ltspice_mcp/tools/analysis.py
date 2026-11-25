@@ -69,6 +69,7 @@ from ltspice_mcp.lib.ltspice_window import (
     WindowsUnavailable,
 )
 from ltspice_mcp.lib.metrics import (
+    RESULTS_TABLE_CALL,
     guarded_axis,
     parse_time,
     signal_stats_defined,
@@ -2063,7 +2064,7 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                         "type": "object",
                         "description": (
                             "Why a job's results were not put beside the sheet it ran "
-                            "(the code and message jobs(action='place_beside_sheet') "
+                            "(the code and message jobs(action='place_beside_sheet', job_id=...) "
                             "refuses with); the run was opened on its own."
                         ),
                         "properties": {
@@ -2153,7 +2154,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         if not args.in_ltspice:
             raise NoAxisError(
                 f"This plot has no sampled axis to chart: {_why_no_axis(raw.descriptor)}. "
-                "analyze_results' value metric or inspect(kind='results', view='table') "
+                f"analyze_results' value metric or {RESULTS_TABLE_CALL} "
                 "reads its values, and in_ltspice=true opens it in LTspice without a chart.",
                 show_hint=False,
             )

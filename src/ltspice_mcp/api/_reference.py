@@ -332,7 +332,7 @@ def _operations() -> tuple[_Operation, ...]:
                 "exiting. Add detach=True (only with wait=False) to hand the job "
                 "to a process spawned for it, which supervises it to the end and "
                 "outlives this one; the receipt then names that owner's pid and "
-                "log, and cancelling takes jobs(action='cancel') with the "
+                "log, and cancelling takes jobs(action='cancel', job_id=...) with the "
                 "receipt's control_token."
             ),
         ),

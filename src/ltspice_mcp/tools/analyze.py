@@ -54,7 +54,7 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
-from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue, inspect_call
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
@@ -4787,7 +4787,7 @@ _REQUEST_ECHO = frozenset({"sources", "recipes", "include", "group_by", "step", 
         "(propagation delay), periodic (duty cycle), transient_response (overshoot, settling, "
         "load step), time_steps (smallest time step, where), operating_point (bias point, gm/gds/vth), measurements "
         "(.meas), value (one trace at one axis point), summary, waveform "
-        "(samples, CSV), plot (chart). inspect(kind='reference', query=...) "
+        f"(samples, CSV), plot (chart). {inspect_call('reference', query=Unfilled('words'))} "
         "searches these by plain words and returns a recipe's fields. A signal is "
         "one trace or V(a,b), not an expression; other trace math is numpy "
         "(guide section 'signals')."
