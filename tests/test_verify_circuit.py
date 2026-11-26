@@ -275,7 +275,7 @@ def _assert_requested_check_outcome(data: dict, expected: str, not_run: list[str
 
 
 class TestARequestedCheckThatDidNotRunIsAShortfall:
-    """Design principle "Safe edits" (``docs/DESIGN.md``): a verdict that reads
+    """Design principle "Every check reports what's not covered" (``docs/DESIGN.md``): a verdict that reads
     as complete while it covered only part of the circuit is worse than no
     verdict. A check asked for by name in ``checks``, or the comparison asked
     for by supplying ``compare``, that could not run keeps the outcome off

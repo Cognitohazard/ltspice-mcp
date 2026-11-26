@@ -1,6 +1,6 @@
 """Each task agents reported doing in one call still takes one call.
 
-Design principle "One call per intent" (``docs/DESIGN.md``): the caller states
+Design principle "One call for one intent" (``docs/DESIGN.md``): the caller states
 what it wants and the server does the steps in between. When a task takes a
 sequence of calls, the fix is an op or an option, not a documented sequence.
 

@@ -1793,7 +1793,7 @@ def _placed(finding: dict) -> bool:
 def unplaced_findings(value: typing.Any, path: tuple = ()) -> Iterator[tuple[tuple, dict]]:
     """Every finding in a reply that says nowhere where it is, with its path.
 
-    Design principle "Validate before write" (``docs/DESIGN.md``): a finding
+    Design principle "A finding gives its place" (``docs/DESIGN.md``): a finding
     names the place, so the caller goes to it instead of searching the file.
     """
     if isinstance(value, dict):
@@ -1855,7 +1855,7 @@ def cut_without_continuation(
     (an integer field :func:`counts_what_was_left_out` names), reported at the
     count.
 
-    Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says
+    Design principle "Every check reports what's not covered" (``docs/DESIGN.md``): a list cut short says
     how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
     holds the declared schemas to the same rule.
     """

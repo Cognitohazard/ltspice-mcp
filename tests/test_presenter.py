@@ -1,7 +1,7 @@
 """The presenter sends a complete answer whole when it fits, and otherwise
 stores it, cuts the lists that may be cut, and says how to read the rest.
 
-Design principle "A short reply, the data behind an id" (``docs/DESIGN.md``).
+Design principle "Jobs and results are stored on disk and requests are repeatable" (``docs/DESIGN.md``).
 These are properties of ``lib/presenter.py`` over every declared output
 schema, each filled with a made-up answer larger than a target:
 

@@ -3,7 +3,8 @@
 This document covers the checks to run before a push or a release, the LTspice
 recordings and other committed records the suite checks against, and test
 conventions. The standard `pytest`, `ruff` and `pyright` commands are in
-`CLAUDE.md`; the architecture is in `docs/DESIGN.md`.
+`CLAUDE.md`; the design principles and the architecture are in
+`docs/DESIGN.md`.
 
 ## Privacy checks before pushing
 
@@ -270,13 +271,31 @@ function, or a replaced function keeps callers for a while, ban its name as
 `CLAUDE.md` describes; Ruff then flags each allowed use whose marker is no
 longer needed.
 
+## Tests of the design principles
+
+These design principles in `docs/DESIGN.md`, "Principles", are each held by a
+test that fails when a tool breaks it, except run speed, which a benchmark
+script measures. Separately, the output-schema conformance
+hook in `tests/conftest.py` checks every reply the suite produces against its
+schema, and `tests/test_conformance_hook_armed.py` checks that the hook is live.
+
+|principle|test|
+|-|-|
+|Refusals say how to fix the request|`tests/test_validation_errors.py` pins what each argument refusal names; `tests/test_refusals_name_the_fix.py` generates a misspelled, missing and misplaced argument for every tool|
+|A finding gives its place|`tests/conftest.py` (`unplaced_findings`) refuses any reply in the suite whose finding gives no line, coordinates or part reference|
+|Every check reports what's not covered|`tests/test_check_scope_is_stated.py`; `tests/test_capped_lists_say_how_to_continue.py` and `tests/conftest.py` hold a list cut short to saying how to read the rest; `tests/test_analyze_results_signal_listing.py`|
+|One call for one intent|`tests/test_one_call_per_task.py` counts the calls each task takes|
+|Jobs and results are stored on disk and requests are repeatable|`tests/test_short_reply_data_behind_an_id.py`, and the presenter tests (`tests/test_presenter.py`, `tests/test_reply_cuts.py`); `tests/test_argument_names_are_kept.py` holds renamed arguments to one release and to a refusal that names the new name|
+|Simulator and file-format quirks are recorded from real LTspice builds and covered by tests|`tests/test_files_ltspice_reads_are_recorded.py` ties each file the server writes for LTspice to a recording of LTspice reading it|
+|A recording comes before the code that uses it|`tests/test_ltspice_readers_are_recorded.py` requires every module that reads an LTspice format to name its recording|
+|A small run is fast enough to try|`scripts/benchmark_small_runs.py` compares small runs with a local baseline; tests do not time anything (`CLAUDE.md`, "Working practice")|
+
 ## Behaviours users rely on
 
 Users have reported these behaviours as working well. Each has a test that
 goes through the tool surface or the Python API, so it holds whatever code
 answers underneath; a change that makes one fail has broken something users
-rely on. They are grouped by the design principle each confirms
-(`docs/DESIGN.md`). A test not named with its module is in
+rely on. They are grouped by the outcome each confirms. A test not named with its module is in
 `tests/test_reported_behaviours.py`.
 
 |behaviour|guarded by|

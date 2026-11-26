@@ -1,6 +1,6 @@
 """Every module that reads one of LTspice's file formats names a recording.
 
-Design principle "Evidence before assumption" (``docs/DESIGN.md``): the server
+Design principle "A recording comes before the code that uses it" (``docs/DESIGN.md``): the server
 models only LTspice behaviour recorded from both supported builds, and a
 recording comes before the code that relies on it. ``cases.toml`` names, per
 behaviour, the code that models it (``model``), and

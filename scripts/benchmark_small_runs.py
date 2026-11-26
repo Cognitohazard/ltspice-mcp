@@ -1,6 +1,6 @@
 """Time a few small runs and compare them with a stored baseline.
 
-Design principle "Fast enough to try" (docs/DESIGN.md): small runs stay fast
+Design principle "A small run is fast enough to try" (docs/DESIGN.md): small runs stay fast
 enough that an agent runs an experiment instead of reasoning one out, and work
 added to the run path is weighed against that. The test suite times nothing
 (CLAUDE.md, "Working practice"), so this script is where a slowdown shows. It

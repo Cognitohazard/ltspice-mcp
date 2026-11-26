@@ -1,493 +1,178 @@
 # ltspice-mcp — Design
 
-This document covers the server's scope, architecture and design principles.
+An LLM agent can analyse a circuit. It can still make errors such as these:
 
-Install and client setup are in [README.md](../README.md) and
-[USAGE.md](USAGE.md). Tool arguments and replies are specified in
-[docs/design/mcp_surface.md](design/mcp_surface.md), the Python API in
-[docs/design/python_api.md](design/python_api.md), and the netlist parser in
-[docs/spice_lex.md](spice_lex.md). Current bugs and limitations are in the
-GitHub issue tracker.
+- It checks the gain of a loop and does not check the phase.
+- It moves a part and leaves a pin connected to nothing.
+- It calculates the mean of a transient waveform and ignores that the time steps are unequal.
+- It reads a measurement from the log and does not see that the solver reported a singular matrix.
+- It expects two LTspice builds to write the same log. They use different encodings.
+- It writes a script that reads a result file. No test covers the script, so a wrong value can look correct.
+
+An agent often finds such an error later, but the search uses time and context. Sometimes the error stays, because a wrong value can look correct.
+
+ltspice-mcp is an MCP server that runs SPICE simulations and edits LTspice schematics. Its tools report these cases in the first reply. The tools contain circuit design practice and recorded simulator behaviour, and tests cover them. Some examples of what a reply reports:
+
+- a node at 1e30 V, or a value that is not finite
+- a measurement that failed in every run of a sweep
+- a waveform that LTspice stored in compressed form, with few points
+- a `.step` card that ngspice ignores, so the netlist ran one time only
+- a number with an upper-case `M`, which SPICE reads as milli
+- two net names on one net, or two wires that cross and join
+- a node name that ngspice changes, which connects two nodes with no warning
+- the part of a circuit that a comparison did not cover
+
+These are examples. The netlist lint has 34 rules and the schematic lint has 22. The analyses and the log reader add their own findings.
+
+An agent can also write a script for each step. The tools differ from such a script:
+
+- **Tests cover them.** Each file reader is tested against 418 recorded inputs on two LTspice builds. Each reply is tested against its schema.
+- **They connect.** A call returns an id, and the next call uses that id. The Python API reads the same records.
+- **They use little context.** A call is about 50 tokens. A reply omits empty fields. Long data stays on disk, and a later call reads it by its id.
+- **They stay.** A later session uses the same tools and the same stored results. It does not write the script again.
+
+In short, this project strives to direct the LLM's attention to issues before a person must correct them, to reveal potential problems the AI isn't looking for, and to increase efficiency with tested tools.
 
 ## Scope
 
-The server targets **structured, validated, geometry-aware,
-LTspice-specific** operations:
+The server runs locally and speaks MCP on stdio. Each tool takes the path of a circuit file. The server is for an agent in Claude Code, for a person in a chat client such as Claude Desktop, and for scripts that import the Python API.
 
-- **Structured**: tool outputs declare schemas, and results are typed data
-  instead of free text.
-- **Validated**: tools that change a file refuse invalid states before
-  writing it.
-- **Geometry-aware**: `.asc` schematic operations work with the positions
-  of pins, parts and wires on the sheet as well as with component names and
-  nets.
-- **LTspice-specific**: the server handles `.asc`/`.asy`/`.raw` behavior and
-  Windows interop directly. ngspice is fully supported for simulation, result
-  parsing, diagnostics and analysis; it has no schematic format, so the
-  geometry tools do not apply to it. QSPICE and Xyce are supported on a
-  best-effort basis through spicelib's common interface.
+LTspice comes first, and Windows is the primary platform. WSL2 and Wine also run LTspice. ngspice has full support for simulation and analysis on Linux and Windows, and the lint and the ngspice section of the packaged guide list where its dialect differs from LTspice. QSPICE and Xyce have the support that spicelib gives. Schematic editing is for LTspice schematics only, because it reads LTspice's symbol files.
 
-### Platforms
+Later, the server will work with xschem for IC design. No date is set.
 
-Most users run the server natively on Windows alongside LTspice. WSL2 and
-Linux are also supported. The server uses WSL interop (the `/mnt` drive
-mapping, `wslpath`, the Windows-side temp directory for `.MEAS`) only when it
-detects WSL.
+## The two surfaces
 
-|simulator|platform|
-|-|-|
-|LTspice|Windows native; Linux through Wine; WSL through Windows interop|
-|ngspice|Linux and Windows native|
-|QSPICE|Windows native only (runs are refused under WSL or Wine)|
-|Xyce|Linux and Windows native|
+A tool call `run_experiments(...)` and the Python call `api.run_experiments(...)` take the same arguments. They run the same validation and the same operation. The Python API and the tools are one contract.
 
-macOS support is experimental. The server reads every `.raw` and `.log` file
-in a parser process with a hard memory limit and cleans up that process and
-any it started (`lib/parser_process.py`). On macOS the parser applies and
-proves its own limits before it reads a request, and refuses to run as root
-(`lib/parser_bootstrap.py`); [docs/TESTING.md](TESTING.md) says what is tested.
-The macOS parser starts with `MallocMediumZone=0`
-(`parser_bootstrap.DARWIN_ALLOCATOR`), and nothing else does. On Apple silicon
-the allocator's medium pool reserves 128 MiB of address space at its first
-allocation, which a small memory limit cannot absorb. The parser refuses to
-start when the setting is missing from its environment. If the system ignores
-it, a parse can only fail with a memory error well inside its limit, never use
-more.
+A script gets complete results, numpy arrays and exceptions. A reply to a script has no size limit. A tool is for one intent whose reply the agent uses as it is. Python is for loops, for combining runs and for math on traces.
 
-A schematic (`.asc`) runs through the netlist LTspice exports from it, which
-is in LTspice's own dialect. The server prepares that netlist for ngspice
-only, by removing the `.backanno` line and the `§` LTspice puts in some
-instance names, so a schematic run on QSPICE or Xyce is refused and needs a
-hand-written netlist.
-ngspice runs in spicelib's default compatibility mode, `kiltpsa`, which drops
-the section name from a `.lib <file> <section>` line that selects a corner;
-set `[simulator] ngbehavior` (for example `hsa`) when a deck uses one. Every
-ngspice run starts with `-n`, so a `.spiceinit` cannot change the mode the
-server reads the deck in.
+An agent that has only MCP gets the Python surface through `run_code`. A script and the server share the stored work in the working directory, so each can read a job that the other ran.
 
-### Why an MCP server instead of spicelib scripts
+There are 8 tools. The operations are data: sweeps are variations, measurements are recipes, schematic changes are ops and reads are kinds. Each tool definition uses context in every turn, so a few tools cost less than one tool for each operation. A batch of ops is also one transaction.
 
-The server is for an AI agent working on circuits on the machine that has the
-simulator and the circuit files. Its audiences, in order:
+No tool edits netlist text. An agent with file access writes a netlist well with its own file tools.
 
-- **Coding agents**, such as Claude Code, Cursor and Codex. They have file
-  tools and a shell, and work on that machine directly, through Claude Code's
-  Remote Control, or in a cloud container that runs ngspice. This is the main
-  audience.
-- **People chatting in Claude Desktop.** They see charts in the chat. The
-  assistant there has no file tools unless the person installs one, so it
-  writes a netlist through `run_code`.
+## The schematic
 
-Scripts and notebooks use the same code through the Python API.
+An agent adds a resistor at (320, 160) and draws a wire from its pin to an op-amp input along a path that it chooses. `edit_schematic` validates the edit before it writes the file. If the wire crosses a pin of another net, the call refuses the edit and returns each blocking element with its position.
 
-An agent that can run code could write spicelib scripts itself. The server
-helps in these cases:
+There is no automatic router and no automatic layout. An automatic router gives a drawing that is hard to read, and a person must read the schematic later.
 
-- **The simulator and the files where they live.** The server finds and runs
-  LTspice or ngspice on that machine (natively, under Wine or across WSL),
-  reads their result files and writes the files LTspice opens, so the agent
-  handles no detection, interop or file formats itself.
-- **Reliability.** A tool call runs a tested code path. LLM-written spicelib
-  code has import errors and wrong method names, and it forgets to save the
-  netlist.
-- **Context.** A tool call is about 50 tokens; the same work in Python is 20
-  to 40 lines.
-- **Structured analysis by default.** The `analyze_results` recipes return
-  typed numbers for -3 dB points (`bode_filter`), for slopes, gains and
-  crossings (`bode_slope`, `bode_point`, `bode_crossing`) and for transient
-  shape (`signal_stats`, `edges`, `transient_response`), so common questions
-  need no image.
-- **No user setup.** Install the server once. The project's environment
-  needs no spicelib, and the user needs no Python.
+The server supplies the geometry. `inspect(kind="symbol")` returns the pins and the bounding box of a symbol before the agent places it. The server checks a proposed route by LTspice's rules for which points of a sheet are one net, and returns the conflicts.
 
-Tools and Python split the work. A tool does what the server must own: a job
-that outlives a call, a transactional schematic edit, a verification, a single
-read whose reply is used as it is, and a chart for a person. Python does
-loops, combining runs and math on traces: `run_code` runs a snippet against
-the same code, and a script uses it directly as `Api(working_dir=...)`, which
-reads and writes the same job records as the server.
+`verify_circuit` has LTspice export the netlist of a saved sheet, and the server compares that netlist with a reference netlist or schematic. The file on disk is the reference, and an open LTspice window holds a copy. The server uses LTspice's own files and windows, and it does not draw a second schematic format.
 
-## Design principles
+## Results
 
-### Validate before write
+An agent asks for the phase margin of a loop. `analyze_results` returns `phase_margin_deg` with the gain margin and the unity-gain frequency. The waveform comes only on request, from the `waveform` recipe or from `plot_waveform`.
 
-Tools that change a file check the change first and refuse a state they can
-prove invalid. A refusal names the segments, pins or labels that blocked it,
-so the agent can choose again instead of guessing. Agents recover poorly from
-mistakes, and a refusal saves the turns that recovery would take.
+A result is a fact with no conclusion. A reply can report a crest factor of 8.1 for one stretch of a waveform, and it does not call that stretch a spike. A reply with no finding means that no check fired, and it does not mean "verified".
 
-The same holds for every refusal, finding and error, whether or not a write
-was involved: it names the field, the place and the way round, such as the
-fields an argument accepts, the coordinates of a collision, or the run that
-gives a result this one cannot. Tests pin what a refusal names
-(`tests/test_validation_errors.py` for argument refusals), generate a
-misspelled, missing and misplaced argument for every tool
-(`tests/test_refusals_name_the_fix.py`), and refuse any reply in the suite
-whose finding gives no line, coordinates or part reference (`tests/conftest.py`).
+`lib/result_observations.py` states the reason in the code. The agent has its own physics knowledge, so a trust label from the server adds no information. A wrong trust label is a false accusation, which a model can repeat or learn to ignore.
 
-### No auto-routing
+Sweeps, corners and Monte Carlo are data in one call. A `run_experiments` call lists its variations and attaches the analysis, and the reply returns the measured values of every case.
 
-The server does not lay out or route a circuit; the caller decides the
-drawing. When the server refuses a wire, it returns the conflict set (each
-blocking element and its position), and the caller picks another route.
+## The person
 
-### Safe edits
+A person asks the agent for a plot of `V(out)`. `plot_waveform` draws an interactive chart in the chat where the client supports it, and in a browser otherwise. The same results can open in the LTspice window, and the server writes the `.plt` plot settings that LTspice reads.
 
-`edit_schematic` applies a batch of ops as one transaction, written by atomic
-rename, so a failed batch leaves the sheet unchanged. `expected_sha256` names
-the revision the batch was prepared against; if another writer committed
-first, the call returns `revision_conflict` and writes nothing. `dry_run`
-resolves and validates a batch and returns its geometry without writing.
-`verify_circuit` has LTspice export a saved sheet to a netlist and compares
-that with a reference netlist or schematic, to report any unintended change.
+On Windows, each LTspice run and export starts on a hidden desktop, so LTspice does not take the keyboard focus from the person. With LTspice 26.1 or later, the server connects to the open LTspice windows. `edit_schematic` refuses an edit when an open window differs from the file, because a save from that window would overwrite the edit.
 
-Even when every op succeeds, the reply includes sheet-level warnings such as
-floating pins, duplicate wire segments and dangling net labels, so the caller
-does not need a separate call to inspect the sheet.
+## Stored work
 
-A check must say what it did not look at: a comparison that leaves part of a
-circuit out says which part, a list cut short says how to read the rest, and
-a check that did not run is reported as not run. A verdict that reads as
-complete while it covered only part of the circuit is worse than no verdict.
-`tests/test_check_scope_is_stated.py` and
-`tests/test_capped_lists_say_how_to_continue.py` hold the tools to this.
+An agent repeats a request with the same `request_id`, and the server returns the earlier job without a new simulation. A job records the simulator executable and its inputs, and each case records the build that its run reported. If the build has changed since the first request, the server refuses the repeat as an `idempotency_conflict`.
 
-### Structured outputs
+Results stay on disk behind an id. A later session reloads a job by its id and reads its cases without a new simulation.
 
-Tools declare an output schema and return `structuredContent` beside their
-text, and the test suite checks every reply it produces against its tool's
-schema. The tool listing leaves the output schemas out, because they would be
-its largest part and each reply shows its own structure.
+## Principles
 
-A reply leaves out every field that says nothing: an empty list or object, a
-null, a false flag, and a sub-answer its overall answer already gives. So a
-reply about work that found nothing costs no tokens for saying so. A missing
-field means "checked, and nothing to report", never "not checked": a check
-that did not run or a value that could not be read is always stated. One
-function applies the rule to every reply, and each tool lists the few fields
-it keeps anyway, with the reason ([mcp_surface.md](design/mcp_surface.md),
-"Fields left out").
+Each principle has a short explanation and one case. The first nine are the principles in the README.
 
-### A short tool listing
+### Limits of an answer
 
-A client loads every tool definition before its first call, and those tokens
-stay in context for every later turn. Each argument description is therefore
-short (the unit, the sign convention, the default, the interaction with
-sibling fields), and the details are in a section of the packaged guide or in
-[mcp_surface.md](design/mcp_surface.md). `[tools] listing` sets how much is
-sent. The default, `compact`, omits argument descriptions, which a model can
-read with `inspect(kind="reference")`, and `full` sends them (mcp_surface.md,
-"Two listing modes").
+- **Every check reports what's not covered, so a partial check is not mistaken for a pass.** A check that did not run is reported as not run. A QSPICE run reports `measurements_coverage: simulator_unsupported`, because the server does not read QSPICE's measure output.
+- **Results are reported as facts without conclusions, leaving the engineering judgement to the AI and the human.** A severity appears only where the simulator wrote one. LTspice XVII calls an ignored model parameter an error on a run that finished, and the reply keeps that word as the simulator's own.
+- **The same question gets the same answer from each tool and from the Python API.** One function decides each question, and every tool and the Python API call that function. For example, every tool that reads a run's measurements gives the same reason when the log could not be read.
 
-### Results report facts
+### Contents of a reply
 
-Results report measured conditions and the simulator's own messages. They
-give no verdict on whether a result can be trusted and no name for a
-waveform's shape. A result reports a fact such as a crest factor (peak over
-RMS) of 8.1 for one stretch of a waveform, and leaves conclusions such as
-"spike" or "unreliable" to the model.
-A result has a severity only when the simulator assigned one.
+- **Mechanical sanity checks are run automatically without needing human/AI direction, catching errors without extra context bloat.** The lint runs on every deck before the simulator starts. A `.param TEMP` line does not set the temperature, so `run_experiments` refuses the deck and names the line.
+- **Analyses return measured values with units, so the AI works from a number and does not spend context on raw waveform data.** Each value carries its unit in its name. The `edges` recipe returns the rise and fall times of a pulse in seconds.
+- **Refusals say how to fix the request, so mistakes usually cost no more than one turn.** A refusal names the field, the place and the way round. A misspelled argument is refused with the list of the fields that the tool accepts.
+- **A finding gives its place.** The place is the part, the net, the line or the coordinates. Text drawn across a wire is reported with the anchor of the text and the two ends of the wire.
 
-### Scalars and waveform shape
+In agent development, checks of this kind are called feedback sensors. They report a fault to the agent in the reply to the call that caused it. Their effect is also called backpressure, because the agent corrects the fault before later work depends on it.
 
-By default the analysis tools return scalars, such as time-weighted RMS,
-rise time or phase margin, because a correct scalar is easier for a model to
-reason over than an array. When the waveform shape matters, three levels of
-detail are available:
+### Schematic edits
 
-- **A recipe for a known shape**, such as `edges` for rise and fall times
-  or `transient_response` for a step response, returns a number for it.
-  Prefer one when it exists.
-- **The `waveform` recipe** returns the min, max, rms and mean of each bucket
-  of samples, so decimation keeps a narrow spike. To zoom in, call it again
-  with a narrower `window`. With `format: "csv"` it writes every sample to
-  disk and returns the path.
-- **`plot_waveform`** draws an interactive chart and returns its file path
-  and a summary of each trace (min and max and where they occur, first and
-  final values, and on a transient the time-weighted mean), computed from
-  every sample before any decimation, so the model gets the chart's numbers
-  without viewing it.
+- **Schematic layout is directed by the AI, with every edit validated before it is written. There is no auto-router, because auto-routed schematics are hard to read.** A batch of ops is one transaction, so a refused op leaves the sheet as it was. `wire_pins` refuses a diagonal wire and a short between two named nets.
+- **The file on disk is the reference.** LTspice reads a sheet once and keeps a copy, so a save from its window overwrites an edit made on disk. The server refuses to write while an open window's copy differs from the file.
 
-Each consumer has its own channel:
+### Simulator behaviour
 
-|consumer|channel|
-|-|-|
-|the agent, for computation|the `waveform` recipe in `format: "csv"`, written to disk|
-|a vision model|a PNG attached to a `plot_waveform` result (`attach_plot`)|
-|a person|`plot_waveform`: an in-chat widget on an MCP Apps host such as Claude Desktop, otherwise a self-contained HTML file opened on the desktop|
-|a person in LTspice|`plot_waveform(in_ltspice=true)`, which opens the run's results in the LTspice window|
+- **Simulator and file-format quirks are recorded from real LTspice builds and covered by tests, so the tools do not depend on guesses.** Each recording is a file that LTspice wrote for a listed input. LTspice XVII prints 0 for a measurement that failed at one step, and the reply marks that step's value as not established.
+- **A recording comes before the code that uses it, and behaviour without a recording is reported as not known.** Code that reads an LTspice format must name its recording. A run on a build with no recordings reports `diagnostics_coverage: build_unrecorded`.
+- **The simulator does its own work, and the server does not copy a simulator function.** A copy can differ from the simulator in a case that no test covers. `verify_circuit` has LTspice export the netlist of a sheet, and the server does not write a netlister of its own.
 
-The HTML file is for terminal clients such as Claude Code, which do not show
-images to the user and pass a PNG only to the model. Each unit gets its own
-chart panel, so volts and amps never share a y-axis. The chart plots every
-sample of a trace up to 100,000 points (the `max_points` argument); above that
-it keeps the minimum and maximum of each interval and reports that it
-downsampled. The PNG is off by default (`[analysis] attach_plot`), costs
-about 1,000 tokens for two panels, and is drawn by `resvg-py`, a dependency.
-The chart needs no plotting dependency; its library is bundled.
+### Stored work
 
-### One call per intent
+- **Jobs and results are stored on disk and requests are repeatable, so work continues across sessions without re-running simulations.** A retry with the same `request_id` is safe. A renamed argument is renamed in one release, and the refusal of the old name gives the new one.
 
-The caller states what it wants, and the server does the steps in between:
-staging a copy, taking locks, exporting, comparing, running. One
-`edit_schematic` batch edits a sheet and checks it against a reference;
-repeating a `request_id` returns the earlier job, so comparing two settings
-takes one call; `jobs(action="place_beside_sheet")` puts a run's results where
-LTspice opens them. When a task takes a sequence of calls, the fix is an op or
-an option, not a documented sequence. `tests/test_one_call_per_task.py` counts
-the calls each of these takes.
+### Cost of a call
 
-### A short reply, the data behind an id
+- **A small set of composable tools keeps context use low, with the Python API for anything more complex.** Each tool definition stays in context for every turn. A sweep, a corner set and a Monte Carlo run are three kinds of variation in one tool.
+- **One call for one intent.** The server does the steps between the request and the answer, such as staging, locking, exporting and comparing. `jobs(action="place_beside_sheet")` puts the results of a run where LTspice opens them.
+- **A small run is fast enough to try.** An agent can then run an experiment in place of a long chain of reasoning. Any work added to a simulation run is weighed against that cost. A script compares small runs with a local baseline.
+- **A function is a tool only when it needs the server's knowledge, stored state or a transaction. If not, it is Python.** A job that continues after the call needs the server, and so does a schematic edit. The mean of a trace is a line of numpy in `run_code`.
 
-A reply carries a summary that is true on its own. The bulk stays on disk,
-recorded per job and case and addressed by id and path, for a later call or
-the Python API to read and reduce, so an old run reloads without simulating
-again. A reply should name the call that reads more, and a result too large
-to read whole should be readable in part
-(`tests/test_short_reply_data_behind_an_id.py`).
+## Architecture
 
-### Repeatable requests
-
-The same `request_id` returns the same job ("Backend: spicelib" below), so a
-retry is safe. A client keeps its own copy of the tool definitions, so a
-renamed argument breaks it until it reloads them. Renames are therefore made
-together, in one release, and the refusal of an old name says so
-(`tests/test_argument_names_are_kept.py`).
-
-### LTspice's own tools as peers
-
-The server writes the files LTspice reads (a sheet's netlist, its `.plt` plot
-settings, a run's results beside its sheet) and shows a sheet or a run in
-LTspice's own window, rather than imitating them ("The file on disk is
-authoritative" below). `tests/test_files_ltspice_reads_are_recorded.py` ties
-each such file to a recording of LTspice reading it.
-
-### Evidence before assumption
-
-The server models only LTspice behaviour recorded from both supported builds
-([TESTING.md](TESTING.md), "Recorded LTspice behaviour"). Unrecorded
-behaviour is where the server goes wrong, so a recording comes before the
-code that relies on it. `tests/test_ltspice_readers_are_recorded.py` requires
-every module that reads an LTspice format to name its recording.
-
-### Fast enough to try
-
-Small runs stay fast enough that an agent runs an experiment instead of
-reasoning one out, and work added to the run path is weighed against that.
-Tests do not time anything (`CLAUDE.md`, "Working practice");
-`scripts/benchmark_small_runs.py` compares small runs with a local baseline.
-
-### The file on disk is authoritative
-
-An LTspice window shows a copy of the file. LTspice reads a sheet once and
-keeps that copy, so saving from the window overwrites any edit made on disk.
-On Windows with LTspice 26.1 or later, the server connects to open windows
-through the bridge that LTspice installs. `edit_schematic` refuses to commit
-while a window's copy differs from the file, and updates the window after a
-commit. `inspect(kind="open_in_ltspice")` lists the open documents.
-`verify_circuit(in_ltspice=true)` and `plot_waveform(in_ltspice=true)` show a
-sheet or a run in LTspice, and start LTspice for that only when no LTspice
-window is open (`[schematic] start_ltspice`). Every other LTspice process the
-server starts on Windows runs on a hidden desktop and does not take keyboard
-focus (`[simulator] hidden_desktop = false` turns this off). See USAGE.md,
-"Working with LTspice open".
-
-## Architecture at a glance
+The server has two surfaces and one core. The MCP tools and the Python API both call the core, and `run_code` gives the Python API to an MCP client.
 
 ```
-MCP protocol layer    server.py, resources.py: lifespan, request routing, MCP resources
-Tool layer            tools/*.py: tool definitions and handlers
-Core logic            lib/*.py: runs and jobs, result parsing, analysis, schematic editing
-Config / state        config.py, state.py, errors.py
+  An agent or a chat client               A script or a notebook
+            |                                        |
+      MCP, on stdio                       import ltspice_mcp.api
+            |                                        |
+   +-----------------+       run_code       +------------------+
+   |   The 8 tools   | -------------------> |  The Python API  |
+   +-----------------+                      +------------------+
+            \                                      /
+             +------------------------------------+
+             |              The core              |
+             |                                    |
+             |   Circuits     Runs      Results   |
+             |   Checks       Records   Replies   |
+             +------------------------------------+
+                |              |               |
+          Circuit files    Simulators      The store
+          on disk          LTspice,        jobs, records
+                           ngspice         and results
 ```
 
-### The tool surface
+The core has six parts:
 
-The server has 8 registered tools. Six of them form three pairs by purpose:
+- **Circuits** read netlists, LTspice schematics and symbols. This part decides which points of a sheet are one net, and it applies schematic edits.
+- **Runs** prepare a deck for each simulator and start the simulator. This part keeps the state of each job and limits the number of parallel simulations. The server perturbs the values for a Monte Carlo run itself, and each perturbed case runs on the same path as every other run.
+- **Results** read `.raw` and `.log` files in a separate process with a deadline and a memory limit. The recipes compute the measured values from those results.
+- **Checks** are the netlist lint, the schematic lint, the log reader's diagnostics and the observations on a result.
+- **Records** are the store on disk. It keeps each job, its cases and its results by id.
+- **Replies** leave out the fields that say nothing. A list that is too long is cut, and the reply gives the call that reads the rest.
 
-- **Execute**: `run_experiments` and `jobs`.
-- **Understand**: `analyze_results` and `inspect`.
-- **Author**: `edit_schematic` and `verify_circuit`.
+The evidence for each LTspice behaviour is a recording. `tests/fixtures/ltspice_recorded/` holds the files that LTspice 26 and LTspice XVII wrote for the inputs in `inputs/cases.toml`. A test compares the code with each recording on any machine, without LTspice. [TESTING.md](TESTING.md), "Recorded LTspice behaviour", describes the recordings.
 
-The other two are `plot_waveform`, the interactive waveform chart, and
-`run_code`, which runs a Python snippet in a separate Python process that the
-server starts on first use and keeps for the session, with the Python API already
-loaded (`[tools] run_code = false` removes it). Releases before 0.6.0 offered
-other tool sets with one tool per operation; a deployment that needs those
-pins `ltspice-mcp==0.5.*`. `inspect(kind="capabilities")` reports
-`tool_profile: "consolidated"`, the name of the current and only tool set.
+The server uses [spicelib](https://github.com/nunobrum/spicelib) to find and start the simulators. Its `.raw` reader and its log reader start from spicelib's readers, and the server adds its own decoding where a recording differs. The schematic editor writes the `.asc` file through spicelib's editor. The server depends on spicelib directly, not on PyLTSpice, which re-exports it.
 
-Each of the six covers many operations, which the caller describes as data in
-its arguments instead of calling a separate tool for each. Sweeps, corners
-and Monte Carlo are `run_experiments` `variations`; each analysis is an
-`analyze_results` recipe; each schematic change is an `edit_schematic` op;
-each read is an `inspect` kind. No tool edits netlist text, since an agent
-with file access does that directly.
-
-Schematic editing is one tool with many ops (`add_component`,
-`move_component`, `move`, `remove_component`, `set_component_value`,
-`set_component_attribute`, `wire_pins`, `add_net_label`, `remove_net_label`,
-`remove_wire`, `add_directive`, `remove_directive`, `replace_directive` and
-`set_plot_panes`).
-`move` shifts parts, wires, labels and text by one offset, and
-`set_plot_panes` writes the waveform panes LTspice opens for the sheet. Every
-tool's schema uses model context whether or not the tool is called, so one
-tool that takes every kind of op is cheaper than one tool per op, and it lets
-a caller batch ops into one transaction. The ops work on pin coordinates,
-bounding boxes and the topology of named nets. `wire_pins` refuses diagonal
-wires, pin collisions, shorts between named nets and a waypoint that would
-join another net's wiring, and accepts a point on an existing wire as an
-endpoint for a T-junction.
-`add_component` returns the placed pins and bounding box.
-`inspect(kind="symbol")` returns the same geometry without placing anything,
-for planning an edit.
-
-### Backend: spicelib
-
-The server builds on [spicelib](https://github.com/nunobrum/spicelib)
-(>= 1.4.9, < 1.6), the Python library for SPICE automation by Nuno Brum. It
-supplies the simulator classes and batch runner, the `.asc` schematic editor,
-and the readers for `.raw` waveforms and `.MEAS` log output. The server
-depends on spicelib directly rather than on PyLTSpice, which re-exports it.
-The server implements Monte Carlo perturbation itself, and perturbed cases
-run through the same execution path as every other run.
-
-Each job records the simulator executable it launches (path, size,
-modification time and SHA-256), and each case (one simulation in the job)
-records the build version its run reported in its output, so results from
-two builds stay distinguishable. A submission that repeats a request under
-the same `request_id` returns the existing job, unless the build it would
-launch now differs from the recorded one; then it is refused as an
-`idempotency_conflict`.
-
-## WSL support
-
-On WSL, the server runs the Windows LTspice through Windows interop instead
-of Wine. Set `simulator.path` in `ltspice-mcp.toml` to the Windows-side
-executable, for example `/mnt/c/Program Files/ADI/LTspice/LTspice.exe`;
-spicelib cannot detect it across the WSL boundary. The server handles the
-rest:
-
-- Paths are converted with `wslpath` instead of Wine's `Z:` prefix.
-- Symbol-library paths under `%LOCALAPPDATA%` are resolved through
-  `cmd.exe`, since they vary by Windows user profile.
-- Simulation output is written to a Windows temp directory when the working
-  directory is on the Linux file system, because LTspice fails to write its
-  `.MEAS` database on `\\wsl.localhost\...` paths, and the measurement
-  results would be lost.
-- A netlist keeps its extension (`.cir`, `.net`, `.sp`), which LTspice
-  requires.
-
-## Diagnostics
-
-The server reads each simulator log, and its console capture beside it, when
-the run ends, and puts what the simulator said on the run: each run row of
-`run_experiments` and `jobs`, and the `summary` recipe, carry `diagnostics`,
-one entry per condition and channel, so the agent learns from the reply that a run which
-finished was still warned about, without searching a log. An entry is
-`{code, count, first_text, channel}`, plus `severity` only where the
-simulator wrote one: `code` is the server's name for the condition (one code
-for every build's wording of it), `severity` the simulator's own word, kept
-apart because LTspice XVII calls an ignored model parameter an error on a run
-that finished. A condition's `severity` is the strongest word over its
-occurrences. A reader that lists a run's errors or warnings (the `summary`
-recipe) lists each distinct line the simulator gave a word, by that word
-(`log_conditions.said_lines`), never a line that does not carry it; those
-lines are read from the log, not kept on the row. `first_text` is the first occurrence as written, `channel`
-says whether it came from the log or the console, and the run's `log` holds
-the rest.
-
-The rules are chosen by the run's producer, the simulator and the build it
-named in its output, and are built from logs each one wrote. A line that is
-neither a known condition nor the producer's routine output (banners,
-settings, timing, step lines, solver statistics, and the result blocks other
-readers decode) is counted under `unclassified` with the first one as
-written, never dropped. `diagnostics_coverage` says when the reading is not
-the producer's own: the build has no recordings, the producer is not known,
-the simulator has no recordings at all (QSPICE and Xyce, whose lines are read
-with the generic patterns the server used before it had recordings), the log could not be read, or the run was recorded
-before logs were classified. A run with nothing to report carries neither
-field.
-
-The `summary` recipe also keeps the simulator's warnings and errors as text
-(parse errors with caret pointers, fatal errors, convergence messages, `.MEAS`
-parse failures) in `warnings` and `errors` lists.
-
-The run summary also has an `observations` list:
-
-|observation kind|contents|
-|-|-|
-|`relay`|the simulator's own error lines, with the simulator's severity; the server never assigns one|
-|`reconciliation`|requested `.meas`/`.four` outputs that were not produced|
-|`value`|non-finite samples and extreme node values in the trace data|
-|`coverage`|skipped checks, so an incomplete result is not mistaken for a clean one|
-
-A reply with no `observations` means that no check fired; it leaves out an
-empty list, as it leaves out every field that says nothing. It does not mean
-that the result is correct.
-
-LTspice and ngspice get full diagnostics, with ngspice's console output read
-alongside its log. For QSPICE and Xyce, whose log wording has no
-recordings, there is no word of the simulator's own to prefer, so a line is
-read as an error or a warning by the generic patterns the server used before
-it had recordings (`log_parser.classify_line`): `diagnostics` count those under
-`simulator_error` and `simulator_warning`, every other line under `unclassified`,
-and the summary's `errors` and `warnings` list them as before.
+The geometry, the net rules and the checks of a schematic edit are the server's own code. Each must agree with the recordings. [spicelib_bugs.md](spicelib_bugs.md) lists each spicelib bug that the server works around.
 
 ## Non-goals
 
-The server leaves these out by design, and none of them is planned.
+- **Automatic layout or routing.** The agent sets the position of each part and the path of each wire.
+- **Semantic part search**, such as a search for an NMOS with a low threshold voltage. It needs every `.model` card parsed and an index of parameters, which is a separate project.
+- **Thin wrappers around file edits.** An agent with file tools edits a netlist directly, and an agent without them can pass a deck to `run_experiments`.
+- **Auth, multi-tenancy and remote hosting.** The server is a local tool with no OAuth flow and no isolation between tenants.
 
-- **Layout or routing the caller did not ask for.** The caller sets each
-  part's position and each wire's path; a refusal returns the conflict set.
-- **Semantic part search** ("find me a low-Vgs-th NMOS under 100mΩ
-  Rds(on)"). It needs every `.model` card parsed, units normalized across
-  vendors and an index of parameters that can be queried, which is a separate
-  project.
-- **Thin wrappers around file edits.** No tool edits netlist text, because a
-  client with native file editing does it better, and a client without it can
-  still pass the server a deck it wrote.
-- **Per-simulator parity for geometry.** LTspice and ngspice are equal for
-  simulation, result parsing, diagnostics and analysis. The geometry layer
-  (`.asc`, `.asy`, symbol coordinates) is LTspice-only, since ngspice has no
-  schematic format to edit.
-- **Auth, multi-tenancy and remote MCP support.** This is a local tool, with
-  no OAuth flows and no per-tenant isolation.
-- **Generic cross-simulator EDA features** that PyLTSpice and ngspice's CLI
-  already cover.
+## Other documents
 
-## Configuration
-
-Settings are in `ltspice-mcp.toml` in the working directory. The server
-writes it with defaults on the first tool call if it is missing
-(`LTSPICE_MCP_WRITE_CONFIG=false` turns that off). An environment variable
-with the `LTSPICE_MCP_` prefix overrides a TOML value. The sections are
-`[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logging]`,
-`[schematic]`, `[tools]` and `[state]`.
-
-The server keeps its records, runs, result sets, export snapshots and plots
-in `.ltspice-mcp/` in the working directory, and the recent-circuits index
-and lock files in a per-user folder (`%LOCALAPPDATA%\ltspice-mcp` on
-Windows). USAGE.md, "Configuration" and "Files the server creates", lists
-the options and every file the server writes.
-
-## Verification recipe
-
-End-to-end smoke test for a fresh install:
-
-1. Create an RC lowpass netlist (R = 1k, C = 100n, so fc is about 1.59 kHz).
-2. Add a `.ac dec 100 1 1Meg` directive.
-3. Run it with `run_experiments`.
-4. Read it back with a `bode_filter` recipe and check that the -3 dB point
-   is near 1.59 kHz.
-5. Change R to 10k (fc about 159 Hz).
-6. Run and measure again, and check that the bandwidth moved.
-7. Include a custom library with a `.lib` or `.include` directive and use one
-   of its models in a new circuit.
-
-If a step fails, check `simulator.path` in the TOML and, when
-`ltspice-mcp.toml` sets `[security] allowed_paths`, confirm that it includes
-your working directory.
-
-[docs/TESTING.md](TESTING.md) lists the platforms the test suite is released
-on and the recorded LTspice behaviour the tests check the server against.
+[USAGE.md](USAGE.md) covers installation, configuration, WSL and the files that the server creates. [design/mcp_surface.md](design/mcp_surface.md) specifies the tool arguments and replies, and [design/python_api.md](design/python_api.md) specifies the Python API. [spice_lex.md](spice_lex.md) describes the netlist parser. [TESTING.md](TESTING.md) lists the tests of the principles.
